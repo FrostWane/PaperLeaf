@@ -19,7 +19,9 @@ def _login(client: TestClient, email: str, password: str) -> str:
     return token
 
 
-def test_auth_paper_contract_and_cross_user_isolation(tmp_path) -> None:
+def test_auth_paper_contract_and_cross_user_isolation(
+    tmp_path, valid_pdf_bytes: bytes
+) -> None:
     config = replace(
         settings,
         mode="test",
@@ -49,7 +51,7 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path) -> None:
             "/api/v1/papers",
             headers={"X-CSRF-Token": csrf},
             data={"title": "测试论文"},
-            files={"file": ("paper.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+            files={"file": ("paper.pdf", valid_pdf_bytes, "application/pdf")},
         )
         assert upload.status_code == 201
         paper_id = upload.json()["id"]
@@ -73,7 +75,7 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path) -> None:
         assert reader_client.get("/api/v1/papers").json() == []
 
 
-def test_collection_tag_and_admin_job_contract(tmp_path) -> None:
+def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes) -> None:
     config = replace(
         settings,
         mode="test",
@@ -89,7 +91,7 @@ def test_collection_tag_and_admin_job_contract(tmp_path) -> None:
         paper = client.post(
             "/api/v1/papers",
             headers={"X-CSRF-Token": csrf},
-            files={"file": ("paper.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+            files={"file": ("paper.pdf", valid_pdf_bytes, "application/pdf")},
         ).json()
         collection = client.post(
             "/api/v1/collections",

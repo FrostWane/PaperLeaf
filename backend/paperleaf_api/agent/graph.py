@@ -85,11 +85,17 @@ async def _configured_answerer(
 
 class AgentRuntime:
     def __init__(
-        self, retriever: SearchLibraryTool, answerer: Answerer, arxiv_search: SearchArxivTool
+        self,
+        retriever: SearchLibraryTool,
+        answerer: Answerer,
+        arxiv_search: SearchArxivTool,
+        *,
+        use_native_interrupt: bool,
     ) -> None:
         self.retriever = retriever
         self.answerer = answerer
         self.arxiv_search = arxiv_search
+        self.use_native_interrupt = use_native_interrupt
 
     async def validate_request(self, state: AgentState) -> AgentState:
         query = str(state.get("query", "")).strip()
@@ -144,6 +150,8 @@ class AgentRuntime:
             "risk_message": "导入会下载并解析所选 arXiv PDF，需要你的明确确认。",
             "allowed_decisions": ["approve", "reject"],
         }
+        if not self.use_native_interrupt:
+            return {"pending_action": pending, "status": "interrupted"}
         try:
             from langgraph.types import interrupt
 
@@ -221,6 +229,7 @@ def build_agent_graph(
         retriever or EmptyLibrarySearch(),
         answerer or _configured_answerer,
         arxiv_search or ArxivSearch(),
+        use_native_interrupt=use_langgraph,
     )
     if not use_langgraph:
         return CompatibleGraph(runtime)
