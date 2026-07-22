@@ -1,0 +1,67 @@
+name: 缺陷报告
+description: 提交可复现的 PaperLeaf 功能问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请删除日志中的 Cookie、Token、模型 Key、私人 PDF 内容和个人信息。
+  - type: input
+    id: version
+    attributes:
+      label: PaperLeaf 版本
+      description: 提交哈希、版本号或镜像标签
+      placeholder: 例如 0.1.0 / abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - 本地开发环境
+        - Railway
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 使用最小、无敏感数据的示例描述操作顺序
+      placeholder: |
+        1. 打开……
+        2. 上传……
+        3. 点击……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 操作系统、浏览器、Docker、Python/Node 版本以及相关日志
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有发现相同问题。
+          required: true
+        - label: 我已移除凭据、私人文献内容和个人信息。
+          required: true

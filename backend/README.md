@@ -1,0 +1,123 @@
+# PaperLeaf 后端
+
+该目录包含 PaperLeaf 的 FastAPI 服务、页级 RAG 核心、受控 Agent 图以及后台任务基础设施。
+
+## 本地启动
+
+```bash
+cd backend
+python -m venv .venv
+.venv/Scripts/pip install -e ".[dev]"
+.venv/Scripts/uvicorn paperleaf_api.main:app --reload
+```
+
+默认使用 `demo` 模式，不依赖 PostgreSQL、MinIO 或模型服务。演示管理员为
+`admin@paperleaf.local`，密码从 `PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD` 读取；未设置时仅限本地开发，
+使用 `paperleaf-dev-admin`。
+
+生产部署必须设置：
+
+- `PAPERLEAF_MODE=production`
+- `PAPERLEAF_DATABASE_URL=postgresql+asyncpg://...`
+- `PAPERLEAF_SESSION_SECRET=...`
+- `PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD=...`
+- MinIO 与 OpenAI-compatible 服务相关变量
+
+生产模式会拒绝 `replace-with-*` 占位值、少于 32 字符的会话密钥以及少于 12 字符的
+管理员密码，避免直接复制示例配置后误启动。
+
+## 测试
+
+```bash
+pytest
+python -m compileall paperleaf_api tests
+```
+
+RAG 检索与引用校验是独立实现；LangGraph 只负责状态、条件路由、中断和恢复。
+
+## 前端接入契约
+
+浏览器统一通过同源代理访问 `/api/v1`。开发环境如直接访问 `http://localhost:8000`，需将
+前端来源加入 `PAPERLEAF_CORS_ORIGINS`，请求必须启用 `credentials: "include"`。
+
+### 登录与 CSRF
+
+`POST /api/v1/auth/login`：
+
+```json
+{"email":"admin@paperleaf.local","password":"..."}
+```
+
+成功后返回当前用户，同时设置两个 Cookie：
+
+- `paperleaf_session`：HttpOnly 会话，前端不能读取。
+- `paperleaf_csrf`：CSRF Token。除登录外，所有 `POST/PATCH/DELETE` 请求都必须把它原样放入
+  `X-CSRF-Token` 请求头。
+
+`GET /api/v1/auth/me` 用于恢复登录；`POST /api/v1/auth/logout` 和
+`POST /api/v1/auth/change-password` 使用相同的 Cookie + CSRF 约定。
+
+管理员创建的用户带有 `must_change_password=true`。这类会话只能访问 `me`、
+`change-password` 和 `logout`；其他业务接口返回 `403`，错误码为
+`PASSWORD_CHANGE_REQUIRED`。
+
+### 上传 PDF
+
+`POST /api/v1/papers` 使用 `multipart/form-data`：
+
+- `file`：必填 PDF。
+- `title`：可选标题。
+- `doi`：可选 DOI。
+
+成功返回 `PaperRead`，初始状态为 `queued`。文件阅读接口
+`GET /api/v1/papers/{paper_id}/file` 支持标准单段 `Range: bytes=start-end`，返回 `206` 和
+`Content-Range`；暂不支持 multipart ranges。
+
+### Agent 消息与 SSE
+
+`POST /api/v1/chat/sessions/{session_id}/messages` 请求体：
+
+```json
+{
+  "content": "这篇论文的核心贡献是什么？",
+  "scope": "paper",
+  "selected_paper_ids": ["paper-id"],
+  "web_enabled": false
+}
+```
+
+响应为 `text/event-stream`。每帧保持以下格式：
+
+```text
+event: message_delta
+data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
+```
+
+事件名固定为：`run_started`、`node_started`、`tool_started`、`tool_finished`、
+`message_delta`、`citation`、`interrupt`、`error`、`run_finished`。`interrupt` 的
+`data.pending_action` 包含 `action_id`、候选文献和允许决定；前端通过
+`POST /api/v1/agent/runs/{run_id}/resume` 提交：
+
+```json
+{"action_id":"...","decision":"approve"}
+```
+
+前端只展示工具活动摘要，不展示或推断隐藏推理过程。
+
+服务端不会直接使用前端 `session_id` 作为 LangGraph Checkpoint 键。内部 `thread_id` 同时绑定
+`user_id + session_id + run_id`；Agent Run 的所有者、内部键、状态、待确认动作、回答摘要和
+引用持久化在业务数据库中。API 重启后的查询、恢复和取消都会先按当前用户查找 Run，其他
+用户统一得到 `404`，且内部 `thread_id` 不通过公开 API 返回。
+
+### 集合、标签与作业
+
+- `/api/v1/collections` 和 `/api/v1/tags` 提供用户隔离的 CRUD。
+- `POST/DELETE /api/v1/collections/{id}/papers/{paper_id}` 管理集合归属。
+- `POST/DELETE /api/v1/tags/{id}/papers/{paper_id}` 管理论文标签。
+- 管理员可通过 `GET /api/v1/admin/jobs` 查看作业状态，并通过
+  `POST /api/v1/admin/jobs/{id}/retry` 重试失败作业。返回值不包含论文正文、Chunk 或聊天内容。
+
+删除论文会创建幂等 `delete_paper` 作业。Worker 先删除私有原件，再级联清理页面、Chunk、
+集合/标签关系及其他关联作业；任一步失败后都可以安全重试。
+
+RAG 离线评测命令和 JSONL 协议见 `evaluation/README.md`。仓库不附带虚构数据或成绩。

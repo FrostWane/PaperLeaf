@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperleaf.local/schemas/rag-eval.json",
+  "title": "PaperLeaf RAG 评测 JSONL 记录",
+  "$defs": {
+    "case": {
+      "type": "object",
+      "required": ["id", "query", "paper_ids", "answerable", "category"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "query": {"type": "string", "minLength": 1},
+        "paper_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "answerable": {"type": "boolean"},
+        "expected_pages": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "expected_chunk_ids": {"type": "array", "items": {"type": "string"}},
+        "expected_answer_keywords": {"type": "array", "items": {"type": "string"}},
+        "category": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "prediction": {
+      "type": "object",
+      "required": ["case_id", "answer", "abstained", "retrieved_chunk_ids", "latency_ms"],
+      "properties": {
+        "case_id": {"type": "string"},
+        "answer": {"type": "string"},
+        "abstained": {"type": "boolean"},
+        "retrieved_chunk_ids": {"type": "array", "items": {"type": "string"}},
+        "citations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["chunk_id", "physical_page"],
+            "properties": {
+              "chunk_id": {"type": "string"},
+              "physical_page": {"type": "integer", "minimum": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "latency_ms": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

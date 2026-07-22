@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题
+    url: https://github.com/FrostWane/PaperLeaf/security/advisories/new
+    about: 请私密报告可利用漏洞，不要提交公开 Issue。

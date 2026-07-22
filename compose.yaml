@@ -1,0 +1,171 @@
+name: paperleaf
+
+x-backend-environment: &backend-environment
+  PAPERLEAF_MODE: ${PAPERLEAF_MODE:-production}
+  PAPERLEAF_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-paperleaf}:${POSTGRES_PASSWORD:-paperleaf-local}@postgres:5432/${POSTGRES_DB:-paperleaf}
+  PAPERLEAF_SESSION_SECRET: ${PAPERLEAF_SESSION_SECRET:-local-demo-only-change-me}
+  PAPERLEAF_SECURE_COOKIES: ${PAPERLEAF_SECURE_COOKIES:-false}
+  PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL: ${PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL:-admin@paperleaf.local}
+  PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD: ${PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD:-paperleaf-dev-admin}
+  PAPERLEAF_STORAGE_BACKEND: minio
+  PAPERLEAF_MINIO_ENDPOINT: minio:9000
+  PAPERLEAF_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-paperleaf}
+  PAPERLEAF_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-paperleaf-local}
+  PAPERLEAF_MINIO_BUCKET: ${PAPERLEAF_MINIO_BUCKET:-paperleaf-pdfs}
+  PAPERLEAF_MINIO_SECURE: "false"
+  PAPERLEAF_MAX_PDF_BYTES: ${PAPERLEAF_MAX_PDF_BYTES:-52428800}
+  PAPERLEAF_MAX_PDF_PAGES: ${PAPERLEAF_MAX_PDF_PAGES:-500}
+  PAPERLEAF_CORS_ORIGINS: ${PAPERLEAF_CORS_ORIGINS:-http://localhost:3000}
+  PAPERLEAF_OPENAI_API_KEY: ${PAPERLEAF_OPENAI_API_KEY:-}
+  PAPERLEAF_OPENAI_BASE_URL: ${PAPERLEAF_OPENAI_BASE_URL:-https://api.openai.com/v1}
+  PAPERLEAF_CHAT_MODEL: ${PAPERLEAF_CHAT_MODEL:-gpt-4.1-mini}
+  PAPERLEAF_EMBEDDING_MODEL: ${PAPERLEAF_EMBEDDING_MODEL:-text-embedding-3-small}
+  PAPERLEAF_EMBEDDING_DIMENSIONS: ${PAPERLEAF_EMBEDDING_DIMENSIONS:-}
+  PAPERLEAF_VISION_MODEL: ${PAPERLEAF_VISION_MODEL:-}
+  LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+
+x-backend-service: &backend-service
+  build:
+    context: ./backend
+  environment: *backend-environment
+  depends_on:
+    postgres:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+    migrate:
+      condition: service_completed_successfully
+  restart: unless-stopped
+  networks:
+    - paperleaf
+
+services:
+  postgres:
+    image: registry-1.docker.io/pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-paperleaf}
+      POSTGRES_USER: ${POSTGRES_USER:-paperleaf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-paperleaf-local}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - paperleaf
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-paperleaf}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-paperleaf-local}
+    ports:
+      - "${PAPERLEAF_BIND_ADDRESS:-127.0.0.1}:${PAPERLEAF_MINIO_PORT:-9000}:9000"
+      - "${PAPERLEAF_BIND_ADDRESS:-127.0.0.1}:${PAPERLEAF_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - paperleaf
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing "local/$${PAPERLEAF_MINIO_BUCKET}" &&
+        mc anonymous set none "local/$${PAPERLEAF_MINIO_BUCKET}"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-paperleaf}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-paperleaf-local}
+      PAPERLEAF_MINIO_BUCKET: ${PAPERLEAF_MINIO_BUCKET:-paperleaf-pdfs}
+    restart: "no"
+    networks:
+      - paperleaf
+
+  migrate:
+    build:
+      context: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - paperleaf
+
+  api:
+    <<: *backend-service
+    command: ["uvicorn", "paperleaf_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${PAPERLEAF_BIND_ADDRESS:-127.0.0.1}:${PAPERLEAF_API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  worker:
+    <<: *backend-service
+    command: ["python", "-m", "paperleaf_api.worker"]
+
+  web:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+        NEXT_PUBLIC_DATA_MODE: real
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+      NEXT_PUBLIC_DATA_MODE: real
+      PAPERLEAF_API_INTERNAL_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PAPERLEAF_BIND_ADDRESS:-127.0.0.1}:${PAPERLEAF_WEB_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - paperleaf
+
+volumes:
+  postgres-data:
+  minio-data:
+
+networks:
+  paperleaf:
+    driver: bridge
