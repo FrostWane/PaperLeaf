@@ -8,6 +8,7 @@ export default defineConfig({
   reporter: "list",
   use: { baseURL: "http://localhost:3000", trace: "retain-on-failure", screenshot: "only-on-failure" },
   projects: [
+    { name: "chromium-2k", use: { ...devices["Desktop Chrome"], viewport: { width: 2560, height: 1440 } } },
     { name: "chromium-desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
     { name: "chromium-tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } } },
     { name: "chromium-mobile", use: { ...devices["Pixel 7"], viewport: { width: 390, height: 844 } } },

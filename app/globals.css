@@ -211,6 +211,113 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .settings-layout { min-height: 660px; display: grid; grid-template-columns: 210px minmax(0, 720px); gap: 38px; }.settings-nav { display: grid; align-content: start; gap: 3px; }.settings-nav a { padding: 10px 11px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); font-size: 11px; }.settings-nav a.active { border-color: #dbe6ea; background: var(--blue-soft); color: var(--ink); font-weight: 620; }.settings-content { display: grid; align-content: start; gap: 20px; }.settings-section { border: 1px solid var(--border-strong); border-radius: var(--r-panel); background: white; }.setting-title { display: flex; gap: 11px; padding: 17px; border-bottom: 1px solid var(--border); }.setting-title svg { color: var(--blue-ink); }.setting-title h2 { margin: 0; font-size: 14px; }.setting-title p { margin: 5px 0 0; color: var(--muted); font-size: 9px; }.setting-row { min-height: 67px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 13px 17px; border-bottom: 1px solid var(--border); }.setting-row:last-child { border-bottom: 0; }.setting-row strong, .setting-row small { display: block; }.setting-row strong { font-size: 11px; }.setting-row small { margin-top: 5px; color: var(--muted); font-size: 9px; }.switch { width: 35px; height: 20px; padding: 2px; border: 1px solid var(--border-strong); border-radius: 999px; background: #ecefec; }.switch span { width: 14px; height: 14px; display: block; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(28,35,31,.2); transition: transform .16s; }.switch.on { border-color: var(--blue-line); background: var(--blue-selected); }.switch.on span { transform: translateX(15px); background: var(--blue-ink); }.connection-row { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 10px; padding: 14px 17px; border-bottom: 1px solid var(--border); }.connection-row:last-child { border-bottom: 0; }.connection-row strong, .connection-row small { display: block; }.connection-row strong { font-size: 10px; }.connection-row small { margin-top: 4px; color: var(--muted); font-size: 8px; }.privacy-note { display: flex; align-items: center; gap: 8px; padding: 16px 17px; color: var(--sage-ink); font-size: 10px; }.save-settings { justify-self: start; }
 .password-form { display: grid; gap: 13px; padding: 17px; }.password-form label { display: grid; gap: 6px; color: var(--ink-soft); font-size: 10px; font-weight: 620; }.password-form input { min-height: 40px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--r-control); background: #fbfcfa; font-size: 12px; outline: 0; }.password-form input:focus { border-color: var(--focus); box-shadow: 0 0 0 2px var(--blue-soft); }.password-form .primary-button { justify-self: start; margin-top: 2px; }
 
+/* Wide desktop typography
+   2K displays leave enough room to increase reading size without sacrificing
+   the three-pane research workflow. Smaller desktop and mobile layouts retain
+   their compact density. */
+@media (min-width: 1440px) {
+  .eyebrow { font-size: 11px; }
+  .primary-button, .secondary-button, .icon-button { min-height: 36px; font-size: 13px; }
+  .icon-button { width: 36px; }
+
+  .landing-nav nav { font-size: 13px; }
+  .trust-line, .landing-footer { font-size: 12px; }
+  .workflow-no { font-size: 10px; }
+  .workflow-list h3 { font-size: 15px; }
+  .workflow-list p, .principles a { font-size: 13px; }
+  .principles p { font-size: 14px; }
+
+  .app-shell { grid-template-columns: 238px minmax(0, 1fr); }
+  .global-sidebar { padding-inline: 16px; }
+  .nav-item { min-height: 44px; font-size: 13px; }
+  .nav-current { font-size: 9px; }
+  .sidebar-foot strong { font-size: 12px; }
+  .sidebar-foot small { font-size: 10px; }
+  .avatar { font-size: 12px; }
+  .app-header { height: 76px; padding-inline: 34px; }
+  .app-header h1 { font-size: 22px; }
+  .demo-badge { font-size: 10px; }
+  .page-content { padding: 34px 38px 68px; }
+  .page-content.flush { height: calc(100vh - 76px); padding: 0; }
+  .page-lead p { font-size: 14px; }
+  .collection-tabs button { min-height: 34px; font-size: 12px; }
+  .collection-tabs span { font-size: 10px; }
+
+  .library-tools { min-height: 62px; }
+  .search-field { min-height: 40px; }
+  .search-field input, .discover-search input { font-size: 14px; }
+  .result-count { font-size: 11px; }
+  .data-table th { height: 42px; font-size: 11px; }
+  .data-table td { min-height: 70px; padding-block: 13px; font-size: 13px; }
+  .paper-cell strong { font-size: 14px; }
+  .paper-cell small, .tag-list span, .status-pill { font-size: 11px; }
+
+  .pane-heading, .assistant-head { height: 48px; }
+  .back-link { font-size: 12px; }
+  .paper-index { font-size: 10px; }
+  .paper-summary h2 { font-size: 16px; }
+  .paper-summary p { font-size: 11px; }
+  .metadata dt { font-size: 10px; }
+  .metadata dd { font-size: 12px; }
+  .outline-list button { min-height: 38px; font-size: 12px; }
+  .outline-list button span { font-size: 10px; }
+  .workspace-reader { grid-template-rows: 48px minmax(0, 1fr) 38px; }
+  .page-control .mono { font-size: 11px; }
+  .real-pdf > p { font-size: 13px; }
+  .mock-paper { width: min(700px, 100%); min-height: 880px; padding: 56px 66px 62px; }
+  .pdf-running { font-size: 9px; }
+  .mock-paper h1 { font-size: 25px; }
+  .pdf-authors { font-size: 10px; }
+  .mock-paper h2 { font-size: 16px; }
+  .mock-paper > p:not(.pdf-authors) { font-size: 12px; line-height: 1.72; }
+  .formula { font-size: 13px; }
+  .pdf-page-number, .reader-status { font-size: 10px; }
+  .workspace-assistant { grid-template-rows: 48px minmax(0, 1fr) auto; }
+  .assistant-head { font-size: 13px; }
+  .scope-chip, .run-note { font-size: 10px; }
+  .question-text { font-size: 15px; }
+  .answer-text { font-size: 14px; line-height: 1.78; }
+  .inline-citation, .citation-no, .citation-page { font-size: 10px; }
+  .citation-row { grid-template-columns: 24px 1fr auto; gap: 9px; padding: 11px; }
+  .citation-row q { font-size: 11px; line-height: 1.55; }
+  .composer-box textarea { font-size: 13px; }
+  .composer-meta { font-size: 10px; }
+  .field-error { font-size: 11px; }
+  .demo-page { grid-template-rows: 60px minmax(0, 1fr); }
+  .demo-bar > span { font-size: 12px; }
+
+  .dialog-head p, .form-field label { font-size: 13px; }
+  .dropzone strong, .confirm-paper strong, .input-with-icon input { font-size: 14px; }
+  .dropzone span, .confirm-paper p, .login-help { font-size: 11px; }
+  .form-note, .form-success, .confirm-paper span { font-size: 12px; }
+  .login-copy p { font-size: 15px; }
+
+  .ask-layout { grid-template-columns: 286px minmax(0, 1fr); }
+  .scope-panel > button, .ask-intro p, .ask-prompts button { font-size: 13px; }
+  .scope-panel button small, .scope-note p, .ask-composer > div > span, .ask-prompts > span, .answer-run { font-size: 11px; }
+  .ask-composer textarea { font-size: 15px; }
+  .ask-answer > p { font-size: 14px; }
+  .answer-sources > a > span:first-child, .answer-sources em { font-size: 10px; }
+  .answer-sources strong { font-size: 12px; }
+  .answer-sources small { font-size: 10px; }
+
+  .source-note, .result-meta, .discover-side dt { font-size: 11px; }
+  .result-index, .discover-side dd { font-size: 10px; }
+  .result-list h2 { font-size: 19px; }
+  .result-list article > p:last-of-type { font-size: 13px; }
+  .result-actions a, .discover-side > p { font-size: 12px; }
+
+  .metric-row span, .metric-row small, .admin-create label { font-size: 11px; }
+  .admin-message, .admin-user small, .job-row small { font-size: 11px; }
+  .admin-user strong, .job-row strong { font-size: 12px; }
+  .settings-layout { grid-template-columns: 230px minmax(0, 780px); }
+  .settings-nav a, .setting-row strong { font-size: 13px; }
+  .setting-title h2 { font-size: 16px; }
+  .setting-title p, .setting-row small, .connection-row small { font-size: 11px; }
+  .connection-row strong, .privacy-note, .password-form label { font-size: 12px; }
+  .password-form input { font-size: 14px; }
+}
+
 @media (max-width: 1050px) {
   .hero { grid-template-columns: 1fr; gap: 20px; }.hero-copy { max-width: 650px; }.hero-preview { transform: none; }.landing-section { gap: 50px; }.preview-grid { grid-template-columns: 135px 1fr 180px; }
   .app-shell { grid-template-columns: 190px minmax(0, 1fr); }.page-content { padding-inline: 22px; }.discover-layout { grid-template-columns: minmax(0,1fr) 220px; }
