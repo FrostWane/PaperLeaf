@@ -17,7 +17,7 @@ export function RealPdfDocument({ url, page, onPageCount }: { url: string; page:
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
-    const update = () => setWidth(Math.max(260, Math.min(820, element.clientWidth - 36)));
+    const update = () => setWidth(Math.max(260, Math.min(960, element.clientWidth - 36)));
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
