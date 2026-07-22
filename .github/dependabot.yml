@@ -1,32 +1,59 @@
 version: 2
+
+# 日常版本升级由维护者按里程碑集中处理，避免自动 PR 淹没项目协作页面。
+# Dependabot 仍会为已知漏洞创建安全更新，并按生态合并同批修复。
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 0
     groups:
-      frontend-minor-patch:
-        update-types:
-          - minor
-          - patch
+      frontend-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: pip
     directory: /backend
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 0
     groups:
-      backend-minor-patch:
-        update-types:
-          - minor
-          - patch
+      backend-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 0
+    groups:
+      web-image-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: docker
     directory: /backend
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 0
+    groups:
+      backend-image-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 0
+    groups:
+      workflow-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
