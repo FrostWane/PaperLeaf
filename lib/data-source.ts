@@ -1,6 +1,6 @@
-import { arxivResults, groundedAnswer, papers } from "./fixtures";
+import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
-import type { AdminJob, AgentAnswer, ArxivResult, Paper, SessionUser, UserRecord } from "./types";
+import type { AdminJob, AgentAnswer, ArxivResult, Paper, PaperStructureGraph, PaperSummary, PaperUpdateInput, SessionUser, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -26,6 +26,7 @@ function mapSessionUser(item: Record<string, unknown>): SessionUser {
 }
 
 function mapPaper(item: Record<string, unknown>): Paper {
+  const rawStatus = String(item.status ?? "queued");
   return {
     id: String(item.id),
     title: String(item.title),
@@ -33,11 +34,15 @@ function mapPaper(item: Record<string, unknown>): Paper {
     year: Number(item.year ?? new Date().getFullYear()),
     venue: item.arxiv_id ? "arXiv" : "本地文献",
     pages: Number(item.page_count ?? 0),
-    status: item.status === "ready" ? "ready" : item.status === "failed" ? "failed" : item.status === "partial" ? "partial" : "indexing",
-    progress: Number(item.progress ?? 0),
+    status: rawStatus === "ready" ? "ready" : rawStatus === "failed" ? "failed" : rawStatus === "partial" ? "partial" : rawStatus === "deleting" ? "deleting" : "indexing",
+    progress: item.progress === undefined || item.progress === null ? undefined : Number(item.progress),
     tags: [],
     abstract: String(item.abstract ?? ""),
     arxivId: item.arxiv_id ? String(item.arxiv_id) : undefined,
+    doi: item.doi ? String(item.doi) : undefined,
+    filename: item.filename ? String(item.filename) : undefined,
+    sizeBytes: item.size_bytes === undefined ? undefined : Number(item.size_bytes),
+    createdAt: item.created_at ? String(item.created_at) : undefined,
   };
 }
 
@@ -130,6 +135,11 @@ export interface PaperLeafDataSource {
   importArxiv(arxivId: string): Promise<void>;
   ask(question: string, paperIds?: string[]): Promise<AgentAnswer>;
   upload(file: File, onProgress: (value: number) => void): Promise<Paper>;
+  updatePaper(paperId: string, input: PaperUpdateInput): Promise<Paper>;
+  deletePaper(paperId: string): Promise<void>;
+  retryPaper(paperId: string): Promise<Paper>;
+  summarizePaper(paperId: string): Promise<PaperSummary>;
+  buildStructureGraph(paperId: string): Promise<PaperStructureGraph>;
   fileUrl(paperId: string): string;
 }
 
@@ -145,6 +155,19 @@ export const demoDataSource: PaperLeafDataSource = {
     for (const value of [18, 42, 71, 100]) { await wait(130); onProgress(value); }
     return { id: `local-${Date.now()}`, title: file.name.replace(/\.pdf$/i, ""), authors: "待识别", year: new Date().getFullYear(), venue: "本地上传", pages: 0, status: "indexing", progress: 0, tags: [], abstract: "PDF 已上传，正在解析元数据与页面文本。" };
   },
+  async updatePaper(paperId, input) {
+    await wait(220);
+    const current = papers.find((paper) => paper.id === paperId) ?? papers[0];
+    return { ...current, ...input, authors: input.authors.join("、"), abstract: input.abstract ?? "", doi: input.doi };
+  },
+  async deletePaper() { await wait(260); },
+  async retryPaper(paperId) {
+    await wait(220);
+    const current = papers.find((paper) => paper.id === paperId) ?? papers[0];
+    return { ...current, status: "indexing", progress: 0 };
+  },
+  async summarizePaper(paperId) { await wait(420); return { ...paperSummary, paperId }; },
+  async buildStructureGraph(paperId) { await wait(520); return { ...paperStructureGraph, paperId }; },
   fileUrl(paperId) { return `/demo?paper=${paperId}`; },
 };
 
@@ -177,7 +200,38 @@ export const realDataSource: PaperLeafDataSource = {
     }
     return { question, answer, citations };
   },
-  async upload(file, onProgress) { const body = new FormData(); body.set("file", file); onProgress(10); const r = await fetch(`${API_BASE_URL}/papers`, { method: "POST", credentials: "include", headers: mutationHeaders(), body }); if (!r.ok) throw new Error("上传失败"); onProgress(100); const item = await r.json() as Record<string, unknown>; return { id: String(item.id), title: String(item.title), authors: "待识别", year: new Date().getFullYear(), venue: "本地上传", pages: Number(item.page_count ?? 0), status: "indexing", tags: [], abstract: "" }; },
+  async upload(file, onProgress) { const body = new FormData(); body.set("file", file); onProgress(10); const r = await fetch(`${API_BASE_URL}/papers`, { method: "POST", credentials: "include", headers: mutationHeaders(), body }); if (!r.ok) throw new Error("上传失败"); onProgress(100); return mapPaper(await r.json() as Record<string, unknown>); },
+  async updatePaper(paperId, input) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}`, { method: "PATCH", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+    if (!r.ok) throw new Error("文献信息保存失败");
+    return mapPaper(await r.json() as Record<string, unknown>);
+  },
+  async deletePaper(paperId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}`, { method: "DELETE", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error("文献删除失败");
+  },
+  async retryPaper(paperId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/retry`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error(r.status === 409 ? "当前处理状态不能重试" : "重新处理失败");
+    return mapPaper(await r.json() as Record<string, unknown>);
+  },
+  async summarizePaper(paperId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/summary`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error(r.status === 409 ? "论文还没有完成索引" : "论文总结生成失败");
+    const item = await r.json() as Record<string, unknown>;
+    return { paperId: String(item.paper_id), content: String(item.content), mode: item.mode === "model" ? "model" : "extractive", citations: (item.citations as Array<Record<string, unknown>> ?? []).map((citation) => ({ chunkId: String(citation.chunk_id), physicalPage: Number(citation.physical_page) })) };
+  },
+  async buildStructureGraph(paperId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/structure-graph`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error(r.status === 409 ? "论文还没有完成索引" : "结构图生成失败");
+    const item = await r.json() as Record<string, unknown>;
+    return {
+      paperId: String(item.paper_id),
+      mermaid: String(item.mermaid),
+      nodes: (item.nodes as Array<Record<string, unknown>> ?? []).map((node) => ({ id: String(node.id), label: String(node.label), physicalPage: Number(node.physical_page), chunkId: String(node.chunk_id) })),
+      edges: (item.edges as Array<Record<string, unknown>> ?? []).map((edge) => ({ source: String(edge.source), target: String(edge.target) })),
+    };
+  },
   fileUrl(paperId) { return `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/file`; },
 };
 

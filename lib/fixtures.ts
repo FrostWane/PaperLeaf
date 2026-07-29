@@ -1,4 +1,4 @@
-import type { AgentAnswer, ArxivResult, Paper, UserRecord } from "./types";
+import type { AgentAnswer, ArxivResult, Paper, PaperStructureGraph, PaperSummary, UserRecord } from "./types";
 
 export const papers: Paper[] = [
   { id: "attention", title: "Attention Is All You Need", authors: "Vaswani 等", year: 2017, venue: "NeurIPS", pages: 15, status: "ready", tags: ["Transformer", "NLP"], arxivId: "1706.03762", abstract: "提出完全基于注意力机制的 Transformer，移除循环与卷积结构。" },
@@ -16,6 +16,33 @@ export const groundedAnswer: AgentAnswer = {
     { id: "c2", paperId: "attention", paperTitle: "Attention Is All You Need", page: 6, chunkId: "p6-c1", quote: "maximum path length between any two positions", href: "/api/v1/papers/attention/file#page=6" },
     { id: "c3", paperId: "attention", paperTitle: "Attention Is All You Need", page: 11, chunkId: "p11-c2", quote: "significantly less time to train", href: "/api/v1/papers/attention/file#page=11" },
   ],
+};
+
+export const paperSummary: PaperSummary = {
+  paperId: "attention",
+  mode: "model",
+  content: "这篇论文要解决的是序列建模对循环计算的依赖：RNN 难以并行，长距离信息需要经过较长路径。作者提出完全基于自注意力的 Transformer，以多头注意力同时建模不同位置之间的关系，并用位置编码保留顺序信息。\n\n实验表明，该架构在机器翻译任务上取得有竞争力的结果，同时显著缩短训练时间。论文也指出，自注意力在超长序列上的计算与内存成本仍会随序列长度平方增长。",
+  citations: [
+    { chunkId: "p2-c3", physicalPage: 2 },
+    { chunkId: "p4-c2", physicalPage: 4 },
+    { chunkId: "p11-c2", physicalPage: 11 },
+  ],
+};
+
+export const paperStructureGraph: PaperStructureGraph = {
+  paperId: "attention",
+  nodes: [
+    { id: "problem", label: "循环结构限制并行与长程建模", physicalPage: 2, chunkId: "p2-c3" },
+    { id: "method", label: "以多头自注意力替代循环", physicalPage: 4, chunkId: "p4-c2" },
+    { id: "training", label: "位置编码与残差连接稳定训练", physicalPage: 5, chunkId: "p5-c1" },
+    { id: "result", label: "翻译质量与训练效率同步改善", physicalPage: 11, chunkId: "p11-c2" },
+  ],
+  edges: [
+    { source: "problem", target: "method" },
+    { source: "method", target: "training" },
+    { source: "training", target: "result" },
+  ],
+  mermaid: "flowchart TD\n    problem[\"循环结构限制并行与长程建模\"]\n    method[\"以多头自注意力替代循环\"]\n    training[\"位置编码与残差连接稳定训练\"]\n    result[\"翻译质量与训练效率同步改善\"]\n    problem --> method\n    method --> training\n    training --> result",
 };
 
 export const arxivResults: ArxivResult[] = [
