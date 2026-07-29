@@ -1,4 +1,4 @@
-export type PaperStatus = "ready" | "indexing" | "partial" | "failed";
+export type PaperStatus = "ready" | "indexing" | "partial" | "failed" | "deleting";
 
 export interface Paper {
   id: string;
@@ -12,6 +12,49 @@ export interface Paper {
   tags: string[];
   abstract: string;
   arxivId?: string;
+  doi?: string;
+  filename?: string;
+  sizeBytes?: number;
+  createdAt?: string;
+}
+
+export interface PaperUpdateInput {
+  title: string;
+  authors: string[];
+  year?: number;
+  abstract?: string;
+  doi?: string;
+}
+
+export interface ArtifactCitation {
+  chunkId: string;
+  physicalPage: number;
+}
+
+export interface PaperSummary {
+  paperId: string;
+  content: string;
+  citations: ArtifactCitation[];
+  mode: "model" | "extractive";
+}
+
+export interface StructureNode {
+  id: string;
+  label: string;
+  physicalPage: number;
+  chunkId: string;
+}
+
+export interface StructureEdge {
+  source: string;
+  target: string;
+}
+
+export interface PaperStructureGraph {
+  paperId: string;
+  nodes: StructureNode[];
+  edges: StructureEdge[];
+  mermaid: string;
 }
 
 export interface Citation {

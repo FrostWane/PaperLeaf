@@ -47,4 +47,43 @@ describe("真实 API 契约", () => {
     expect(payload).toEqual({ content: "为什么？", scope: "paper", selected_paper_ids: ["p1"], web_enabled: false });
     expect(answer.answer).toBe("有依据"); expect(answer.citations[0]).toMatchObject({ paperId: "p1", page: 2, chunkId: "c1" });
   });
+
+  it("修改、重试和删除文献都使用 CSRF 且映射最新状态", async () => {
+    document.cookie = "paperleaf_csrf=manage-token; path=/";
+    const methods: string[] = [];
+    const tokens: string[] = [];
+    let updatePayload: unknown;
+    server.use(
+      http.patch(`${API_BASE_URL}/papers/p1`, async ({ request }) => {
+        methods.push(request.method); tokens.push(request.headers.get("X-CSRF-Token") ?? ""); updatePayload = await request.json();
+        return HttpResponse.json({ id: "p1", title: "新标题", authors: ["作者甲"], year: 2026, page_count: 8, status: "ready" });
+      }),
+      http.post(`${API_BASE_URL}/papers/p1/retry`, ({ request }) => {
+        methods.push(request.method); tokens.push(request.headers.get("X-CSRF-Token") ?? "");
+        return HttpResponse.json({ id: "p1", title: "新标题", authors: ["作者甲"], year: 2026, page_count: 8, status: "queued" });
+      }),
+      http.delete(`${API_BASE_URL}/papers/p1`, ({ request }) => {
+        methods.push(request.method); tokens.push(request.headers.get("X-CSRF-Token") ?? "");
+        return HttpResponse.json({ id: "p1", status: "deleting" }, { status: 202 });
+      }),
+    );
+    const updated = await realDataSource.updatePaper("p1", { title: "新标题", authors: ["作者甲"], year: 2026 });
+    const retried = await realDataSource.retryPaper("p1");
+    await realDataSource.deletePaper("p1");
+    expect(updatePayload).toEqual({ title: "新标题", authors: ["作者甲"], year: 2026 });
+    expect(updated.status).toBe("ready");
+    expect(retried.status).toBe("indexing");
+    expect(methods).toEqual(["PATCH", "POST", "DELETE"]);
+    expect(tokens).toEqual(["manage-token", "manage-token", "manage-token"]);
+  });
+
+  it("总结和结构图保留物理页与 Chunk 映射", async () => {
+    document.cookie = "paperleaf_csrf=artifact-token; path=/";
+    server.use(
+      http.post(`${API_BASE_URL}/papers/p1/summary`, () => HttpResponse.json({ paper_id: "p1", content: "证据化总结", mode: "extractive", citations: [{ chunk_id: "p1:p2:c0", physical_page: 2 }] })),
+      http.post(`${API_BASE_URL}/papers/p1/structure-graph`, () => HttpResponse.json({ paper_id: "p1", mermaid: "flowchart TD\n n1 --> n2", nodes: [{ id: "n1", label: "问题", physical_page: 2, chunk_id: "p1:p2:c0" }], edges: [{ source: "n1", target: "n2" }] })),
+    );
+    await expect(realDataSource.summarizePaper("p1")).resolves.toMatchObject({ paperId: "p1", mode: "extractive", citations: [{ chunkId: "p1:p2:c0", physicalPage: 2 }] });
+    await expect(realDataSource.buildStructureGraph("p1")).resolves.toMatchObject({ paperId: "p1", nodes: [{ label: "问题", physicalPage: 2 }], edges: [{ source: "n1", target: "n2" }] });
+  });
 });

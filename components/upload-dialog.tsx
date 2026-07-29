@@ -18,6 +18,7 @@ export function UploadDialog({ onUploaded }: { onUploaded?: () => void }) {
     try {
       await getDataSource().upload(file, setProgress);
       setMessage("上传完成，已加入解析队列");
+      window.dispatchEvent(new Event("paperleaf:papers-changed"));
       onUploaded?.();
       window.setTimeout(() => { setOpen(false); setFile(null); setProgress(0); setMessage(""); }, 700);
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
