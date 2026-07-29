@@ -3,9 +3,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { FileUp, Upload, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { getDataSource } from "@/lib/data-source";
+import { demoDataSource, getDataSource } from "@/lib/data-source";
 
-export function UploadDialog({ onUploaded }: { onUploaded?: () => void }) {
+export function UploadDialog({ onUploaded, demo = false }: { onUploaded?: () => void; demo?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
@@ -16,7 +16,7 @@ export function UploadDialog({ onUploaded }: { onUploaded?: () => void }) {
     if (!file) return;
     setMessage("正在安全上传…");
     try {
-      await getDataSource().upload(file, setProgress);
+      await (demo ? demoDataSource : getDataSource()).upload(file, setProgress);
       setMessage("上传完成，已加入解析队列");
       window.dispatchEvent(new Event("paperleaf:papers-changed"));
       onUploaded?.();

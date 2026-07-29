@@ -45,6 +45,8 @@ from .schemas import (
     CollectionUpdate,
     JobRead,
     LoginRequest,
+    PaperBulkActionRequest,
+    PaperBulkActionResponse,
     PaperRead,
     PaperUpdate,
     SSEEvent,
@@ -136,7 +138,7 @@ def create_app(
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.2.0",
+        version="0.2.1",
         description="个人科研文献库、页级 RAG 与受控研究 Agent",
         lifespan=lifespan,
     )
@@ -308,7 +310,13 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
     ) -> list[CollectionRead]:
         records = await services.repository.list_collections(user.id)
-        return [CollectionRead.model_validate(item) for item in records]
+        memberships = await services.repository.list_collection_memberships(user.id)
+        return [
+            CollectionRead.model_validate(item).model_copy(
+                update={"paper_ids": memberships.get(item.id, [])}
+            )
+            for item in records
+        ]
 
     @app.post(
         "/api/v1/collections", response_model=CollectionRead, status_code=status.HTTP_201_CREATED
@@ -386,7 +394,13 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
     ) -> list[TagRead]:
         records = await services.repository.list_tags(user.id)
-        return [TagRead.model_validate(item) for item in records]
+        memberships = await services.repository.list_tag_memberships(user.id)
+        return [
+            TagRead.model_validate(item).model_copy(
+                update={"paper_ids": memberships.get(item.id, [])}
+            )
+            for item in records
+        ]
 
     @app.post("/api/v1/tags", response_model=TagRead, status_code=status.HTTP_201_CREATED)
     async def create_tag(
@@ -454,6 +468,46 @@ def create_app(
     @app.get("/api/v1/papers", response_model=list[PaperRead])
     async def list_papers(user: Annotated[UserRecord, Depends(current_user)]) -> list[PaperRead]:
         return [_paper_read(item) for item in await services.repository.list_papers(user.id)]
+
+    @app.post("/api/v1/papers/bulk", response_model=PaperBulkActionResponse)
+    async def bulk_paper_action(
+        payload: PaperBulkActionRequest,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> PaperBulkActionResponse:
+        paper_ids = list(dict.fromkeys(payload.paper_ids))
+        for paper_id in paper_ids:
+            if not await services.repository.get_owned_paper(paper_id, user.id):
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+
+        if payload.action in {"archive", "unarchive"}:
+            affected_ids = await services.repository.set_papers_archived(
+                paper_ids, user.id, payload.action == "archive"
+            )
+            if affected_ids is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+        else:
+            if not payload.target_id:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "整理操作缺少目标")
+            assigned = payload.action.startswith("add_")
+            for paper_id in paper_ids:
+                if payload.action.endswith("collection"):
+                    ok = await services.repository.set_paper_collection(
+                        payload.target_id, paper_id, user.id, assigned
+                    )
+                else:
+                    ok = await services.repository.set_paper_tag(
+                        payload.target_id, paper_id, user.id, assigned
+                    )
+                if not ok:
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, "集合、标签或文献不存在")
+            affected_ids = paper_ids
+
+        return PaperBulkActionResponse(
+            action=payload.action,
+            affected=len(affected_ids),
+            paper_ids=affected_ids,
+        )
 
     @app.post("/api/v1/papers", response_model=PaperRead, status_code=status.HTTP_201_CREATED)
     async def upload_paper(
@@ -531,6 +585,17 @@ def create_app(
         paper_id: str, user: Annotated[UserRecord, Depends(current_user)]
     ) -> PaperRead:
         return _paper_read(await owned_paper(paper_id, user))
+
+    @app.post("/api/v1/papers/{paper_id}/opened", response_model=PaperRead)
+    async def record_paper_opened(
+        paper_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> PaperRead:
+        paper = await services.repository.touch_paper_opened(paper_id, user.id)
+        if not paper:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+        return _paper_read(paper)
 
     @app.patch("/api/v1/papers/{paper_id}", response_model=PaperRead)
     async def update_paper(

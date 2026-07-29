@@ -73,6 +73,12 @@ def test_auth_paper_contract_and_cross_user_isolation(
         assert changed.status_code == 200
         assert reader_client.get(f"/api/v1/papers/{paper_id}").status_code == 404
         assert reader_client.get("/api/v1/papers").json() == []
+        isolated_bulk = reader_client.post(
+            "/api/v1/papers/bulk",
+            headers={"X-CSRF-Token": reader_client.cookies.get("paperleaf_csrf")},
+            json={"paper_ids": [paper_id], "action": "archive"},
+        )
+        assert isolated_bulk.status_code == 404
 
 
 def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes) -> None:
@@ -120,6 +126,42 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
             ).json()["assigned"]
             is True
         )
+        collections = client.get("/api/v1/collections").json()
+        tags = client.get("/api/v1/tags").json()
+        assert collections[0]["paper_ids"] == [paper["id"]]
+        assert tags[0]["paper_ids"] == [paper["id"]]
+
+        opened = client.post(
+            f"/api/v1/papers/{paper['id']}/opened",
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert opened.status_code == 200
+        assert opened.json()["last_opened_at"] is not None
+
+        archived = client.post(
+            "/api/v1/papers/bulk",
+            headers={"X-CSRF-Token": csrf},
+            json={"paper_ids": [paper["id"], paper["id"]], "action": "archive"},
+        )
+        assert archived.status_code == 200
+        assert archived.json() == {
+            "action": "archive",
+            "affected": 1,
+            "paper_ids": [paper["id"]],
+        }
+        assert client.get(f"/api/v1/papers/{paper['id']}").json()["archived_at"] is not None
+
+        organized = client.post(
+            "/api/v1/papers/bulk",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "paper_ids": [paper["id"]],
+                "action": "remove_tag",
+                "target_id": tag_id,
+            },
+        )
+        assert organized.status_code == 200
+        assert client.get("/api/v1/tags").json()[0]["paper_ids"] == []
 
         job = next(iter(repository.jobs.values()))
         job.status = JobStatus.failed

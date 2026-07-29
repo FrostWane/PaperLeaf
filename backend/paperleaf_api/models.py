@@ -21,6 +21,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import (
+    text as sql_text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -106,6 +109,8 @@ class Paper(Base):
     __table_args__ = (
         Index("ix_papers_owner_sha256", "owner_id", "sha256", unique=True),
         Index("ix_papers_owner_doi", "owner_id", "doi", unique=False),
+        Index("ix_papers_owner_archived", "owner_id", "archived_at"),
+        Index("ix_papers_owner_last_opened", "owner_id", "last_opened_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -123,6 +128,10 @@ class Paper(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[PaperStatus] = mapped_column(Enum(PaperStatus), default=PaperStatus.uploaded)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -184,6 +193,19 @@ class PaperPage(Base):
 
 class PaperChunk(Base):
     __tablename__ = "paper_chunks"
+    __table_args__ = (
+        Index(
+            "ix_paper_chunks_fts",
+            sql_text("to_tsvector('simple', text)"),
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
+        Index(
+            "ix_paper_chunks_trgm",
+            "text",
+            postgresql_using="gin",
+            postgresql_ops={"text": "gin_trgm_ops"},
+        ).ddl_if(dialect="postgresql"),
+    )
 
     # 页级 Chunk 使用可解释的 `{paper_id}:p{page}:c{index}` 稳定键，长度会超过 UUID。
     id: Mapped[str] = mapped_column(String(160), primary_key=True, default=new_id)

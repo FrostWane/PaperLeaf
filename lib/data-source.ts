@@ -1,6 +1,6 @@
 import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
-import type { AdminJob, AgentAnswer, ArxivResult, Paper, PaperStructureGraph, PaperSummary, PaperUpdateInput, SessionUser, UserRecord } from "./types";
+import type { AdminJob, AgentAnswer, ArxivResult, BulkPaperActionInput, CollectionInput, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTag, PaperUpdateInput, SessionUser, TagInput, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -43,6 +43,26 @@ function mapPaper(item: Record<string, unknown>): Paper {
     filename: item.filename ? String(item.filename) : undefined,
     sizeBytes: item.size_bytes === undefined ? undefined : Number(item.size_bytes),
     createdAt: item.created_at ? String(item.created_at) : undefined,
+    archivedAt: item.archived_at ? String(item.archived_at) : undefined,
+    lastOpenedAt: item.last_opened_at ? String(item.last_opened_at) : undefined,
+  };
+}
+
+function mapCollection(item: Record<string, unknown>): PaperCollection {
+  return {
+    id: String(item.id),
+    name: String(item.name),
+    description: item.description ? String(item.description) : undefined,
+    paperIds: (item.paper_ids as unknown[] ?? []).map(String),
+  };
+}
+
+function mapTag(item: Record<string, unknown>): PaperTag {
+  return {
+    id: String(item.id),
+    name: String(item.name),
+    color: item.color ? String(item.color) : undefined,
+    paperIds: (item.paper_ids as unknown[] ?? []).map(String),
   };
 }
 
@@ -140,34 +160,97 @@ export interface PaperLeafDataSource {
   retryPaper(paperId: string): Promise<Paper>;
   summarizePaper(paperId: string): Promise<PaperSummary>;
   buildStructureGraph(paperId: string): Promise<PaperStructureGraph>;
+  listCollections(): Promise<PaperCollection[]>;
+  createCollection(input: CollectionInput): Promise<PaperCollection>;
+  updateCollection(collectionId: string, input: CollectionInput): Promise<PaperCollection>;
+  deleteCollection(collectionId: string): Promise<void>;
+  listTags(): Promise<PaperTag[]>;
+  createTag(input: TagInput): Promise<PaperTag>;
+  updateTag(tagId: string, input: TagInput): Promise<PaperTag>;
+  deleteTag(tagId: string): Promise<void>;
+  bulkPapers(input: BulkPaperActionInput): Promise<void>;
+  recordPaperOpened(paperId: string): Promise<Paper>;
   fileUrl(paperId: string): string;
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+let demoPapers = papers.map((paper) => ({ ...paper, tags: [...paper.tags] }));
+let demoCollections: PaperCollection[] = [
+  { id: "core-methods", name: "核心方法", description: "反复查阅的基础方法论文", paperIds: ["attention", "bert", "rag"] },
+  { id: "experiments", name: "实验参考", description: "训练与工程实现相关资料", paperIds: ["lora"] },
+  { id: "follow-up", name: "近期跟进", description: "仍需继续核对的新方向", paperIds: ["graphrag"] },
+];
+let demoTags: PaperTag[] = [
+  { id: "nlp", name: "NLP", color: "#AFC3CE", paperIds: ["attention", "bert"] },
+  { id: "rag-tag", name: "RAG", color: "#B8C9BC", paperIds: ["rag", "graphrag"] },
+  { id: "training", name: "训练", color: "#C9BFAE", paperIds: [] },
+];
+
+function updateDemoOrganizationTags(): void {
+  demoPapers = demoPapers.map((paper) => ({
+    ...paper,
+    tags: demoTags.filter((tag) => tag.paperIds.includes(paper.id)).map((tag) => tag.name),
+  }));
+}
+
+function demoId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}`;
+}
+
 export const demoDataSource: PaperLeafDataSource = {
-  async listPapers() { await wait(120); return papers; },
-  async getPaper(paperId) { await wait(80); return papers.find((paper) => paper.id === paperId) ?? papers[0]; },
+  async listPapers() { await wait(120); updateDemoOrganizationTags(); return demoPapers.map((paper) => ({ ...paper, tags: [...paper.tags] })); },
+  async getPaper(paperId) { await wait(80); return demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; },
   async searchArxiv(query) { await wait(220); return arxivResults.filter((item) => `${item.title} ${item.summary}`.toLowerCase().includes(query.toLowerCase()) || !query); },
   async importArxiv() { await wait(320); },
   async ask(question) { await wait(420); return { ...groundedAnswer, question }; },
   async upload(file, onProgress) {
     for (const value of [18, 42, 71, 100]) { await wait(130); onProgress(value); }
-    return { id: `local-${Date.now()}`, title: file.name.replace(/\.pdf$/i, ""), authors: "待识别", year: new Date().getFullYear(), venue: "本地上传", pages: 0, status: "indexing", progress: 0, tags: [], abstract: "PDF 已上传，正在解析元数据与页面文本。" };
+    const uploaded: Paper = { id: `local-${Date.now()}`, title: file.name.replace(/\.pdf$/i, ""), authors: "待识别", year: new Date().getFullYear(), venue: "本地上传", pages: 0, status: "indexing", progress: 0, tags: [], abstract: "PDF 已上传，正在解析元数据与页面文本。", createdAt: new Date().toISOString() };
+    demoPapers = [uploaded, ...demoPapers];
+    return uploaded;
   },
   async updatePaper(paperId, input) {
     await wait(220);
-    const current = papers.find((paper) => paper.id === paperId) ?? papers[0];
-    return { ...current, ...input, authors: input.authors.join("、"), abstract: input.abstract ?? "", doi: input.doi };
+    const index = demoPapers.findIndex((paper) => paper.id === paperId);
+    const current = index >= 0 ? demoPapers[index] : demoPapers[0];
+    const updated = { ...current, ...input, authors: input.authors.join("、"), abstract: input.abstract ?? "", doi: input.doi };
+    if (index >= 0) demoPapers[index] = updated;
+    return updated;
   },
-  async deletePaper() { await wait(260); },
+  async deletePaper(paperId) { await wait(260); demoPapers = demoPapers.map((paper) => paper.id === paperId ? { ...paper, status: "deleting" } : paper); },
   async retryPaper(paperId) {
     await wait(220);
-    const current = papers.find((paper) => paper.id === paperId) ?? papers[0];
-    return { ...current, status: "indexing", progress: 0 };
+    const current = demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0];
+    const updated: Paper = { ...current, status: "indexing", progress: 0 };
+    demoPapers = demoPapers.map((paper) => paper.id === paperId ? updated : paper);
+    return updated;
   },
   async summarizePaper(paperId) { await wait(420); return { ...paperSummary, paperId }; },
   async buildStructureGraph(paperId) { await wait(520); return { ...paperStructureGraph, paperId }; },
+  async listCollections() { await wait(100); return demoCollections.map((item) => ({ ...item, paperIds: [...item.paperIds] })); },
+  async createCollection(input) { await wait(180); const item = { id: demoId("collection"), ...input, paperIds: [] }; demoCollections = [...demoCollections, item]; return item; },
+  async updateCollection(collectionId, input) { await wait(160); const current = demoCollections.find((item) => item.id === collectionId); if (!current) throw new Error("集合不存在"); const updated = { ...current, ...input }; demoCollections = demoCollections.map((item) => item.id === collectionId ? updated : item); return updated; },
+  async deleteCollection(collectionId) { await wait(160); demoCollections = demoCollections.filter((item) => item.id !== collectionId); },
+  async listTags() { await wait(100); return demoTags.map((item) => ({ ...item, paperIds: [...item.paperIds] })); },
+  async createTag(input) { await wait(180); const item = { id: demoId("tag"), ...input, paperIds: [] }; demoTags = [...demoTags, item]; return item; },
+  async updateTag(tagId, input) { await wait(160); const current = demoTags.find((item) => item.id === tagId); if (!current) throw new Error("标签不存在"); const updated = { ...current, ...input }; demoTags = demoTags.map((item) => item.id === tagId ? updated : item); updateDemoOrganizationTags(); return updated; },
+  async deleteTag(tagId) { await wait(160); demoTags = demoTags.filter((item) => item.id !== tagId); updateDemoOrganizationTags(); },
+  async bulkPapers(input) {
+    await wait(220);
+    const ids = new Set(input.paperIds);
+    if (input.action === "archive" || input.action === "unarchive") {
+      demoPapers = demoPapers.map((paper) => ids.has(paper.id) ? { ...paper, archivedAt: input.action === "archive" ? new Date().toISOString() : undefined } : paper);
+      return;
+    }
+    if (!input.targetId) throw new Error("整理操作缺少目标");
+    const target = input.action.endsWith("collection") ? demoCollections.find((item) => item.id === input.targetId) : demoTags.find((item) => item.id === input.targetId);
+    if (!target) throw new Error("整理目标不存在");
+    const add = input.action.startsWith("add_");
+    target.paperIds = add ? Array.from(new Set([...target.paperIds, ...input.paperIds])) : target.paperIds.filter((paperId) => !ids.has(paperId));
+    updateDemoOrganizationTags();
+  },
+  async recordPaperOpened(paperId) { await wait(80); const current = demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; const updated = { ...current, lastOpenedAt: new Date().toISOString() }; demoPapers = demoPapers.map((paper) => paper.id === paperId ? updated : paper); return updated; },
   fileUrl(paperId) { return `/demo?paper=${paperId}`; },
 };
 
@@ -231,6 +314,53 @@ export const realDataSource: PaperLeafDataSource = {
       nodes: (item.nodes as Array<Record<string, unknown>> ?? []).map((node) => ({ id: String(node.id), label: String(node.label), physicalPage: Number(node.physical_page), chunkId: String(node.chunk_id) })),
       edges: (item.edges as Array<Record<string, unknown>> ?? []).map((edge) => ({ source: String(edge.source), target: String(edge.target) })),
     };
+  },
+  async listCollections() {
+    const r = await fetch(`${API_BASE_URL}/collections`, { credentials: "include" });
+    if (!r.ok) throw new Error("集合读取失败");
+    return (await r.json() as Array<Record<string, unknown>>).map(mapCollection);
+  },
+  async createCollection(input) {
+    const r = await fetch(`${API_BASE_URL}/collections`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+    if (!r.ok) throw new Error(r.status === 409 ? "集合名称已存在" : "集合创建失败");
+    return mapCollection(await r.json() as Record<string, unknown>);
+  },
+  async updateCollection(collectionId, input) {
+    const r = await fetch(`${API_BASE_URL}/collections/${encodeURIComponent(collectionId)}`, { method: "PATCH", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+    if (!r.ok) throw new Error(r.status === 409 ? "集合名称已存在" : "集合保存失败");
+    return mapCollection(await r.json() as Record<string, unknown>);
+  },
+  async deleteCollection(collectionId) {
+    const r = await fetch(`${API_BASE_URL}/collections/${encodeURIComponent(collectionId)}`, { method: "DELETE", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error("集合删除失败");
+  },
+  async listTags() {
+    const r = await fetch(`${API_BASE_URL}/tags`, { credentials: "include" });
+    if (!r.ok) throw new Error("标签读取失败");
+    return (await r.json() as Array<Record<string, unknown>>).map(mapTag);
+  },
+  async createTag(input) {
+    const r = await fetch(`${API_BASE_URL}/tags`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+    if (!r.ok) throw new Error(r.status === 409 ? "标签名称已存在" : "标签创建失败");
+    return mapTag(await r.json() as Record<string, unknown>);
+  },
+  async updateTag(tagId, input) {
+    const r = await fetch(`${API_BASE_URL}/tags/${encodeURIComponent(tagId)}`, { method: "PATCH", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+    if (!r.ok) throw new Error(r.status === 409 ? "标签名称已存在" : "标签保存失败");
+    return mapTag(await r.json() as Record<string, unknown>);
+  },
+  async deleteTag(tagId) {
+    const r = await fetch(`${API_BASE_URL}/tags/${encodeURIComponent(tagId)}`, { method: "DELETE", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error("标签删除失败");
+  },
+  async bulkPapers(input) {
+    const r = await fetch(`${API_BASE_URL}/papers/bulk`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ paper_ids: input.paperIds, action: input.action, target_id: input.targetId }) });
+    if (!r.ok) throw new Error("批量整理失败，请刷新后重试");
+  },
+  async recordPaperOpened(paperId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/opened`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw new Error("阅读时间记录失败");
+    return mapPaper(await r.json() as Record<string, unknown>);
   },
   fileUrl(paperId) { return `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/file`; },
 };

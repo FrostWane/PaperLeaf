@@ -16,6 +16,46 @@ export interface Paper {
   filename?: string;
   sizeBytes?: number;
   createdAt?: string;
+  archivedAt?: string;
+  lastOpenedAt?: string;
+}
+
+export interface PaperCollection {
+  id: string;
+  name: string;
+  description?: string;
+  paperIds: string[];
+}
+
+export interface PaperTag {
+  id: string;
+  name: string;
+  color?: string;
+  paperIds: string[];
+}
+
+export interface CollectionInput {
+  name: string;
+  description?: string;
+}
+
+export interface TagInput {
+  name: string;
+  color?: string;
+}
+
+export type BulkPaperAction =
+  | "archive"
+  | "unarchive"
+  | "add_collection"
+  | "remove_collection"
+  | "add_tag"
+  | "remove_tag";
+
+export interface BulkPaperActionInput {
+  paperIds: string[];
+  action: BulkPaperAction;
+  targetId?: string;
 }
 
 export interface PaperUpdateInput {

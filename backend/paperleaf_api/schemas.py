@@ -67,8 +67,29 @@ class PaperRead(BaseModel):
     sha256: str
     page_count: Optional[int]
     status: PaperStatus
+    archived_at: Optional[datetime]
+    last_opened_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+
+class PaperBulkActionRequest(BaseModel):
+    paper_ids: list[str] = Field(min_length=1, max_length=100)
+    action: Literal[
+        "archive",
+        "unarchive",
+        "add_collection",
+        "remove_collection",
+        "add_tag",
+        "remove_tag",
+    ]
+    target_id: Optional[str] = None
+
+
+class PaperBulkActionResponse(BaseModel):
+    action: str
+    affected: int
+    paper_ids: list[str]
 
 
 class ChatMessageRequest(BaseModel):
@@ -153,6 +174,7 @@ class CollectionRead(BaseModel):
     owner_id: str
     name: str
     description: Optional[str]
+    paper_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -174,6 +196,7 @@ class TagRead(BaseModel):
     owner_id: str
     name: str
     color: Optional[str]
+    paper_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
