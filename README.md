@@ -21,7 +21,7 @@ PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保�
 - 管理员创建、停用用户；默认不读取用户文献内容
 - 未配置模型时仍可使用文献管理和 PDF 阅读功能
 
-当前 `0.2.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带集合、标签和批量整理能力的演示文献库；Docker Compose 构建则固定使用 `real` 数据模式并连接 FastAPI。
+当前 `0.3.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带集合、标签和批量整理能力的演示文献库；Docker Compose 构建则固定使用 `real` 数据模式并连接 FastAPI。
 
 ## 快速开始
 
@@ -147,6 +147,10 @@ ruff check paperleaf_api tests
 pytest
 ```
 
+仓库另带一个不重新分发论文 PDF 的页级 RAG 冻结集，以及无需模型密钥即可复现的
+哈希向量、BM25、RRF、页去重和拒答基线。数据来源、运行命令、真实分子/分母与指标边界见
+[RAG 离线评测说明](backend/evaluation/README.md)。
+
 容器配置：
 
 ```bash
@@ -180,6 +184,7 @@ flowchart LR
 - [架构说明](docs/architecture.md)
 - [部署指南](docs/deployment.md)
 - [测试指南](docs/testing.md)
+- [RAG 离线评测](backend/evaluation/README.md)
 - [安全说明](docs/security.md)
 - [贡献指南](docs/contributing.md)
 - [更新记录](docs/changelog.md)

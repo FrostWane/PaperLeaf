@@ -1,0 +1,3345 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "dataset_id": "paperleaf-rag-v1",
+    "version": "2026-07-29",
+    "paper_count": 20,
+    "case_count": 120,
+    "answerable_count": 100,
+    "unanswerable_count": 20,
+    "category_counts": {
+      "adversarial_query": 10,
+      "cross_paper": 10,
+      "definition": 10,
+      "limitation": 20,
+      "method": 20,
+      "result": 10,
+      "setup": 20,
+      "unanswerable": 20
+    },
+    "split_counts": {
+      "dev": 30,
+      "test": 90
+    },
+    "paper_case_counts": {
+      "arxiv:1512.03385v1": 7,
+      "arxiv:1609.02907v4": 6,
+      "arxiv:1706.03762v7": 6,
+      "arxiv:1710.10903v3": 6,
+      "arxiv:1810.04805v2": 6,
+      "arxiv:2005.11401v4": 6,
+      "arxiv:2005.14165v4": 6,
+      "arxiv:2006.11239v2": 7,
+      "arxiv:2010.02502v4": 7,
+      "arxiv:2010.11929v2": 8,
+      "arxiv:2103.00020v1": 6,
+      "arxiv:2106.09685v2": 7,
+      "arxiv:2201.11903v6": 6,
+      "arxiv:2205.14135v2": 6,
+      "arxiv:2210.03629v3": 8,
+      "arxiv:2302.04761v1": 6,
+      "arxiv:2302.13971v1": 7,
+      "arxiv:2304.02643v1": 6,
+      "arxiv:2304.07193v2": 6,
+      "arxiv:2307.09288v2": 7
+    },
+    "pdf_files_verified": 20,
+    "evidence_anchors_verified": 110
+  },
+  "protocol": {
+    "k": 5,
+    "chunk_target_tokens": 700,
+    "chunk_overlap_tokens": 100,
+    "hash_dimensions": 8192,
+    "chunk_count": 953,
+    "index_build_ms": 14866,
+    "threshold_fit_split": "dev",
+    "reported_split": "test"
+  },
+  "abstention_calibration": {
+    "threshold": 0.29444180700362627,
+    "dev_answerable_correct": 11,
+    "dev_answerable_total": 20,
+    "dev_unanswerable_correct": 10,
+    "dev_unanswerable_total": 10,
+    "dev_balanced_accuracy": 0.775
+  },
+  "variants": {
+    "hashing_vector": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 77,
+          "denominator": 110,
+          "value": 0.7
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 55.35000000000002,
+          "denominator": 100,
+          "value": 0.5535000000000002
+        },
+        "citation_page_accuracy": {
+          "numerator": 44,
+          "denominator": 100,
+          "value": 0.44
+        },
+        "citation_coverage": {
+          "numerator": 44,
+          "denominator": 100,
+          "value": 0.44
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 45,
+          "denominator": 100,
+          "value": 0.45
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 20,
+          "denominator": 20,
+          "value": 1.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 1,
+          "p95": 4
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.616666666666667,
+              "denominator": 20,
+              "value": 0.5808333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "citation_coverage": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 1,
+              "p95": 4
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 60,
+              "denominator": 90,
+              "value": 0.6666666666666666
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 43.73333333333335,
+              "denominator": 80,
+              "value": 0.5466666666666669
+            },
+            "citation_page_accuracy": {
+              "numerator": 35,
+              "denominator": 80,
+              "value": 0.4375
+            },
+            "citation_coverage": {
+              "numerator": 35,
+              "denominator": 80,
+              "value": 0.4375
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 31,
+              "denominator": 80,
+              "value": 0.3875
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 2,
+              "p95": 4
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.8666666666666667,
+              "denominator": 10,
+              "value": 0.2866666666666667
+            },
+            "citation_page_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "citation_coverage": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 3,
+              "p95": 6
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 4,
+              "denominator": 20,
+              "value": 0.2
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.4000000000000004,
+              "denominator": 10,
+              "value": 0.24000000000000005
+            },
+            "citation_page_accuracy": {
+              "numerator": 2,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "citation_coverage": {
+              "numerator": 2,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 4,
+              "p95": 6
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 8.75,
+              "denominator": 10,
+              "value": 0.875
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 1,
+              "p95": 2
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 13.73333333333333,
+              "denominator": 20,
+              "value": 0.6866666666666665
+            },
+            "citation_page_accuracy": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "citation_coverage": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 4,
+              "denominator": 20,
+              "value": 0.2
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 1,
+              "p95": 3
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 15,
+              "denominator": 20,
+              "value": 0.75
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.483333333333333,
+              "denominator": 20,
+              "value": 0.5741666666666666
+            },
+            "citation_page_accuracy": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 11,
+              "denominator": 20,
+              "value": 0.55
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 2,
+              "p95": 4
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 4.5,
+              "denominator": 10,
+              "value": 0.45
+            },
+            "citation_page_accuracy": {
+              "numerator": 3,
+              "denominator": 10,
+              "value": 0.3
+            },
+            "citation_coverage": {
+              "numerator": 3,
+              "denominator": 10,
+              "value": 0.3
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 2,
+              "p95": 2
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.616666666666667,
+              "denominator": 20,
+              "value": 0.5808333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 1,
+              "p95": 3
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 20,
+              "denominator": 20,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 1,
+              "p95": 3
+            }
+          }
+        }
+      }
+    },
+    "bm25": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 79,
+          "denominator": 110,
+          "value": 0.7181818181818181
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 54.76666666666668,
+          "denominator": 100,
+          "value": 0.5476666666666667
+        },
+        "citation_page_accuracy": {
+          "numerator": 40,
+          "denominator": 100,
+          "value": 0.4
+        },
+        "citation_coverage": {
+          "numerator": 40,
+          "denominator": 100,
+          "value": 0.4
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 44,
+          "denominator": 100,
+          "value": 0.44
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 20,
+          "denominator": 20,
+          "value": 1.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 12,
+          "p95": 41
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 15,
+              "denominator": 20,
+              "value": 0.75
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 9.033333333333331,
+              "denominator": 20,
+              "value": 0.45166666666666655
+            },
+            "citation_page_accuracy": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "citation_coverage": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 11,
+              "denominator": 20,
+              "value": 0.55
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 10,
+              "p95": 40
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 64,
+              "denominator": 90,
+              "value": 0.7111111111111111
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 45.73333333333334,
+              "denominator": 80,
+              "value": 0.5716666666666668
+            },
+            "citation_page_accuracy": {
+              "numerator": 34,
+              "denominator": 80,
+              "value": 0.425
+            },
+            "citation_coverage": {
+              "numerator": 34,
+              "denominator": 80,
+              "value": 0.425
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 33,
+              "denominator": 80,
+              "value": 0.4125
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 39
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.1166666666666663,
+              "denominator": 10,
+              "value": 0.21166666666666661
+            },
+            "citation_page_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "citation_coverage": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 4,
+              "denominator": 10,
+              "value": 0.4
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 17,
+              "p95": 26
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.583333333333333,
+              "denominator": 10,
+              "value": 0.2583333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "citation_coverage": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 36,
+              "p95": 46
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 6.916666666666666,
+              "denominator": 10,
+              "value": 0.6916666666666667
+            },
+            "citation_page_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 8,
+              "p95": 12
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 16,
+              "denominator": 20,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 14.833333333333334,
+              "denominator": 20,
+              "value": 0.7416666666666667
+            },
+            "citation_page_accuracy": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "citation_coverage": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 39
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 19,
+              "denominator": 20,
+              "value": 0.95
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 12.700000000000001,
+              "denominator": 20,
+              "value": 0.635
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 11,
+              "denominator": 20,
+              "value": 0.55
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 36
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 5.7,
+              "denominator": 10,
+              "value": 0.5700000000000001
+            },
+            "citation_page_accuracy": {
+              "numerator": 4,
+              "denominator": 10,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 4,
+              "denominator": 10,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 6,
+              "denominator": 10,
+              "value": 0.6
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 9,
+              "p95": 16
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 9.916666666666666,
+              "denominator": 20,
+              "value": 0.4958333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 36
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 20,
+              "denominator": 20,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 11,
+              "p95": 39
+            }
+          }
+        }
+      }
+    },
+    "rrf": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 84,
+          "denominator": 110,
+          "value": 0.7636363636363637
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 57.46666666666668,
+          "denominator": 100,
+          "value": 0.5746666666666669
+        },
+        "citation_page_accuracy": {
+          "numerator": 42,
+          "denominator": 100,
+          "value": 0.42
+        },
+        "citation_coverage": {
+          "numerator": 42,
+          "denominator": 100,
+          "value": 0.42
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 46,
+          "denominator": 100,
+          "value": 0.46
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 20,
+          "denominator": 20,
+          "value": 1.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 13,
+          "p95": 46
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 10.916666666666666,
+              "denominator": 20,
+              "value": 0.5458333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 11,
+              "p95": 33
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 66,
+              "denominator": 90,
+              "value": 0.7333333333333333
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 46.55000000000001,
+              "denominator": 80,
+              "value": 0.5818750000000001
+            },
+            "citation_page_accuracy": {
+              "numerator": 35,
+              "denominator": 80,
+              "value": 0.4375
+            },
+            "citation_coverage": {
+              "numerator": 35,
+              "denominator": 80,
+              "value": 0.4375
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 32,
+              "denominator": 80,
+              "value": 0.4
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 15,
+              "p95": 47
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.583333333333333,
+              "denominator": 10,
+              "value": 0.2583333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 21,
+              "p95": 33
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.7,
+              "denominator": 10,
+              "value": 0.27
+            },
+            "citation_page_accuracy": {
+              "numerator": 2,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "citation_coverage": {
+              "numerator": 2,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 42,
+              "p95": 51
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 8.333333333333332,
+              "denominator": 10,
+              "value": 0.8333333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 11,
+              "p95": 13
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 19,
+              "denominator": 20,
+              "value": 0.95
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 14.7,
+              "denominator": 20,
+              "value": 0.735
+            },
+            "citation_page_accuracy": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "citation_coverage": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 16,
+              "p95": 42
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 16,
+              "denominator": 20,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.333333333333332,
+              "denominator": 20,
+              "value": 0.5666666666666667
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 43
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 6.2,
+              "denominator": 10,
+              "value": 0.62
+            },
+            "citation_page_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 13
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.616666666666667,
+              "denominator": 20,
+              "value": 0.5808333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 11,
+              "denominator": 20,
+              "value": 0.55
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 44
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 20,
+              "denominator": 20,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 14,
+              "p95": 42
+            }
+          }
+        }
+      }
+    },
+    "rrf_page": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 86,
+          "denominator": 110,
+          "value": 0.7818181818181819
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 58.28333333333336,
+          "denominator": 100,
+          "value": 0.5828333333333336
+        },
+        "citation_page_accuracy": {
+          "numerator": 42,
+          "denominator": 100,
+          "value": 0.42
+        },
+        "citation_coverage": {
+          "numerator": 42,
+          "denominator": 100,
+          "value": 0.42
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 46,
+          "denominator": 100,
+          "value": 0.46
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 20,
+          "denominator": 20,
+          "value": 1.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 17,
+          "p95": 50
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.166666666666668,
+              "denominator": 20,
+              "value": 0.5583333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 45
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 68,
+              "denominator": 90,
+              "value": 0.7555555555555555
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 47.11666666666668,
+              "denominator": 80,
+              "value": 0.5889583333333335
+            },
+            "citation_page_accuracy": {
+              "numerator": 35,
+              "denominator": 80,
+              "value": 0.4375
+            },
+            "citation_coverage": {
+              "numerator": 35,
+              "denominator": 80,
+              "value": 0.4375
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 32,
+              "denominator": 80,
+              "value": 0.4
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 18,
+              "p95": 50
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.833333333333333,
+              "denominator": 10,
+              "value": 0.2833333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 20,
+              "p95": 45
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.7,
+              "denominator": 10,
+              "value": 0.27
+            },
+            "citation_page_accuracy": {
+              "numerator": 2,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "citation_coverage": {
+              "numerator": 2,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 41,
+              "p95": 56
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 8.333333333333332,
+              "denominator": 10,
+              "value": 0.8333333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 11,
+              "p95": 13
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 19,
+              "denominator": 20,
+              "value": 0.95
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 14.7,
+              "denominator": 20,
+              "value": 0.735
+            },
+            "citation_page_accuracy": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "citation_coverage": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 18,
+              "p95": 45
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.816666666666666,
+              "denominator": 20,
+              "value": 0.5908333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 16,
+              "p95": 42
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 6.283333333333333,
+              "denominator": 10,
+              "value": 0.6283333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 20
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.616666666666667,
+              "denominator": 20,
+              "value": 0.5808333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 11,
+              "denominator": 20,
+              "value": 0.55
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 17,
+              "p95": 43
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 20,
+              "denominator": 20,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 18,
+              "p95": 47
+            }
+          }
+        }
+      }
+    },
+    "rrf_page_neighbor": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 84,
+          "denominator": 110,
+          "value": 0.7636363636363637
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 54.70000000000003,
+          "denominator": 100,
+          "value": 0.5470000000000003
+        },
+        "citation_page_accuracy": {
+          "numerator": 37,
+          "denominator": 100,
+          "value": 0.37
+        },
+        "citation_coverage": {
+          "numerator": 37,
+          "denominator": 100,
+          "value": 0.37
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 43,
+          "denominator": 100,
+          "value": 0.43
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 20,
+          "denominator": 20,
+          "value": 1.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 15,
+          "p95": 48
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.16666666666667,
+              "denominator": 20,
+              "value": 0.5583333333333335
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 15,
+              "denominator": 20,
+              "value": 0.75
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 37
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 67,
+              "denominator": 90,
+              "value": 0.7444444444444445
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 43.53333333333334,
+              "denominator": 80,
+              "value": 0.5441666666666667
+            },
+            "citation_page_accuracy": {
+              "numerator": 30,
+              "denominator": 80,
+              "value": 0.375
+            },
+            "citation_coverage": {
+              "numerator": 30,
+              "denominator": 80,
+              "value": 0.375
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 28,
+              "denominator": 80,
+              "value": 0.35
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 16,
+              "p95": 48
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 3.1666666666666665,
+              "denominator": 10,
+              "value": 0.31666666666666665
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 6,
+              "denominator": 10,
+              "value": 0.6
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 22,
+              "p95": 39
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 1.7833333333333332,
+              "denominator": 10,
+              "value": 0.17833333333333332
+            },
+            "citation_page_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "citation_coverage": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 45,
+              "p95": 56
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 8.0,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 13
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 19,
+              "denominator": 20,
+              "value": 0.95
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 12.950000000000001,
+              "denominator": 20,
+              "value": 0.6475000000000001
+            },
+            "citation_page_accuracy": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "citation_coverage": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 4,
+              "denominator": 20,
+              "value": 0.2
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 14,
+              "p95": 44
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 12.399999999999999,
+              "denominator": 20,
+              "value": 0.6199999999999999
+            },
+            "citation_page_accuracy": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 17,
+              "p95": 42
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 5.583333333333333,
+              "denominator": 10,
+              "value": 0.5583333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 4,
+              "denominator": 10,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 4,
+              "denominator": 10,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 19
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 10.816666666666666,
+              "denominator": 20,
+              "value": 0.5408333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "citation_coverage": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 15,
+              "p95": 33
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 20,
+              "denominator": 20,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 15,
+              "p95": 43
+            }
+          }
+        }
+      }
+    },
+    "rrf_page_scope": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 85,
+          "denominator": 110,
+          "value": 0.7727272727272727
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 57.58333333333336,
+          "denominator": 100,
+          "value": 0.5758333333333335
+        },
+        "citation_page_accuracy": {
+          "numerator": 41,
+          "denominator": 100,
+          "value": 0.41
+        },
+        "citation_coverage": {
+          "numerator": 41,
+          "denominator": 100,
+          "value": 0.41
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 47,
+          "denominator": 100,
+          "value": 0.47
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 20,
+          "denominator": 20,
+          "value": 1.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 14,
+          "p95": 43
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.166666666666668,
+              "denominator": 20,
+              "value": 0.5583333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 39
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 67,
+              "denominator": 90,
+              "value": 0.7444444444444445
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 46.41666666666668,
+              "denominator": 80,
+              "value": 0.5802083333333334
+            },
+            "citation_page_accuracy": {
+              "numerator": 34,
+              "denominator": 80,
+              "value": 0.425
+            },
+            "citation_coverage": {
+              "numerator": 34,
+              "denominator": 80,
+              "value": 0.425
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 33,
+              "denominator": 80,
+              "value": 0.4125
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 15,
+              "p95": 44
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.833333333333333,
+              "denominator": 10,
+              "value": 0.2833333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 21,
+              "p95": 37
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 4,
+              "denominator": 20,
+              "value": 0.2
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.0,
+              "denominator": 10,
+              "value": 0.2
+            },
+            "citation_page_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "citation_coverage": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 42,
+              "p95": 49
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 8.333333333333332,
+              "denominator": 10,
+              "value": 0.8333333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 11,
+              "p95": 12
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 19,
+              "denominator": 20,
+              "value": 0.95
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 14.7,
+              "denominator": 20,
+              "value": 0.735
+            },
+            "citation_page_accuracy": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "citation_coverage": {
+              "numerator": 12,
+              "denominator": 20,
+              "value": 0.6
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 41
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.816666666666666,
+              "denominator": 20,
+              "value": 0.5908333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 20,
+              "value": 0.45
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 38
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 6.283333333333333,
+              "denominator": 10,
+              "value": 0.6283333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 19
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.616666666666667,
+              "denominator": 20,
+              "value": 0.5808333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 11,
+              "denominator": 20,
+              "value": 0.55
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 13,
+              "p95": 40
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 20,
+              "denominator": 20,
+              "value": 1.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 14,
+              "p95": 40
+            }
+          }
+        }
+      }
+    },
+    "rrf_page_refusal": {
+      "metrics": {
+        "case_count": 120,
+        "answerable_count": 100,
+        "unanswerable_count": 20,
+        "retrieval_recall_at_k": {
+          "k": 5,
+          "numerator": 86,
+          "denominator": 110,
+          "value": 0.7818181818181819
+        },
+        "retrieval_mrr_at_k": {
+          "k": 5,
+          "numerator": 58.28333333333336,
+          "denominator": 100,
+          "value": 0.5828333333333336
+        },
+        "citation_page_accuracy": {
+          "numerator": 32,
+          "denominator": 58,
+          "value": 0.5517241379310345
+        },
+        "citation_coverage": {
+          "numerator": 32,
+          "denominator": 100,
+          "value": 0.32
+        },
+        "answer_keyword_accuracy": {
+          "numerator": 35,
+          "denominator": 100,
+          "value": 0.35
+        },
+        "unanswerable_wrong_answer_rate": {
+          "numerator": 0,
+          "denominator": 20,
+          "value": 0.0
+        },
+        "illegal_citation_count": 0,
+        "latency_ms": {
+          "median": 17,
+          "p95": 50
+        },
+        "by_split": {
+          "dev": {
+            "case_count": 30,
+            "answerable_count": 20,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.166666666666668,
+              "denominator": 20,
+              "value": 0.5583333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 11,
+              "value": 0.6363636363636364
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 10,
+              "denominator": 20,
+              "value": 0.5
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 45
+            }
+          },
+          "test": {
+            "case_count": 90,
+            "answerable_count": 80,
+            "unanswerable_count": 10,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 68,
+              "denominator": 90,
+              "value": 0.7555555555555555
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 47.11666666666668,
+              "denominator": 80,
+              "value": 0.5889583333333335
+            },
+            "citation_page_accuracy": {
+              "numerator": 25,
+              "denominator": 47,
+              "value": 0.5319148936170213
+            },
+            "citation_coverage": {
+              "numerator": 25,
+              "denominator": 80,
+              "value": 0.3125
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 25,
+              "denominator": 80,
+              "value": 0.3125
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 18,
+              "p95": 50
+            }
+          }
+        },
+        "by_category": {
+          "adversarial_query": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.833333333333333,
+              "denominator": 10,
+              "value": 0.2833333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 2,
+              "value": 0.0
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 1,
+              "denominator": 10,
+              "value": 0.1
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 20,
+              "p95": 45
+            }
+          },
+          "cross_paper": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 5,
+              "denominator": 20,
+              "value": 0.25
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 2.7,
+              "denominator": 10,
+              "value": 0.27
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 2,
+              "value": 0.0
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 10,
+              "value": 0.0
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 41,
+              "p95": 56
+            }
+          },
+          "definition": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 10,
+              "denominator": 10,
+              "value": 1.0
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 8.333333333333332,
+              "denominator": 10,
+              "value": 0.8333333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 7,
+              "denominator": 9,
+              "value": 0.7777777777777778
+            },
+            "citation_coverage": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 11,
+              "p95": 13
+            }
+          },
+          "limitation": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 19,
+              "denominator": 20,
+              "value": 0.95
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 14.7,
+              "denominator": 20,
+              "value": 0.735
+            },
+            "citation_page_accuracy": {
+              "numerator": 8,
+              "denominator": 10,
+              "value": 0.8
+            },
+            "citation_coverage": {
+              "numerator": 8,
+              "denominator": 20,
+              "value": 0.4
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 4,
+              "denominator": 20,
+              "value": 0.2
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 18,
+              "p95": 45
+            }
+          },
+          "method": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 18,
+              "denominator": 20,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.816666666666666,
+              "denominator": 20,
+              "value": 0.5908333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 6,
+              "denominator": 12,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 16,
+              "p95": 42
+            }
+          },
+          "result": {
+            "case_count": 10,
+            "answerable_count": 10,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 9,
+              "denominator": 10,
+              "value": 0.9
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 6.283333333333333,
+              "denominator": 10,
+              "value": 0.6283333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "citation_coverage": {
+              "numerator": 5,
+              "denominator": 10,
+              "value": 0.5
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 10,
+              "value": 0.7
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 12,
+              "p95": 20
+            }
+          },
+          "setup": {
+            "case_count": 20,
+            "answerable_count": 20,
+            "unanswerable_count": 0,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 17,
+              "denominator": 20,
+              "value": 0.85
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 11.616666666666667,
+              "denominator": 20,
+              "value": 0.5808333333333333
+            },
+            "citation_page_accuracy": {
+              "numerator": 6,
+              "denominator": 13,
+              "value": 0.46153846153846156
+            },
+            "citation_coverage": {
+              "numerator": 6,
+              "denominator": 20,
+              "value": 0.3
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 7,
+              "denominator": 20,
+              "value": 0.35
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 17,
+              "p95": 43
+            }
+          },
+          "unanswerable": {
+            "case_count": 20,
+            "answerable_count": 0,
+            "unanswerable_count": 20,
+            "retrieval_recall_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "retrieval_mrr_at_k": {
+              "k": 5,
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_page_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "citation_coverage": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "answer_keyword_accuracy": {
+              "numerator": 0,
+              "denominator": 0,
+              "value": null
+            },
+            "unanswerable_wrong_answer_rate": {
+              "numerator": 0,
+              "denominator": 20,
+              "value": 0.0
+            },
+            "illegal_citation_count": 0,
+            "latency_ms": {
+              "median": 18,
+              "p95": 47
+            }
+          }
+        }
+      }
+    }
+  }
+}

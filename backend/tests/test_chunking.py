@@ -24,4 +24,3 @@ def test_chunk_parameters_are_validated() -> None:
         assert "overlap_tokens" in str(exc)
     else:
         raise AssertionError("重叠达到窗口大小时应拒绝")
-

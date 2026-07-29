@@ -1,23 +1,67 @@
-# RAG 离线评测协议
+# RAG 离线评测
 
-该目录只定义协议，不附带虚构评测集或成绩。准备具有合法来源的固定 PDF 后，分别生成：
+PaperLeaf 把数据集冻结、检索实验和生成模型评测分开。仓库内包含人工注释与聚合指标，
+不重新分发论文 PDF，也不把无模型基线包装成神经语义检索。
 
-- `cases.jsonl`：人工标注问题、是否可回答、正确物理页和可选正确 Chunk。
-- `predictions.jsonl`：某一固定 Git commit、配置和模型产生的检索及回答结果。
+## 数据集
 
-校验并计算指标：
+`datasets/paperleaf-rag-v1/` 固定了：
+
+- 20 篇 arXiv 论文的精确版本、官方下载地址、SHA-256 与物理页数；
+- 120 个问题，其中可回答 100 个、不可回答 20 个；
+- 定义、方法、实验设置、结果、局限、多论文对比和恶意指令问题；
+- 30 个 dev 问题用于阈值校准，90 个 test 问题用于对比报告；
+- 110 个带论文 ID、物理页和页内文本锚点的证据标注。
+
+`annotations.json` 便于人工审阅，`cases.jsonl` 是评测程序读取的冻结产物。修改注释后重新生成：
+
+```bash
+python -m paperleaf_api.evaluation_build \
+  --annotations evaluation/datasets/paperleaf-rag-v1/annotations.json \
+  --output evaluation/datasets/paperleaf-rag-v1/cases.jsonl
+```
+
+CI 不下载论文，只校验清单、配额、ID 和页码范围：
+
+```bash
+python -m paperleaf_api.evaluation_dataset \
+  --manifest evaluation/datasets/paperleaf-rag-v1/manifest.json \
+  --cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl
+```
+
+本地把清单中的 PDF 下载到独立目录后，增加 `--pdf-dir <目录>`。校验器会检查全部文件哈希、
+页数，并确认每个证据锚点确实出现在指定物理页。PDF 不应提交到仓库。
+
+## 无密钥检索基线
+
+下列命令执行词/字符哈希向量、BM25、RRF、页去重、邻页加权、跨论文范围多样化和拒答阈值实验：
+
+```bash
+python -m paperleaf_api.evaluation_offline \
+  --manifest evaluation/datasets/paperleaf-rag-v1/manifest.json \
+  --cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl \
+  --pdf-dir <PDF目录> \
+  --output evaluation/results/paperleaf-rag-v1/metrics.json \
+  --report evaluation/results/paperleaf-rag-v1/REPORT.md \
+  -k 5
+```
+
+哈希向量只提供不依赖 API Key 的确定性下限，不能代替生产环境的嵌入模型。拒答阈值只根据
+dev 集选择，报告默认单列 test 集。原始预测可能包含论文片段，只有明确传入
+`--predictions-dir` 才会写出，且不应提交到公共仓库。
+
+## 指标边界
+
+聚合指标保留分子、分母和比率，包括页级 Recall@K、MRR@K、首个引用物理页准确率、
+引用覆盖率、关键词代理、不可回答错误作答率、非法引用数和本机延迟。关键词代理检查首个
+检索片段是否含确定性答案词，不等同于 LLM 回答正确率；本机延迟也不用于跨机器宣传。
+
+`evaluation.py` 仍可独立计算任意预测文件：
 
 ```bash
 python -m paperleaf_api.evaluation \
-  --cases cases.jsonl \
+  --cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl \
   --predictions predictions.jsonl \
   --output metrics.json \
   -k 5
 ```
-
-每次对比必须固定文献、问题、模型、随机参数和评测代码，并在实验记录中保存 baseline 与
-candidate commit。工具输出原始分子和分母；分母为零时 `value` 为 `null`，不得补写成绩。
-
-指标包括 Recall@K、引用物理页准确率、引用覆盖率、关键词核对率、不可回答错误作答率、
-非法引用数，以及端到端延迟中位数和 p95。关键词核对只适合确定性事实，不代替人工评审。
-

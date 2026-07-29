@@ -2,8 +2,10 @@ from paperleaf_api.evaluation import (
     CitationPrediction,
     EvaluationCase,
     EvaluationPrediction,
+    RetrievedEvidencePrediction,
     evaluate,
 )
+from paperleaf_api.evaluation_dataset import ExpectedEvidence
 
 
 def test_evaluation_reports_raw_counts_and_illegal_citations() -> None:
@@ -51,3 +53,36 @@ def test_evaluation_reports_raw_counts_and_illegal_citations() -> None:
     assert metrics["citation_page_accuracy"]["value"] == 1.0
     assert metrics["unanswerable_wrong_answer_rate"]["value"] == 1.0
     assert metrics["illegal_citation_count"] == 1
+
+
+def test_evaluation_uses_paper_and_physical_page_for_frozen_evidence() -> None:
+    case = EvaluationCase(
+        id="cross-paper",
+        query="对比",
+        paper_ids=["p1", "p2"],
+        answerable=True,
+        expected_evidence=[
+            ExpectedEvidence(paper_id="p1", physical_page=2, anchor="first paper anchor"),
+            ExpectedEvidence(paper_id="p2", physical_page=2, anchor="second paper anchor"),
+        ],
+        category="cross_paper",
+        split="test",
+    )
+    prediction = EvaluationPrediction(
+        case_id=case.id,
+        answer="回答",
+        abstained=False,
+        retrieved_evidence=[
+            RetrievedEvidencePrediction(chunk_id="p1-c", paper_id="p1", physical_page=2),
+            RetrievedEvidencePrediction(chunk_id="p2-wrong", paper_id="p2", physical_page=3),
+        ],
+        citations=[CitationPrediction(chunk_id="p1-c", paper_id="p1", physical_page=2)],
+        latency_ms=1,
+    )
+
+    metrics = evaluate([case], [prediction], k=5)
+
+    assert metrics["retrieval_recall_at_k"]["numerator"] == 1
+    assert metrics["retrieval_recall_at_k"]["denominator"] == 2
+    assert metrics["retrieval_mrr_at_k"]["value"] == 1.0
+    assert metrics["citation_page_accuracy"]["value"] == 1.0

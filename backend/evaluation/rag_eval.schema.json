@@ -5,7 +5,7 @@
   "$defs": {
     "case": {
       "type": "object",
-      "required": ["id", "query", "paper_ids", "answerable", "category"],
+      "required": ["id", "query", "paper_ids", "answerable", "category", "split"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "query": {"type": "string", "minLength": 1},
@@ -13,19 +13,47 @@
         "answerable": {"type": "boolean"},
         "expected_pages": {"type": "array", "items": {"type": "integer", "minimum": 1}},
         "expected_chunk_ids": {"type": "array", "items": {"type": "string"}},
+        "expected_evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["paper_id", "physical_page", "anchor"],
+            "properties": {
+              "paper_id": {"type": "string"},
+              "physical_page": {"type": "integer", "minimum": 1},
+              "anchor": {"type": "string", "minLength": 12}
+            },
+            "additionalProperties": false
+          }
+        },
         "expected_answer_keywords": {"type": "array", "items": {"type": "string"}},
-        "category": {"type": "string"}
+        "category": {"type": "string"},
+        "split": {"enum": ["dev", "test"]}
       },
       "additionalProperties": false
     },
     "prediction": {
       "type": "object",
-      "required": ["case_id", "answer", "abstained", "retrieved_chunk_ids", "latency_ms"],
+      "required": ["case_id", "answer", "abstained", "latency_ms"],
       "properties": {
         "case_id": {"type": "string"},
         "answer": {"type": "string"},
         "abstained": {"type": "boolean"},
         "retrieved_chunk_ids": {"type": "array", "items": {"type": "string"}},
+        "retrieved_evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["chunk_id", "paper_id", "physical_page"],
+            "properties": {
+              "chunk_id": {"type": "string"},
+              "paper_id": {"type": "string"},
+              "physical_page": {"type": "integer", "minimum": 1},
+              "score": {"type": ["number", "null"]}
+            },
+            "additionalProperties": false
+          }
+        },
         "citations": {
           "type": "array",
           "items": {
@@ -33,11 +61,13 @@
             "required": ["chunk_id", "physical_page"],
             "properties": {
               "chunk_id": {"type": "string"},
+              "paper_id": {"type": ["string", "null"]},
               "physical_page": {"type": "integer", "minimum": 1}
             },
             "additionalProperties": false
           }
         },
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
         "latency_ms": {"type": "integer", "minimum": 0}
       },
       "additionalProperties": false

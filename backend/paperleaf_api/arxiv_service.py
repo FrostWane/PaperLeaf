@@ -81,4 +81,3 @@ async def fetch_arxiv_pdf(arxiv_id: str, max_bytes: int) -> bytes:
                 if len(content) > max_bytes:
                     raise ValueError("arXiv PDF 超过大小限制")
     return bytes(content)
-

@@ -138,7 +138,7 @@ def create_app(
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.2.1",
+        version="0.3.0",
         description="个人科研文献库、页级 RAG 与受控研究 Agent",
         lifespan=lifespan,
     )

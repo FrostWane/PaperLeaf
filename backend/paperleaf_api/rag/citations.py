@@ -39,4 +39,3 @@ def validate_citations(
         if claim.excerpt and claim.excerpt not in source.text:
             errors.append(f"引用 {claim.chunk_id} 的片段不属于证据原文")
     return not errors, errors
-
