@@ -64,6 +64,11 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m compileall paperleaf_api tests alembic/versions ../scripts/smoke_compose.py
       - run: ruff check paperleaf_api tests alembic/versions ../scripts/smoke_compose.py
+      - name: 校验冻结 RAG 数据集
+        run: >-
+          python -m paperleaf_api.evaluation_dataset
+          --manifest evaluation/datasets/paperleaf-rag-v1/manifest.json
+          --cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl
       - run: pytest
       - name: 验证全新安装与旧库升级迁移
         run: |

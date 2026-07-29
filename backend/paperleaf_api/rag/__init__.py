@@ -14,4 +14,3 @@ __all__ = [
     "reciprocal_rank_fusion",
     "validate_citations",
 ]
-

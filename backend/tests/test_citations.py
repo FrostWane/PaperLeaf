@@ -19,4 +19,3 @@ def test_mismatched_page_and_excerpt_are_rejected() -> None:
 
     assert valid is False
     assert len(errors) == 2
-

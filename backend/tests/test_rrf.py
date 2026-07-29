@@ -15,4 +15,3 @@ def test_rrf_ignores_duplicates_inside_one_channel() -> None:
     ranking = [RankedHit("a", 2), RankedHit("a", 1), RankedHit("b", 0)]
     fused = reciprocal_rank_fusion([ranking], rank_constant=10, limit=2)
     assert [hit.id for hit in fused] == ["a", "b"]
-

@@ -32,4 +32,3 @@ def reciprocal_rank_fusion(
 
     ordered = sorted(totals, key=lambda item: (-totals[item], best_position[item], item))[:limit]
     return [RankedHit(id=item, score=totals[item], payload=payloads[item]) for item in ordered]
-
