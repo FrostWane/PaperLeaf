@@ -112,8 +112,11 @@ data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 ### 集合、标签与作业
 
 - `/api/v1/collections` 和 `/api/v1/tags` 提供用户隔离的 CRUD。
+- 集合与标签列表返回各自的 `paper_ids`，作为刷新后筛选与数量统计的事实来源。
 - `POST/DELETE /api/v1/collections/{id}/papers/{paper_id}` 管理集合归属。
 - `POST/DELETE /api/v1/tags/{id}/papers/{paper_id}` 管理论文标签。
+- `POST /api/v1/papers/bulk` 在最多 100 篇当前用户文献上执行归档、恢复、集合和标签动作。
+- `POST /api/v1/papers/{paper_id}/opened` 记录最近阅读时间；它不影响 PDF 或索引内容。
 - 管理员可通过 `GET /api/v1/admin/jobs` 查看作业状态，并通过
   `POST /api/v1/admin/jobs/{id}/retry` 重试失败作业。返回值不包含论文正文、Chunk 或聊天内容。
 

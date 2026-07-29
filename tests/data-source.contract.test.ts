@@ -86,4 +86,41 @@ describe("真实 API 契约", () => {
     await expect(realDataSource.summarizePaper("p1")).resolves.toMatchObject({ paperId: "p1", mode: "extractive", citations: [{ chunkId: "p1:p2:c0", physicalPage: 2 }] });
     await expect(realDataSource.buildStructureGraph("p1")).resolves.toMatchObject({ paperId: "p1", nodes: [{ label: "问题", physicalPage: 2 }], edges: [{ source: "n1", target: "n2" }] });
   });
+
+  it("集合、标签和文献归属使用真实 API 字段", async () => {
+    document.cookie = "paperleaf_csrf=organize-token; path=/";
+    const requests: Array<{ method: string; path: string; csrf: string; body?: unknown }> = [];
+    server.use(
+      http.get(`${API_BASE_URL}/collections`, () => HttpResponse.json([{ id: "c1", name: "核心方法", description: "基础论文", paper_ids: ["p1"] }])),
+      http.post(`${API_BASE_URL}/collections`, async ({ request }) => { requests.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("X-CSRF-Token") ?? "", body: await request.json() }); return HttpResponse.json({ id: "c2", name: "实验", paper_ids: [] }, { status: 201 }); }),
+      http.patch(`${API_BASE_URL}/collections/c2`, async ({ request }) => { requests.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("X-CSRF-Token") ?? "", body: await request.json() }); return HttpResponse.json({ id: "c2", name: "实验复现", paper_ids: [] }); }),
+      http.delete(`${API_BASE_URL}/collections/c2`, ({ request }) => { requests.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("X-CSRF-Token") ?? "" }); return HttpResponse.json({ status: "deleted" }); }),
+      http.get(`${API_BASE_URL}/tags`, () => HttpResponse.json([{ id: "t1", name: "RAG", color: "#AFC3CE", paper_ids: ["p1"] }])),
+      http.post(`${API_BASE_URL}/tags`, async ({ request }) => { requests.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("X-CSRF-Token") ?? "", body: await request.json() }); return HttpResponse.json({ id: "t2", name: "复现", color: "#B8C9BC", paper_ids: [] }, { status: 201 }); }),
+      http.patch(`${API_BASE_URL}/tags/t2`, async ({ request }) => { requests.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("X-CSRF-Token") ?? "", body: await request.json() }); return HttpResponse.json({ id: "t2", name: "已复现", color: "#B8C9BC", paper_ids: [] }); }),
+      http.delete(`${API_BASE_URL}/tags/t2`, ({ request }) => { requests.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("X-CSRF-Token") ?? "" }); return HttpResponse.json({ status: "deleted" }); }),
+    );
+    await expect(realDataSource.listCollections()).resolves.toEqual([{ id: "c1", name: "核心方法", description: "基础论文", paperIds: ["p1"] }]);
+    await realDataSource.createCollection({ name: "实验" });
+    await realDataSource.updateCollection("c2", { name: "实验复现" });
+    await realDataSource.deleteCollection("c2");
+    await expect(realDataSource.listTags()).resolves.toEqual([{ id: "t1", name: "RAG", color: "#AFC3CE", paperIds: ["p1"] }]);
+    await realDataSource.createTag({ name: "复现", color: "#B8C9BC" });
+    await realDataSource.updateTag("t2", { name: "已复现", color: "#B8C9BC" });
+    await realDataSource.deleteTag("t2");
+    expect(requests).toHaveLength(6);
+    expect(requests.every((item) => item.csrf === "organize-token")).toBe(true);
+  });
+
+  it("批量整理和最近阅读记录保留所有权相关字段", async () => {
+    document.cookie = "paperleaf_csrf=bulk-token; path=/";
+    let bulkPayload: unknown;
+    server.use(
+      http.post(`${API_BASE_URL}/papers/bulk`, async ({ request }) => { bulkPayload = await request.json(); return HttpResponse.json({ action: "add_collection", affected: 2, paper_ids: ["p1", "p2"] }); }),
+      http.post(`${API_BASE_URL}/papers/p1/opened`, () => HttpResponse.json({ id: "p1", title: "论文", authors: ["作者"], status: "ready", last_opened_at: "2026-07-29T04:00:00Z" })),
+    );
+    await realDataSource.bulkPapers({ paperIds: ["p1", "p2"], action: "add_collection", targetId: "c1" });
+    expect(bulkPayload).toEqual({ paper_ids: ["p1", "p2"], action: "add_collection", target_id: "c1" });
+    await expect(realDataSource.recordPaperOpened("p1")).resolves.toMatchObject({ id: "p1", lastOpenedAt: "2026-07-29T04:00:00Z" });
+  });
 });

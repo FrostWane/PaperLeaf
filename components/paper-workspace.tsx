@@ -67,6 +67,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false }: { paperI
   const workspaceRef = useRef<HTMLDivElement>(null);
   const setSelectedPaperId = useWorkspaceStore((state) => state.setSelectedPaperId);
   const { register, handleSubmit, reset, formState: { errors } } = useForm<QuestionInput>({ resolver: zodResolver(questionSchema), defaultValues: { question: "" } });
+  const libraryHref = demo ? "/library?demo=1" : "/library";
 
   useEffect(() => {
     if (!isReal) return;
@@ -112,6 +113,14 @@ export function PaperWorkspace({ paperId = "attention", demo = false }: { paperI
     });
     workspaceRef.current?.setAttribute("data-client-ready", "true");
   }, [demo, paperId, setSelectedPaperId]);
+
+  useEffect(() => {
+    void dataSource.recordPaperOpened(paperId).then(() => {
+      window.dispatchEvent(new Event("paperleaf:papers-changed"));
+    }).catch(() => {
+      // 最近阅读是辅助信息；记录失败不应打断 PDF 阅读与问答主流程。
+    });
+  }, [dataSource, paperId]);
 
   function openCitation(page: number) {
     setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
@@ -164,7 +173,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false }: { paperI
   }
 
   if (!paper) {
-    return <div ref={workspaceRef} className="paper-workspace workspace-loading" data-client-ready="true"><FileText size={22} /><strong>{loadMessage ? "无法打开论文" : "正在载入论文工作台"}</strong><p role={loadMessage ? "alert" : "status"}>{loadMessage || "正在读取元数据与私有 PDF…"}</p><a className="secondary-button" href="/library">返回文献库</a></div>;
+    return <div ref={workspaceRef} className="paper-workspace workspace-loading" data-client-ready="true"><FileText size={22} /><strong>{loadMessage ? "无法打开论文" : "正在载入论文工作台"}</strong><p role={loadMessage ? "alert" : "status"}>{loadMessage || "正在读取元数据与私有 PDF…"}</p><a className="secondary-button" href={libraryHref}>返回文献库</a></div>;
   }
 
   const pageShortcuts = paper.pages ? [...new Set([1, 2, Math.ceil(paper.pages / 2), paper.pages])].filter((page) => page > 0 && page <= paper.pages) : [1];
@@ -177,7 +186,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false }: { paperI
   const readyForArtifacts = paper.status === "ready" || paper.status === "partial";
 
   const infoPane = <aside className={`workspace-info pane-view ${mobilePane === "info" ? "mobile-active" : ""}`} aria-label="论文信息">
-    <div className="pane-heading"><a href="/library" className="back-link"><ArrowLeft size={14} />返回文献库</a><button className="icon-button pane-settings" aria-label="编辑文献信息" onClick={() => setDetailsOpen(true)}><PencilLine size={14} /></button></div>
+    <div className="pane-heading"><a href={libraryHref} className="back-link"><ArrowLeft size={14} />返回文献库</a><button className="icon-button pane-settings" aria-label="编辑文献信息" onClick={() => setDetailsOpen(true)}><PencilLine size={14} /></button></div>
     <div className="paper-summary"><span className="paper-index">{isReal ? `PL–${paper.id.slice(0, 8).toUpperCase()}` : "PL–001"}</span><h2>{paper.title}</h2><p>{paper.authors || "作者待识别"}{paper.year > 0 ? ` · ${paper.year}` : ""}</p><PaperState paper={paper} /></div>
     <dl className="metadata"><div><dt>来源</dt><dd>{paper.venue}</dd></div><div><dt>页数</dt><dd>{paper.pages ? `${paper.pages} 页` : "待识别"}</dd></div><div><dt>{paper.arxivId ? "arXiv" : "DOI"}</dt><dd className="mono">{paper.arxivId ?? paper.doi ?? "—"}</dd></div></dl>
     <div className="outline-list"><span className="eyebrow">{isReal ? "页码导航" : "论文目录"}</span>{isReal ? pageShortcuts.map((page) => <button key={page} className={currentPage === page ? "active" : ""} onClick={() => setCurrentPage(page)}><span>{String(page).padStart(2, "0")}</span>{page === 1 ? "论文首页" : page === paper.pages ? "最后一页" : `跳到第 ${page} 页`}</button>) : ["摘要", "1. Introduction", "2. Background", "3. Model Architecture", "4. Why Self-Attention", "5. Training", "6. Results"].map((item, index) => <button key={item} className={currentPage === index + 1 ? "active" : ""} onClick={() => setCurrentPage(index + 1)}><span>{String(index + 1).padStart(2, "0")}</span>{item}</button>)}</div>

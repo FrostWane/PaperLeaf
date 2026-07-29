@@ -86,7 +86,7 @@ class SmokeConfig:
     http_timeout_seconds: float
 
     @classmethod
-    def from_environment(cls) -> "SmokeConfig":
+    def from_environment(cls) -> SmokeConfig:
         email = os.getenv("PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL")
         password = os.getenv("PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD")
         if not email or not password:
@@ -119,7 +119,7 @@ class PaperLeafClient:
         *,
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
-        expected: set[int] = {200},
+        expected: set[int] | None = None,
         sensitive: bool = False,
     ) -> tuple[int, bytes, dict[str, str]]:
         request = urllib.request.Request(
@@ -141,7 +141,8 @@ class PaperLeafClient:
             response_headers = dict(exc.headers.items())
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise SmokeFailure(f"{method} {path} 无法连接服务") from exc
-        if status_code not in expected:
+        expected_codes = expected if expected is not None else {200}
+        if status_code not in expected_codes:
             detail = "响应内容已隐藏" if sensitive else content[:300].decode("utf-8", "replace")
             raise SmokeFailure(f"{method} {path} 返回 {status_code}：{detail}")
         return status_code, content, response_headers
@@ -153,7 +154,7 @@ class PaperLeafClient:
         *,
         payload: dict | None = None,
         csrf: bool = False,
-        expected: set[int] = {200},
+        expected: set[int] | None = None,
         sensitive: bool = False,
     ) -> tuple[int, object, dict[str, str]]:
         headers = {"Accept": "application/json"}
@@ -179,7 +180,10 @@ class PaperLeafClient:
             raise SmokeFailure(f"{method} {path} 没有返回合法 JSON") from exc
 
     def csrf_token(self) -> str:
-        token = next((cookie.value for cookie in self.cookies if cookie.name == "paperleaf_csrf"), None)
+        token = next(
+            (cookie.value for cookie in self.cookies if cookie.name == "paperleaf_csrf"),
+            None,
+        )
         if not token:
             raise SmokeFailure("登录响应没有设置 CSRF Cookie")
         return token
@@ -200,9 +204,11 @@ def wait_until(client: PaperLeafClient, description: str, check) -> object:
 def run_smoke(config: SmokeConfig) -> None:
     client = PaperLeafClient(config)
     paper_id = None
+    collection_id = None
+    tag_id = None
     deleted = False
 
-    print("[1/7] 等待 API ready")
+    print("[1/8] 等待 API ready")
     wait_until(
         client,
         "API ready",
@@ -213,7 +219,7 @@ def run_smoke(config: SmokeConfig) -> None:
         ),
     )
 
-    print("[2/7] 登录并校验 Cookie/CSRF")
+    print("[2/8] 登录并校验 Cookie/CSRF")
     _, login_result, _ = client.json(
         "POST",
         "/api/v1/auth/login",
@@ -225,7 +231,7 @@ def run_smoke(config: SmokeConfig) -> None:
     client.csrf_token()
 
     try:
-        print("[3/7] 上传临时有效 PDF")
+        print("[3/8] 上传临时有效 PDF")
         marker = secrets.token_hex(8)
         pdf = build_minimal_pdf(marker)
         multipart, content_type = multipart_pdf(pdf, f"Compose smoke {marker}")
@@ -241,7 +247,7 @@ def run_smoke(config: SmokeConfig) -> None:
         if not paper_id:
             raise SmokeFailure("上传响应缺少 paper id")
 
-        print("[4/7] 轮询解析完成")
+        print("[4/8] 轮询解析完成")
 
         def paper_ready():
             _, value, _ = client.json("GET", f"/api/v1/papers/{paper_id}")
@@ -254,7 +260,81 @@ def run_smoke(config: SmokeConfig) -> None:
         if final_status != "ready":
             raise SmokeFailure("文本型冒烟 PDF 应解析为 ready，而不是 partial")
 
-        print("[5/7] 验证 Range PDF 下载")
+        print("[5/8] 验证组织归属、最近阅读与批量归档")
+        _, opened, _ = client.json(
+            "POST", f"/api/v1/papers/{paper_id}/opened", csrf=True
+        )
+        if not isinstance(opened, dict) or not opened.get("last_opened_at"):
+            raise SmokeFailure("最近阅读时间没有持久化")
+
+        _, collection, _ = client.json(
+            "POST",
+            "/api/v1/collections",
+            payload={"name": f"Smoke collection {marker}"},
+            csrf=True,
+            expected={201},
+        )
+        _, tag, _ = client.json(
+            "POST",
+            "/api/v1/tags",
+            payload={"name": f"Smoke tag {marker}", "color": "#AFC3CE"},
+            csrf=True,
+            expected={201},
+        )
+        if not isinstance(collection, dict) or not isinstance(tag, dict):
+            raise SmokeFailure("集合或标签创建响应不合法")
+        collection_id = collection.get("id")
+        tag_id = tag.get("id")
+        if not collection_id or not tag_id:
+            raise SmokeFailure("集合或标签响应缺少 id")
+
+        for action, target_id in (
+            ("add_collection", collection_id),
+            ("add_tag", tag_id),
+        ):
+            _, bulk_result, _ = client.json(
+                "POST",
+                "/api/v1/papers/bulk",
+                payload={
+                    "paper_ids": [paper_id],
+                    "action": action,
+                    "target_id": target_id,
+                },
+                csrf=True,
+            )
+            if not isinstance(bulk_result, dict) or bulk_result.get("affected") != 1:
+                raise SmokeFailure(f"批量整理 {action} 没有更新目标文献")
+
+        _, collections, _ = client.json("GET", "/api/v1/collections")
+        _, tags, _ = client.json("GET", "/api/v1/tags")
+        collection_members = next(
+            (item.get("paper_ids") for item in collections if item.get("id") == collection_id),
+            None,
+        ) if isinstance(collections, list) else None
+        tag_members = next(
+            (item.get("paper_ids") for item in tags if item.get("id") == tag_id),
+            None,
+        ) if isinstance(tags, list) else None
+        if collection_members != [paper_id] or tag_members != [paper_id]:
+            raise SmokeFailure("集合或标签列表没有返回真实文献归属")
+
+        client.json(
+            "POST",
+            "/api/v1/papers/bulk",
+            payload={"paper_ids": [paper_id], "action": "archive"},
+            csrf=True,
+        )
+        _, archived, _ = client.json("GET", f"/api/v1/papers/{paper_id}")
+        if not isinstance(archived, dict) or not archived.get("archived_at"):
+            raise SmokeFailure("批量归档状态没有持久化")
+        client.json(
+            "POST",
+            "/api/v1/papers/bulk",
+            payload={"paper_ids": [paper_id], "action": "unarchive"},
+            csrf=True,
+        )
+
+        print("[6/8] 验证 Range PDF 下载")
         status_code, partial, headers = client.request(
             "GET",
             f"/api/v1/papers/{paper_id}/file",
@@ -269,13 +349,13 @@ def run_smoke(config: SmokeConfig) -> None:
         if not content_range.startswith("bytes 0-7/"):
             raise SmokeFailure("Range 响应缺少正确 Content-Range")
 
-        print("[6/7] 验证管理员只读端点")
+        print("[7/8] 验证管理员只读端点")
         for path in ("/api/v1/admin/users", "/api/v1/admin/jobs"):
             _, value, _ = client.json("GET", path)
             if not isinstance(value, list):
                 raise SmokeFailure(f"{path} 未返回列表")
 
-        print("[7/7] 删除并等待幂等清理")
+        print("[8/8] 删除并等待幂等清理")
         client.json(
             "DELETE",
             f"/api/v1/papers/{paper_id}",
@@ -302,6 +382,18 @@ def run_smoke(config: SmokeConfig) -> None:
                 )
             except Exception:
                 print("清理提示：临时论文未能自动删除，请按 paper id 从管理员作业中检查。")
+        for resource, resource_id in (("collections", collection_id), ("tags", tag_id)):
+            if not resource_id:
+                continue
+            try:
+                client.json(
+                    "DELETE",
+                    f"/api/v1/{resource}/{resource_id}",
+                    csrf=True,
+                    expected={200, 404},
+                )
+            except Exception:
+                print(f"清理提示：临时 {resource} 未能自动删除。")
 
     print("PaperLeaf Compose 冒烟通过")
 

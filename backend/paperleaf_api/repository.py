@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .db import get_session_factory
@@ -64,6 +64,8 @@ class PaperRecord:
     sha256: str
     page_count: int | None
     status: PaperStatus = PaperStatus.uploaded
+    archived_at: datetime | None = None
+    last_opened_at: datetime | None = None
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
 
@@ -136,6 +138,12 @@ class Repository(Protocol):
         self, paper_id: str, owner_id: str, **changes: object
     ) -> PaperRecord | None: ...
     async def delete_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
+    async def touch_paper_opened(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
+    async def set_papers_archived(
+        self, paper_ids: list[str], owner_id: str, archived: bool
+    ) -> list[str] | None: ...
+    async def list_collection_memberships(self, owner_id: str) -> dict[str, list[str]]: ...
+    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]: ...
 
 
 class MemoryRepository:
@@ -288,6 +296,30 @@ class MemoryRepository:
             self.jobs[job.id] = job
         return paper
 
+    async def touch_paper_opened(
+        self, paper_id: str, owner_id: str
+    ) -> PaperRecord | None:
+        paper = await self.get_owned_paper(paper_id, owner_id)
+        if not paper:
+            return None
+        paper.last_opened_at = now()
+        paper.updated_at = now()
+        return paper
+
+    async def set_papers_archived(
+        self, paper_ids: list[str], owner_id: str, archived: bool
+    ) -> list[str] | None:
+        unique_ids = list(dict.fromkeys(paper_ids))
+        papers = [self.papers.get(paper_id) for paper_id in unique_ids]
+        if any(not paper or paper.owner_id != owner_id for paper in papers):
+            return None
+        timestamp = now() if archived else None
+        for paper in papers:
+            assert paper is not None
+            paper.archived_at = timestamp
+            paper.updated_at = now()
+        return unique_ids
+
     async def count_active_admins(self) -> int:
         return sum(1 for user in self.users.values() if user.active and user.role == UserRole.admin)
 
@@ -308,6 +340,14 @@ class MemoryRepository:
 
     async def list_collections(self, owner_id: str) -> list[CollectionRecord]:
         return [item for item in self.collections.values() if item.owner_id == owner_id]
+
+    async def list_collection_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        owned = {item.id for item in self.collections.values() if item.owner_id == owner_id}
+        memberships = {collection_id: [] for collection_id in owned}
+        for paper_id, collection_id in sorted(self.paper_collections):
+            if collection_id in owned:
+                memberships[collection_id].append(paper_id)
+        return memberships
 
     async def update_collection(
         self, collection_id: str, owner_id: str, **changes: object
@@ -369,6 +409,14 @@ class MemoryRepository:
 
     async def list_tags(self, owner_id: str) -> list[TagRecord]:
         return [item for item in self.tags.values() if item.owner_id == owner_id]
+
+    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        owned = {item.id for item in self.tags.values() if item.owner_id == owner_id}
+        memberships = {tag_id: [] for tag_id in owned}
+        for paper_id, tag_id in sorted(self.paper_tags):
+            if tag_id in owned:
+                memberships[tag_id].append(paper_id)
+        return memberships
 
     async def update_tag(
         self, tag_id: str, owner_id: str, **changes: object
@@ -654,6 +702,47 @@ class SQLAlchemyRepository:
             await session.refresh(paper)
             return paper
 
+    async def touch_paper_opened(self, paper_id: str, owner_id: str) -> Paper | None:
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+            if not paper:
+                return None
+            paper.last_opened_at = now()
+            paper.updated_at = now()
+            await session.commit()
+            await session.refresh(paper)
+            return paper
+
+    async def set_papers_archived(
+        self, paper_ids: list[str], owner_id: str, archived: bool
+    ) -> list[str] | None:
+        unique_ids = list(dict.fromkeys(paper_ids))
+        async with get_session_factory()() as session:
+            owned_ids = list(
+                await session.scalars(
+                    select(Paper.id).where(
+                        Paper.owner_id == owner_id,
+                        Paper.id.in_(unique_ids),
+                        Paper.status != PaperStatus.deleting,
+                    )
+                )
+            )
+            if set(owned_ids) != set(unique_ids):
+                return None
+            timestamp = now()
+            await session.execute(
+                update(Paper)
+                .where(Paper.owner_id == owner_id, Paper.id.in_(unique_ids))
+                .values(
+                    archived_at=timestamp if archived else None,
+                    updated_at=timestamp,
+                )
+            )
+            await session.commit()
+            return unique_ids
+
     async def count_active_admins(self) -> int:
         async with get_session_factory()() as session:
             value = await session.scalar(
@@ -688,6 +777,24 @@ class SQLAlchemyRepository:
                 .order_by(Collection.name)
             )
             return list(result)
+
+    async def list_collection_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(Collection.id, paper_collections.c.paper_id)
+                    .join(
+                        paper_collections,
+                        paper_collections.c.collection_id == Collection.id,
+                    )
+                    .where(Collection.owner_id == owner_id)
+                    .order_by(Collection.id, paper_collections.c.paper_id)
+                )
+            ).all()
+            memberships: dict[str, list[str]] = {}
+            for collection_id, paper_id in rows:
+                memberships.setdefault(collection_id, []).append(paper_id)
+            return memberships
 
     async def update_collection(
         self, collection_id: str, owner_id: str, **changes: object
@@ -784,6 +891,21 @@ class SQLAlchemyRepository:
                 select(Tag).where(Tag.owner_id == owner_id).order_by(Tag.name)
             )
             return list(result)
+
+    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(Tag.id, paper_tags.c.paper_id)
+                    .join(paper_tags, paper_tags.c.tag_id == Tag.id)
+                    .where(Tag.owner_id == owner_id)
+                    .order_by(Tag.id, paper_tags.c.paper_id)
+                )
+            ).all()
+            memberships: dict[str, list[str]] = {}
+            for tag_id, paper_id in rows:
+                memberships.setdefault(tag_id, []).append(paper_id)
+            return memberships
 
     async def update_tag(
         self, tag_id: str, owner_id: str, **changes: object

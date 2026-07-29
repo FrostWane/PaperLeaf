@@ -106,6 +106,8 @@ class Paper(Base):
     __table_args__ = (
         Index("ix_papers_owner_sha256", "owner_id", "sha256", unique=True),
         Index("ix_papers_owner_doi", "owner_id", "doi", unique=False),
+        Index("ix_papers_owner_archived", "owner_id", "archived_at"),
+        Index("ix_papers_owner_last_opened", "owner_id", "last_opened_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -123,6 +125,10 @@ class Paper(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[PaperStatus] = mapped_column(Enum(PaperStatus), default=PaperStatus.uploaded)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

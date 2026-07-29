@@ -11,7 +11,7 @@ const nav = [
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
-export function AppShell({ active, title, eyebrow, actions, children, flush = false }: { active: string; title: string; eyebrow?: string; actions?: React.ReactNode; children: React.ReactNode; flush?: boolean }) {
+export function AppShell({ active, title, eyebrow, actions, children, flush = false, demo = false }: { active: string; title: string; eyebrow?: string; actions?: React.ReactNode; children: React.ReactNode; flush?: boolean; demo?: boolean }) {
   return (
     <div className="app-shell">
       <aside className="global-sidebar">
@@ -24,7 +24,7 @@ export function AppShell({ active, title, eyebrow, actions, children, flush = fa
       <div className="app-main">
         <header className="app-header">
           <div><span className="eyebrow">{eyebrow ?? "Personal research library"}</span><h1>{title}</h1></div>
-          <div className="header-actions">{process.env.NEXT_PUBLIC_DATA_MODE !== "real" && <span className="demo-badge">固定演示数据</span>}<button className="icon-button" aria-label="通知"><Bell size={17} /></button>{actions}</div>
+          <div className="header-actions">{(demo || process.env.NEXT_PUBLIC_DATA_MODE !== "real") && <span className="demo-badge">固定演示数据</span>}<button className="icon-button" aria-label="通知"><Bell size={17} /></button>{actions}</div>
         </header>
         <main className={flush ? "page-content flush" : "page-content"}>{children}</main>
       </div>
