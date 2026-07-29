@@ -21,6 +21,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import (
+    text as sql_text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -190,6 +193,19 @@ class PaperPage(Base):
 
 class PaperChunk(Base):
     __tablename__ = "paper_chunks"
+    __table_args__ = (
+        Index(
+            "ix_paper_chunks_fts",
+            sql_text("to_tsvector('simple', text)"),
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
+        Index(
+            "ix_paper_chunks_trgm",
+            "text",
+            postgresql_using="gin",
+            postgresql_ops={"text": "gin_trgm_ops"},
+        ).ddl_if(dialect="postgresql"),
+    )
 
     # 页级 Chunk 使用可解释的 `{paper_id}:p{page}:c{index}` 稳定键，长度会超过 UUID。
     id: Mapped[str] = mapped_column(String(160), primary_key=True, default=new_id)
