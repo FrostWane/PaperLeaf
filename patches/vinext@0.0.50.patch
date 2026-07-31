@@ -1,0 +1,13 @@
+diff --git a/dist/server/static-file-cache.js b/dist/server/static-file-cache.js
+index 81cb6d4..16f82ff 100644
+--- a/dist/server/static-file-cache.js
++++ b/dist/server/static-file-cache.js
+@@ -189,7 +189,7 @@ async function* walkFilesWithStats(dir, base = dir) {
+ 		const stats = await Promise.all(batch.map((f) => fsp.stat(f)));
+ 		for (let j = 0; j < batch.length; j++) yield {
+-			relativePath: path.relative(base, batch[j]),
++			relativePath: path.relative(base, batch[j]).split(path.sep).join("/"),
+ 			fullPath: batch[j],
+ 			stat: {
+ 				size: stats[j].size,
+ 				mtimeMs: stats[j].mtimeMs

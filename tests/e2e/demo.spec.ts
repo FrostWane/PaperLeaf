@@ -11,7 +11,7 @@ test("公开演示可以提问并通过引用跳到论文页", async ({ page }) 
     await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("提问");
   }
   const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
-  const citation = assistant.getByRole("button", { name: "查看第 6 页引用" });
+  const citation = assistant.getByRole("button", { name: /引用 \[2\].*第 6 页/ });
   await expect(citation).toBeVisible();
   await citation.click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
@@ -50,6 +50,24 @@ test("论文工作台没有 serious 或 critical 无障碍问题", async ({ page
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   expect(results.violations.filter((item) => item.impact === "serious" || item.impact === "critical")).toEqual([]);
+});
+
+test("论文工作台分隔条和引用保留完整可访问语义", async ({ page }) => {
+  await page.goto("/demo");
+  await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
+  const mobile = page.viewportSize()!.width < 760;
+  if (!mobile) {
+    const separators = page.locator('.workspace-desktop [role="separator"]');
+    await expect(separators).toHaveCount(2);
+    for (const separator of await separators.all()) {
+      await expect(separator).toHaveAttribute("aria-valuemin", /\d+/);
+      await expect(separator).toHaveAttribute("aria-valuemax", /\d+/);
+      await expect(separator).toHaveAttribute("aria-valuenow", /\d+/);
+    }
+  }
+  if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
+  const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
+  await expect(assistant.getByRole("button", { name: /引用 \[1\].*第 2 页/ })).toBeVisible();
 });
 
 test("公开演示可以生成证据化概览和结构图", async ({ page }) => {

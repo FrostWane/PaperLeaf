@@ -146,6 +146,7 @@ pnpm build
 pnpm storybook:build
 pnpm exec playwright install chromium
 pnpm test:e2e
+pnpm lighthouse
 ```
 
 后端：

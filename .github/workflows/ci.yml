@@ -30,6 +30,7 @@ jobs:
       - run: pnpm storybook:build
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+      - run: pnpm lighthouse
 
   backend:
     name: 后端检查

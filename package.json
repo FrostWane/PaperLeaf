@@ -1,8 +1,13 @@
 {
   "name": "paperleaf",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "packageManager": "pnpm@9.7.0",
+  "pnpm": {
+    "patchedDependencies": {
+      "vinext@0.0.50": "patches/vinext@0.0.50.patch"
+    }
+  },
   "engines": {
     "node": ">=22.13.0"
   },
@@ -15,6 +20,7 @@
     "test:e2e": "playwright test",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
+    "lighthouse": "lhci autorun",
     "lint": "eslint app components lib tests .storybook vitest.config.ts playwright.config.ts --ignore-pattern dist --ignore-pattern .next --ignore-pattern build --ignore-pattern backend --ignore-pattern worker --ignore-pattern .wrangler --ignore-pattern .vinext"
   },
   "dependencies": {
@@ -39,6 +45,7 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
     "@cloudflare/vite-plugin": "1.37.1",
+    "@lhci/cli": "0.15.1",
     "@playwright/test": "^1.61.1",
     "@storybook/addon-a11y": "^10.5.3",
     "@storybook/react-vite": "^10.5.3",

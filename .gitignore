@@ -15,6 +15,7 @@
 /storybook-static/
 /test-results/
 /playwright-report/
+/.lighthouseci/
 
 # next.js
 /.next/
