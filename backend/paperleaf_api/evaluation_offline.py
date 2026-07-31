@@ -31,6 +31,7 @@ from .rag.retrieval_quality import (
 from .rag.rrf import RankedHit, reciprocal_rank_fusion
 
 _WORD_RE = re.compile(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*")
+_ADAPTIVE_BM25_CONFIDENCE_THRESHOLD = 0.25
 _STOPWORDS = {
     "a",
     "an",
@@ -77,6 +78,13 @@ class QueryRanking:
 
 @dataclass(frozen=True)
 class SearchWindow:
+    id: str
+    chunk: PageChunk
+    terms: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SearchPage:
     id: str
     chunk: PageChunk
     terms: tuple[str, ...]
@@ -141,6 +149,27 @@ class OfflineRetrievalIndex:
         self.by_id = {chunk.id: chunk for chunk in chunks}
         for chunk in chunks:
             self.by_paper[chunk.paper_id].append(chunk)
+
+        chunks_by_page: dict[tuple[str, int], list[PageChunk]] = defaultdict(list)
+        for chunk in chunks:
+            chunks_by_page[(chunk.paper_id, chunk.physical_page)].append(chunk)
+        self.pages_by_paper: dict[str, list[SearchPage]] = defaultdict(list)
+        for (paper_id, physical_page), page_chunks in sorted(chunks_by_page.items()):
+            ordered = sorted(page_chunks, key=lambda item: item.chunk_index)
+            merged_terms: list[str] = []
+            for chunk in ordered:
+                chunk_terms = _tokens(chunk.text)
+                overlap = min(128, len(merged_terms), len(chunk_terms))
+                while overlap and merged_terms[-overlap:] != chunk_terms[:overlap]:
+                    overlap -= 1
+                merged_terms.extend(chunk_terms[overlap:])
+            self.pages_by_paper[paper_id].append(
+                SearchPage(
+                    id=f"{paper_id}:page:{physical_page}",
+                    chunk=ordered[0],
+                    terms=tuple(merged_terms),
+                )
+            )
 
         self.windows_by_paper: dict[str, list[SearchWindow]] = defaultdict(list)
         for chunk in chunks:
@@ -296,6 +325,160 @@ class OfflineRetrievalIndex:
         confidence = self._lexical_confidence(query_terms, hits)
         return QueryRanking(hits, confidence)
 
+    def page_bm25(self, query: str, paper_ids: list[str], *, limit: int) -> QueryRanking:
+        pages = [
+            page for paper_id in paper_ids for page in self.pages_by_paper.get(paper_id, [])
+        ]
+        query_terms = Counter(_tokens(query))
+        document_frequency: Counter[str] = Counter()
+        for page in pages:
+            document_frequency.update(set(page.terms))
+        average_length = (
+            sum(len(page.terms) for page in pages) / len(pages) if pages else 0
+        )
+        k1, b = 1.5, 0.75
+        scored: list[ScoredChunk] = []
+        for page in pages:
+            frequencies = Counter(page.terms)
+            score = 0.0
+            for term, query_frequency in query_terms.items():
+                frequency = frequencies[term]
+                if not frequency:
+                    continue
+                idf = math.log(
+                    1
+                    + (len(pages) - document_frequency[term] + 0.5)
+                    / (document_frequency[term] + 0.5)
+                )
+                denominator = frequency + k1 * (
+                    1 - b + b * len(page.terms) / max(average_length, 1)
+                )
+                score += query_frequency * idf * frequency * (k1 + 1) / denominator
+            if score > 0:
+                scored.append(ScoredChunk(page.chunk, score))
+        hits = sorted(scored, key=lambda hit: (-hit.score, hit.chunk.id))[:limit]
+        return QueryRanking(hits, self._lexical_confidence(query_terms, hits))
+
+    @staticmethod
+    def _collapse_channel_to_pages(hits: list[ScoredChunk]) -> list[ScoredChunk]:
+        seen: set[tuple[str, int]] = set()
+        collapsed: list[ScoredChunk] = []
+        for hit in hits:
+            key = (hit.chunk.paper_id, hit.chunk.physical_page)
+            if key in seen:
+                continue
+            seen.add(key)
+            collapsed.append(hit)
+        return collapsed
+
+    def multigranular_fused(
+        self,
+        query: str,
+        paper_ids: list[str],
+        *,
+        limit: int,
+        weights: dict[str, float] | None = None,
+        keyword_ranking: QueryRanking | None = None,
+    ) -> QueryRanking:
+        """先把各粒度通道折叠到物理页，再做 RRF，避免 Chunk 重复抢占排名。"""
+
+        channel_limit = max(limit * 8, 40)
+        weights = weights or {
+            "keyword": 1.0,
+            "vector": 1.0,
+            "page_keyword": 1.0,
+            "window": 1.0,
+        }
+        channels: dict[str, list[ScoredChunk]] = {}
+        if weights.get("keyword", 0.0) > 0:
+            keyword = keyword_ranking or self.bm25(
+                query, paper_ids, limit=channel_limit
+            )
+            channels["keyword"] = self._collapse_channel_to_pages(keyword.hits)
+        if weights.get("vector", 0.0) > 0:
+            channels["vector"] = self._collapse_channel_to_pages(
+                self.hashing_vector(query, paper_ids, limit=channel_limit).hits
+            )
+        if weights.get("page_keyword", 0.0) > 0:
+            channels["page_keyword"] = self.page_bm25(
+                query, paper_ids, limit=channel_limit
+            ).hits
+        if weights.get("window", 0.0) > 0:
+            channels["window"] = self.window_bm25(
+                query, paper_ids, limit=channel_limit
+            ).hits
+        page_scores: dict[tuple[str, int], float] = defaultdict(float)
+        payloads: dict[tuple[str, int], PageChunk] = {}
+        for name, channel_hits in channels.items():
+            weight = max(0.0, weights.get(name, 0.0))
+            if not weight:
+                continue
+            for rank, hit in enumerate(channel_hits, 1):
+                key = (hit.chunk.paper_id, hit.chunk.physical_page)
+                page_scores[key] += weight / (60 + rank)
+                payloads.setdefault(key, hit.chunk)
+        ordered_pages = sorted(
+            page_scores,
+            key=lambda key: (-page_scores[key], key[0], key[1]),
+        )[:limit]
+        hits = [
+            ScoredChunk(payloads[key], page_scores[key]) for key in ordered_pages
+        ]
+        channel_scores = {
+            name: {
+                (hit.chunk.paper_id, hit.chunk.physical_page): hit.score for hit in channel_hits
+            }
+            for name, channel_hits in channels.items()
+        }
+        evidence = []
+        for hit in hits:
+            key = (hit.chunk.paper_id, hit.chunk.physical_page)
+            present = tuple(name for name, values in channel_scores.items() if key in values)
+            evidence.append(
+                Evidence(
+                    chunk_id=hit.chunk.id,
+                    paper_id=hit.chunk.paper_id,
+                    paper_title=hit.chunk.paper_id,
+                    physical_page=hit.chunk.physical_page,
+                    text=hit.chunk.text,
+                    retrieval_score=hit.score,
+                    retrieval_channels=present,
+                    channel_scores=tuple(
+                        (name, channel_scores[name][key]) for name in present
+                    ),
+                )
+            )
+        quality = assess_evidence(query, evidence)
+        return QueryRanking(hits, quality.confidence, quality)
+
+    def adaptive_fused(
+        self,
+        query: str,
+        paper_ids: list[str],
+        *,
+        limit: int,
+        bm25_confidence_threshold: float = _ADAPTIVE_BM25_CONFIDENCE_THRESHOLD,
+    ) -> QueryRanking:
+        """词项覆盖不足时才增强向量通道，避免固定加权造成跨数据集退化。"""
+
+        channel_limit = max(limit * 8, 40)
+        lexical = self.bm25(query, paper_ids, limit=channel_limit)
+        if lexical.confidence <= bm25_confidence_threshold:
+            return self.multigranular_fused(
+                query,
+                paper_ids,
+                limit=limit,
+                weights={"keyword": 1.0, "vector": 3.0},
+                keyword_ranking=lexical,
+            )
+        return self.fused(
+            query,
+            paper_ids,
+            limit=limit,
+            page_dedup=True,
+            keyword_ranking=lexical,
+        )
+
     @staticmethod
     def _lexical_confidence(query_terms: Counter[str], hits: list[ScoredChunk]) -> float:
         if not hits or not query_terms:
@@ -314,10 +497,11 @@ class OfflineRetrievalIndex:
         neighbor_weight: float = 0.0,
         scope_diversity: bool = False,
         window_channel: bool = False,
+        keyword_ranking: QueryRanking | None = None,
     ) -> QueryRanking:
         channel_limit = max(limit * 8, 40)
         vector = self.hashing_vector(query, paper_ids, limit=channel_limit)
-        keyword = self.bm25(query, paper_ids, limit=channel_limit)
+        keyword = keyword_ranking or self.bm25(query, paper_ids, limit=channel_limit)
         window = (
             self.window_bm25(query, paper_ids, limit=channel_limit)
             if window_channel
@@ -548,6 +732,32 @@ def run_variants(
             page_dedup=True,
             window_channel=True,
         ),
+        "rrf_page_multigranular": lambda case: index.multigranular_fused(
+            case.query, case.paper_ids, limit=k
+        ),
+        "rrf_page_vector2": lambda case: index.multigranular_fused(
+            case.query,
+            case.paper_ids,
+            limit=k,
+            weights={"keyword": 1.0, "vector": 2.0},
+        ),
+        "rrf_page_vector3": lambda case: index.multigranular_fused(
+            case.query,
+            case.paper_ids,
+            limit=k,
+            weights={"keyword": 1.0, "vector": 3.0},
+        ),
+        "rrf_page_adaptive": lambda case: index.adaptive_fused(
+            case.query,
+            case.paper_ids,
+            limit=k,
+        ),
+        "rrf_page_vector2_page": lambda case: index.multigranular_fused(
+            case.query,
+            case.paper_ids,
+            limit=k,
+            weights={"keyword": 1.0, "vector": 2.0, "page_keyword": 0.5},
+        ),
     }
     for name, retrieve in variants.items():
         for case in cases:
@@ -598,28 +808,33 @@ def _percent(metric: dict[str, float | int | None]) -> str:
     return "—" if value is None else f"{float(value) * 100:.1f}%"
 
 
-def _test_metric(result: dict, variant: str, metric: str) -> float:
-    value = result["variants"][variant]["metrics"]["by_split"]["test"][metric]["value"]
+def _reported_metric(result: dict, variant: str, metric: str) -> float:
+    split = result["protocol"]["reported_split"]
+    value = result["variants"][variant]["metrics"]["by_split"][split][metric]["value"]
     if value is None:
-        raise ValueError(f"{variant}.{metric} 没有可比较的分母")
+        raise ValueError(f"{variant}.{metric} 在 {split} 没有可比较的分母")
     return float(value)
 
 
 def render_report(result: dict) -> str:
+    split = result["protocol"]["reported_split"]
+    dataset = result["dataset"]
     rows = []
     for name, variant in result["variants"].items():
-        test = variant["metrics"]["by_split"]["test"]
+        reported = variant["metrics"]["by_split"][split]
         rows.append(
             "| "
             + " | ".join(
                 (
                     name,
-                    _percent(test["retrieval_recall_at_k"]),
-                    _percent(test["retrieval_mrr_at_k"]),
-                    _percent(test["citation_page_accuracy"]),
-                    _percent(test["citation_coverage"]),
-                    _percent(test["answer_keyword_accuracy"]),
-                    _percent(test["unanswerable_wrong_answer_rate"]),
+                    _percent(reported["retrieval_recall_at_k"]),
+                    _percent(reported["evidence_group_recall_at_k"]),
+                    _percent(reported["evidence_page_recall_at_k"]),
+                    _percent(reported["retrieval_mrr_at_k"]),
+                    _percent(reported["citation_page_accuracy"]),
+                    _percent(reported["citation_coverage"]),
+                    _percent(reported["answer_keyword_accuracy"]),
+                    _percent(reported["unanswerable_wrong_answer_rate"]),
                 )
             )
             + " |"
@@ -631,26 +846,34 @@ def render_report(result: dict) -> str:
     unanswerable_score = (
         f"{calibration['dev_unanswerable_correct']}/{calibration['dev_unanswerable_total']}"
     )
-    bm25_recall = _test_metric(result, "bm25", "retrieval_recall_at_k")
-    rrf_recall = _test_metric(result, "rrf", "retrieval_recall_at_k")
-    page_recall = _test_metric(result, "rrf_page", "retrieval_recall_at_k")
-    neighbor_recall = _test_metric(result, "rrf_page_neighbor", "retrieval_recall_at_k")
-    refusal_wrong = _test_metric(result, "rrf_page_refusal", "unanswerable_wrong_answer_rate")
-    refusal_coverage = _test_metric(result, "rrf_page_refusal", "citation_coverage")
-    quality_wrong = _test_metric(result, "rrf_page_quality_gate", "unanswerable_wrong_answer_rate")
-    quality_coverage = _test_metric(result, "rrf_page_quality_gate", "citation_coverage")
+    bm25_recall = _reported_metric(result, "bm25", "retrieval_recall_at_k")
+    rrf_recall = _reported_metric(result, "rrf", "retrieval_recall_at_k")
+    page_recall = _reported_metric(result, "rrf_page", "retrieval_recall_at_k")
+    neighbor_recall = _reported_metric(result, "rrf_page_neighbor", "retrieval_recall_at_k")
+    refusal_wrong = _reported_metric(
+        result, "rrf_page_refusal", "unanswerable_wrong_answer_rate"
+    )
+    refusal_coverage = _reported_metric(result, "rrf_page_refusal", "citation_coverage")
+    quality_wrong = _reported_metric(
+        result, "rrf_page_quality_gate", "unanswerable_wrong_answer_rate"
+    )
+    quality_coverage = _reported_metric(
+        result, "rrf_page_quality_gate", "citation_coverage"
+    )
     return "\n".join(
         (
-            "# PaperLeaf RAG v1 离线基线",
+            f"# {dataset['dataset_id']} 离线检索报告",
             "",
-            "本报告使用 20 篇固定 arXiv 版本、120 个冻结问题；阈值只在 dev 集拟合，",
-            "下表只展示 test 集。`hashing_vector` 是无模型密钥的词/字符哈希下限，",
+            f"本报告使用 {dataset['paper_count']} 篇固定论文、"
+            f"{dataset['case_count']} 个冻结问题；阈值只在 dev 集拟合，",
+            f"下表展示 `{split}` 集。`hashing_vector` 是无模型密钥的词/字符哈希下限，",
             "不是神经语义嵌入。关键词指标来自首个检索片段，仅作证据命中代理，",
             "不代表 LLM 回答正确率。",
             "",
-            "| 方案 | Recall@5 | MRR@5 | 首引页准确率 | 引用覆盖率 | "
+            "| 方案 | 页召回@5 | 证据组完整命中@5 | 最佳组页召回@5 | MRR@5 | "
+            "首引页准确率 | 引用覆盖率 | "
             "关键词代理 | 不可回答错误作答率 |",
-            "|---|---:|---:|---:|---:|---:|---:|",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
             *rows,
             "",
             "## 阶段结论",
@@ -659,9 +882,10 @@ def render_report(result: dict) -> str:
             f"- RRF → 页去重：Recall@5 提升 `{(page_recall - rrf_recall) * 100:+.1f}` 个百分点。",
             f"- 邻页加权：Recall@5 变化 `{(neighbor_recall - page_recall) * 100:+.1f}` 个百分点，"
             "因此不作为默认方案。",
-            f"- 严格拒答：test 不可回答错误作答率为 `{refusal_wrong * 100:.1f}%`，"
+            f"- 严格拒答：{split} 不可回答错误作答率为 `{refusal_wrong * 100:.1f}%`，"
             f"引用覆盖率为 `{refusal_coverage * 100:.1f}%`；安全性提升伴随覆盖损失。",
-            f"- 线上同源质量门禁：test 不可回答错误作答率为 `{quality_wrong * 100:.1f}%`，"
+            f"- 线上同源质量门禁：{split} 不可回答错误作答率为 "
+            f"`{quality_wrong * 100:.1f}%`，"
             f"引用覆盖率为 `{quality_coverage * 100:.1f}%`。",
             "",
             "## 拒答阈值",
@@ -701,6 +925,8 @@ def run_experiment(
     )
     index_ms = round((time.perf_counter() - index_started) * 1000)
     predictions, calibration = run_variants(index, cases, k=k)
+    splits = {case.split for case in cases}
+    reported_split = "test" if "test" in splits else "dev"
     result = {
         "schema_version": 1,
         "dataset": validation,
@@ -712,7 +938,7 @@ def run_experiment(
             "chunk_count": len(index.chunks),
             "index_build_ms": index_ms,
             "threshold_fit_split": "dev",
-            "reported_split": "test",
+            "reported_split": reported_split,
         },
         "abstention_calibration": calibration,
         "variants": {

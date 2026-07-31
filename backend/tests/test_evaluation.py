@@ -86,3 +86,60 @@ def test_evaluation_uses_paper_and_physical_page_for_frozen_evidence() -> None:
     assert metrics["retrieval_recall_at_k"]["denominator"] == 2
     assert metrics["retrieval_mrr_at_k"]["value"] == 1.0
     assert metrics["citation_page_accuracy"]["value"] == 1.0
+
+
+def test_evaluation_accepts_alternative_evidence_groups() -> None:
+    cases = [
+        EvaluationCase(
+            id="alternative-pages",
+            query="Which setup is used?",
+            paper_ids=["paper"],
+            answerable=True,
+            acceptable_evidence_groups=[
+                {
+                    "items": [
+                        {
+                            "paper_id": "paper",
+                            "physical_page": 2,
+                            "anchor": "first acceptable evidence",
+                        }
+                    ]
+                },
+                {
+                    "items": [
+                        {
+                            "paper_id": "paper",
+                            "physical_page": 7,
+                            "anchor": "second acceptable evidence",
+                        }
+                    ]
+                },
+            ],
+            acceptable_answer_keyword_groups=[["alpha"], ["beta"]],
+            category="setup",
+        )
+    ]
+    predictions = [
+        EvaluationPrediction(
+            case_id="alternative-pages",
+            answer="The answer uses beta.",
+            abstained=False,
+            retrieved_evidence=[
+                RetrievedEvidencePrediction(
+                    chunk_id="page-7", paper_id="paper", physical_page=7
+                )
+            ],
+            citations=[
+                CitationPrediction(
+                    chunk_id="page-7", paper_id="paper", physical_page=7
+                )
+            ],
+            latency_ms=1,
+        )
+    ]
+
+    metrics = evaluate(cases, predictions, k=5)
+
+    assert metrics["evidence_group_recall_at_k"]["value"] == 1
+    assert metrics["evidence_page_recall_at_k"]["value"] == 1
+    assert metrics["answer_keyword_accuracy"]["value"] == 1

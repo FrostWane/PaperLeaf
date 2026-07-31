@@ -126,3 +126,12 @@ def test_manifest_path_is_not_required_for_in_memory_validation() -> None:
         )["pdf_files_verified"]
         == 0
     )
+
+
+def test_anchor_normalization_tolerates_pdf_punctuation_and_line_breaks() -> None:
+    from paperleaf_api.evaluation_dataset import _normalized, _normalized_ascii
+
+    assert _normalized("cross-lingual pre-\ntraining (NMT)") == _normalized(
+        "cross lingual pretraining NMT"
+    )
+    assert _normalized_ascii("reward r ˆy") == _normalized_ascii("reward r y")

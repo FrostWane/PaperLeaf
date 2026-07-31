@@ -1,0 +1,27 @@
+{
+  "dataset_id": "paperleaf-qasper-calibration-v1",
+  "source_dataset": "allenai/qasper",
+  "source_split": "validation",
+  "selection_seed": "paperleaf-qasper-calibration-v1-2026-07-31",
+  "mode": "calibration",
+  "paper_count": 29,
+  "case_count": 60,
+  "answerable_count": 48,
+  "unanswerable_count": 12,
+  "category_counts": {
+    "extractive": 30,
+    "free_form": 4,
+    "multi_page": 9,
+    "unanswerable": 12,
+    "yes_no": 5
+  },
+  "conversion_failures": {
+    "ambiguous_or_unmapped": 39
+  },
+  "minimum_match_score": 0.67,
+  "version_policy": "v1",
+  "prefetch": {
+    "cached": 26,
+    "downloaded": 54
+  }
+}
