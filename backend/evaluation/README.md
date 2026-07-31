@@ -80,6 +80,8 @@ v1 的 test 已经被用于诊断，后续实验必须明确标记 `diagnostic_n
   只用于开发和候选选择；
 - `paperleaf-qasper-holdout-v1`：QASPER test 的 55 篇论文、120 个公开问题，答案与 183 个页级
   锚点保存在仓库外；`lock.json` 固定公开输入、私有 oracle、候选和检索实现哈希。
+- `paperleaf-qasper-selective-holdout-v2`：与校准集论文交集为 0 的 23 篇论文、54 个公开问题，
+  用于同时衡量正确引用覆盖、错误作答、过度拒答和选择性风险；私有 oracle 不进入仓库。
 
 QASPER 衍生标注使用 CC BY 4.0，详情见 [QASPER 数据归属](QASPER-ATTRIBUTION.md)。
 
@@ -99,10 +101,25 @@ python -m paperleaf_api.evaluation_holdout verify-public \
 校准集上的自适应 MRR 增益没有在 holdout 泛化，详见
 [首次盲测报告](results/paperleaf-qasper-holdout-v1/REPORT.md)。因此该候选没有进入生产默认链路。
 
+v2 还会校验与校准集的论文隔离：
+
+```bash
+python -m paperleaf_api.evaluation_holdout verify-public \
+  --lock evaluation/datasets/paperleaf-qasper-selective-holdout-v2/lock.json \
+  --manifest evaluation/datasets/paperleaf-qasper-selective-holdout-v2/manifest.json \
+  --questions evaluation/datasets/paperleaf-qasper-selective-holdout-v2/questions.jsonl \
+  --exclusion-manifest evaluation/datasets/paperleaf-qasper-calibration-v1/manifest.json
+```
+
+v2 首次盲测显示，现有质量门禁虽然减少不可回答误答，却同时造成 50% 的可回答题过度拒答，
+且选择性风险上升；详见[选择性回答隐藏集报告](results/paperleaf-qasper-selective-holdout-v2/REPORT.md)。
+该结果是负结果，不用于调参或宣传准确率提升。
+
 ## 指标边界
 
 聚合指标保留分子、分母和比率，包括页级 Recall@K、MRR@K、首个引用物理页准确率、
-引用覆盖率、关键词代理、不可回答错误作答率、非法引用数和本机延迟。关键词代理检查首个
+引用覆盖率、关键词代理、不可回答错误作答率、可回答题过度拒答率、正确引用可回答覆盖率、
+选择性风险、非法引用数和本机延迟。关键词代理检查首个
 检索片段是否含确定性答案词，不等同于 LLM 回答正确率；本机延迟也不用于跨机器宣传。
 
 `evaluation.py` 仍可独立计算任意预测文件：

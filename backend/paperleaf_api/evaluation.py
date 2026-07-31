@@ -104,6 +104,9 @@ def _evaluate_core(
     wrong_unanswerable = unanswerable_count = 0
     keyword_correct = keyword_cases = 0
     illegal_citations = 0
+    answered_count = correctly_cited_answered = unsafe_answered = 0
+    answered_answerable = over_refused_answerable = 0
+    abstained_unanswerable = 0
     fully_retrieved_groups = group_cases = 0
     best_group_page_recall = 0.0
     latencies: list[int] = []
@@ -152,12 +155,17 @@ def _evaluate_core(
         latencies.append(prediction.latency_ms)
 
         retrieved_all = set(chunk_ids)
-        illegal_citations += sum(
+        case_illegal_citations = sum(
             1 for citation in prediction.citations if citation.chunk_id not in retrieved_all
         )
+        illegal_citations += case_illegal_citations
+        answered = not prediction.abstained
+        answered_count += int(answered)
 
         if case.answerable:
             answerable_count += 1
+            answered_answerable += int(answered)
+            over_refused_answerable += int(not answered)
             expected_pages = set(case.expected_pages)
             expected_evidence = _expected_pairs(case)
             correct_pages = sum(
@@ -176,6 +184,9 @@ def _evaluate_core(
             correct_citation_pages += correct_pages
             total_citations += len(prediction.citations)
             covered_answers += int(correct_pages > 0)
+            safely_answered = answered and correct_pages > 0 and case_illegal_citations == 0
+            correctly_cited_answered += int(safely_answered)
+            unsafe_answered += int(answered and not safely_answered)
             keyword_groups = case.acceptable_answer_keyword_groups or (
                 [case.expected_answer_keywords] if case.expected_answer_keywords else []
             )
@@ -191,6 +202,8 @@ def _evaluate_core(
         else:
             unanswerable_count += 1
             wrong_unanswerable += int(not prediction.abstained)
+            abstained_unanswerable += int(prediction.abstained)
+            unsafe_answered += int(answered)
 
     sorted_latency = sorted(latencies)
     p95_index = max(0, min(len(sorted_latency) - 1, int(len(sorted_latency) * 0.95) - 1))
@@ -215,6 +228,40 @@ def _evaluate_core(
         "citation_coverage": _metric(covered_answers, answerable_count),
         "answer_keyword_accuracy": _metric(keyword_correct, keyword_cases),
         "unanswerable_wrong_answer_rate": _metric(wrong_unanswerable, unanswerable_count),
+        "selective_answering": {
+            "answered_count": answered_count,
+            "correctly_cited_answered_count": correctly_cited_answered,
+            "unsafe_answered_count": unsafe_answered,
+            "answerable_response_rate": _metric(answered_answerable, answerable_count),
+            "answerable_over_refusal_rate": _metric(
+                over_refused_answerable, answerable_count
+            ),
+            "correctly_cited_answerable_rate": _metric(
+                correctly_cited_answered, answerable_count
+            ),
+            "unanswerable_abstention_rate": _metric(
+                abstained_unanswerable, unanswerable_count
+            ),
+            "selective_citation_precision": _metric(
+                correctly_cited_answered, answered_count
+            ),
+            "selective_risk": _metric(unsafe_answered, answered_count),
+            "balanced_safety_accuracy": {
+                "correctly_cited_answerable": correctly_cited_answered,
+                "answerable_total": answerable_count,
+                "abstained_unanswerable": abstained_unanswerable,
+                "unanswerable_total": unanswerable_count,
+                "value": (
+                    (
+                        correctly_cited_answered / answerable_count
+                        + abstained_unanswerable / unanswerable_count
+                    )
+                    / 2
+                    if answerable_count and unanswerable_count
+                    else None
+                ),
+            },
+        },
         "illegal_citation_count": illegal_citations,
         "latency_ms": {
             "median": sorted_latency[len(sorted_latency) // 2] if sorted_latency else None,

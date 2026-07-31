@@ -80,6 +80,13 @@ jobs:
           --lock evaluation/datasets/paperleaf-qasper-holdout-v1/lock.json
           --manifest evaluation/datasets/paperleaf-qasper-holdout-v1/manifest.json
           --questions evaluation/datasets/paperleaf-qasper-holdout-v1/questions.jsonl
+      - name: 校验 QASPER 选择性 holdout 与校准集隔离
+        run: >-
+          python -m paperleaf_api.evaluation_holdout verify-public
+          --lock evaluation/datasets/paperleaf-qasper-selective-holdout-v2/lock.json
+          --manifest evaluation/datasets/paperleaf-qasper-selective-holdout-v2/manifest.json
+          --questions evaluation/datasets/paperleaf-qasper-selective-holdout-v2/questions.jsonl
+          --exclusion-manifest evaluation/datasets/paperleaf-qasper-calibration-v1/manifest.json
       - run: pytest
       - name: 验证全新安装与旧库升级迁移
         run: |

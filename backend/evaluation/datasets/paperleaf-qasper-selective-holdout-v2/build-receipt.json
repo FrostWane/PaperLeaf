@@ -1,0 +1,34 @@
+{
+  "dataset_id": "paperleaf-qasper-selective-holdout-v2",
+  "source_dataset": "allenai/qasper",
+  "source_split": "validation",
+  "selection_seed": "paperleaf-qasper-selective-holdout-v2-2026-07-31",
+  "mode": "holdout",
+  "paper_count": 23,
+  "case_count": 54,
+  "answerable_count": 48,
+  "unanswerable_count": 6,
+  "category_counts": {
+    "extractive": 33,
+    "free_form": 2,
+    "multi_page": 11,
+    "unanswerable": 6,
+    "yes_no": 2
+  },
+  "conversion_failures": {
+    "ambiguous_or_unmapped": 16,
+    "paper_fetch_or_parse": 110
+  },
+  "minimum_match_score": 0.67,
+  "version_policy": "v1",
+  "prefetch": {},
+  "source_paper_count": 281,
+  "excluded_source_paper_count": 29,
+  "exclusion_sources": [
+    {
+      "dataset_id": "paperleaf-qasper-calibration-v1",
+      "manifest_sha256": "f9e415a0c9033c088191f5847c3f3e8bbc0e402893e4e367ee5d4c50e58ed45f",
+      "paper_count": 29
+    }
+  ]
+}

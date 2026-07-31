@@ -1,6 +1,6 @@
 {
   "name": "paperleaf",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "packageManager": "pnpm@9.7.0",
   "engines": {

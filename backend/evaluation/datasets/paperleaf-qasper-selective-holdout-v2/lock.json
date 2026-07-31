@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-qasper-selective-holdout-v2",
+  "manifest_sha256": "d34e8286be2c55307cd2cf563cde8b093e3533749402474bd081160257304a19",
+  "questions_sha256": "61baafe8f6d28ac59322452d4bb3de7667edb5cff01cb4f3319238cd4b908ee2",
+  "oracle_sha256": "0d90a600ce08eeea0670b4a7914e1d7ad5552bf3da793a6ec840820b292188c5",
+  "candidate_variants": [
+    "rrf_page",
+    "rrf_page_quality_gate"
+  ],
+  "protocol": {
+    "retrieval_implementation_sha256": "8d7d470fe31059bf05bba364f70f324f2c4a7167059f2e29faf6f8f0a31b6241",
+    "quality_gate_implementation_sha256": "9c0a08d646fa1c863c23b4136a4838f8e489c58f635f6717a2515a4c0e94bb8a",
+    "evaluation_implementation_sha256": "9f71f4f9ae16f1eda45be33794dbd4528ce7a1da6070c2a7318c0ca2187a2009",
+    "excluded_manifest_sha256": "f9e415a0c9033c088191f5847c3f3e8bbc0e402893e4e367ee5d4c50e58ed45f",
+    "selective_calibration_result_sha256": "4a0ee4d4da24f1291fc44d63bbdfe47cc573dce6fada17e38c673e7c4c0458d6",
+    "build_receipt_sha256": "1a32963b31782dc014916824eb0a3809989d2d129a32e7cb985419f33b4e0fbe",
+    "k": 5,
+    "hash_dimensions": 8192,
+    "chunk_target_tokens": 700,
+    "chunk_overlap_tokens": 100,
+    "no_holdout_calibration": true,
+    "reported_split": "holdout",
+    "scope": "retrieval_and_selective_answering",
+    "primary_metrics": [
+      "correctly_cited_answerable_rate",
+      "unanswerable_wrong_answer_rate",
+      "selective_risk",
+      "answerable_over_refusal_rate",
+      "retrieval_recall_at_5",
+      "evidence_group_recall_at_5"
+    ],
+    "candidate_definitions": {
+      "rrf_page": {
+        "retrieval": "equal_weight_chunk_rrf",
+        "postprocess": "physical_page_dedup",
+        "response": "always_answer_when_evidence_exists"
+      },
+      "rrf_page_quality_gate": {
+        "retrieval": "same_as_rrf_page",
+        "gate": "EvidenceQualityPolicy defaults",
+        "response": "abstain_when_quality_grade_is_insufficient"
+      }
+    },
+    "data_separation": {
+      "excluded_dataset_id": "paperleaf-qasper-calibration-v1",
+      "paper_overlap": 0,
+      "same_source_split": true
+    }
+  },
+  "locked_at": "2026-07-31T10:21:10.315979+00:00"
+}

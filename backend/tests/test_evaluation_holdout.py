@@ -9,10 +9,44 @@ from paperleaf_api.evaluation_holdout import (
     create_lock,
     evaluate_locked_holdout,
     merge_questions_and_oracle,
+    sha256_file,
+    verify_exclusion_protocol,
     verify_lock,
     verify_public_holdout_inputs,
     write_first_reveal_receipt,
 )
+
+
+def _manifest_text(dataset_id: str, paper_id: str) -> str:
+    versioned_id = paper_id.removeprefix("arxiv:")
+    return (
+        json.dumps(
+            {
+                "dataset_id": dataset_id,
+                "version": "1",
+                "created_at": "2026-07-31",
+                "annotation_license": "CC-BY-4.0",
+                "paper_count": 1,
+                "case_count": 1,
+                "answerable_count": 1,
+                "unanswerable_count": 0,
+                "category_counts": {"extractive": 1},
+                "papers": [
+                    {
+                        "id": paper_id,
+                        "title": "Fixture",
+                        "arxiv_id": versioned_id,
+                        "source_url": f"https://arxiv.org/abs/{versioned_id}",
+                        "pdf_url": f"https://arxiv.org/pdf/{versioned_id}",
+                        "filename": f"{versioned_id}.pdf",
+                        "sha256": "a" * 64,
+                        "page_count": 1,
+                    }
+                ],
+            }
+        )
+        + "\n"
+    )
 
 
 def test_holdout_merge_keeps_public_questions_separate_from_oracle() -> None:
@@ -252,3 +286,72 @@ def test_public_holdout_verification_needs_no_oracle(tmp_path: Path) -> None:
 
     assert result["question_count"] == 1
     assert result["oracle_sha256"] == lock.oracle_sha256
+
+
+def test_quality_gate_variant_requires_locked_implementation(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    questions = tmp_path / "questions.jsonl"
+    oracle = tmp_path / "oracle.jsonl"
+    lock_path = tmp_path / "lock.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    questions.write_text("{}\n", encoding="utf-8")
+    oracle.write_text("{}\n", encoding="utf-8")
+    lock = create_lock(
+        dataset_id="holdout",
+        manifest_path=manifest,
+        questions_path=questions,
+        oracle_path=oracle,
+        candidate_variants=["rrf_page_quality_gate"],
+        protocol={
+            "k": 5,
+            "hash_dimensions": 8192,
+            "retrieval_implementation_sha256": sha256_file(
+                Path(__file__).parents[1]
+                / "paperleaf_api"
+                / "evaluation_offline.py"
+            ),
+        },
+        locked_at="2026-07-31T00:00:00+00:00",
+    )
+    lock_path.write_text(lock.model_dump_json(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="质量门禁实现哈希"):
+        evaluate_locked_holdout(
+            lock_path=lock_path,
+            manifest_path=manifest,
+            questions_path=questions,
+            oracle_path=oracle,
+            pdf_dir=tmp_path / "pdfs",
+            result_path=tmp_path / "result.json",
+            receipt_path=tmp_path / "receipt.json",
+            mode="blind-first-run",
+        )
+
+
+def test_exclusion_protocol_rejects_paper_overlap(tmp_path: Path) -> None:
+    manifest = tmp_path / "holdout.json"
+    excluded = tmp_path / "calibration.json"
+    questions = tmp_path / "questions.jsonl"
+    oracle = tmp_path / "oracle.jsonl"
+    manifest.write_text(_manifest_text("holdout", "arxiv:1234.56789v1"), encoding="utf-8")
+    excluded.write_text(
+        _manifest_text("calibration", "arxiv:1234.56789v3"), encoding="utf-8"
+    )
+    questions.write_text("{}\n", encoding="utf-8")
+    oracle.write_text("{}\n", encoding="utf-8")
+    lock = create_lock(
+        dataset_id="holdout",
+        manifest_path=manifest,
+        questions_path=questions,
+        oracle_path=oracle,
+        candidate_variants=["rrf_page"],
+        protocol={"excluded_manifest_sha256": sha256_file(excluded)},
+        locked_at="2026-07-31T00:00:00+00:00",
+    )
+
+    with pytest.raises(ValueError, match="论文交集"):
+        verify_exclusion_protocol(
+            lock,
+            manifest_path=manifest,
+            exclusion_manifest_path=excluded,
+        )

@@ -27,6 +27,7 @@ from .evaluation_dataset import (
     ExpectedEvidence,
     ExpectedEvidenceGroup,
     FrozenEvaluationCase,
+    read_manifest,
 )
 from .evaluation_holdout import HoldoutOracleRecord, HoldoutQuestion
 
@@ -67,6 +68,36 @@ def _sha256(path: Path) -> str:
 
 def _stable_rank(seed: str, value: str) -> str:
     return hashlib.sha256(f"{seed}:{value}".encode()).hexdigest()
+
+
+def normalize_arxiv_id(value: str) -> str:
+    """把 manifest paper id、URL 或原始 QASPER id 归一为无版本 arXiv ID。"""
+
+    normalized = value.strip().rsplit("/", 1)[-1]
+    if normalized.startswith("arxiv:"):
+        normalized = normalized.removeprefix("arxiv:")
+    return re.sub(r"v\d+$", "", normalized)
+
+
+def load_exclusion_manifests(paths: list[Path]) -> tuple[set[str], list[dict[str, Any]]]:
+    """读取公开 manifest，返回论文排除集和不含本机路径的可审计摘要。"""
+
+    excluded: set[str] = set()
+    sources: list[dict[str, Any]] = []
+    for path in paths:
+        manifest = read_manifest(path)
+        paper_ids = {
+            normalize_arxiv_id(paper.arxiv_id or paper.id) for paper in manifest.papers
+        }
+        excluded.update(paper_ids)
+        sources.append(
+            {
+                "dataset_id": manifest.dataset_id,
+                "manifest_sha256": _sha256(path),
+                "paper_count": len(paper_ids),
+            }
+        )
+    return excluded, sources
 
 
 def fetch_qasper_rows(
@@ -486,11 +517,17 @@ def build_qasper_dataset(
     version_policy: Literal["v1", "api-latest"] = "v1",
     prefetch_workers: int = 0,
     offline_pdfs_only: bool = False,
+    excluded_arxiv_ids: set[str] | None = None,
+    exclusion_sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if mode == "holdout" and oracle_output is None:
         raise ValueError("holdout 模式必须把 oracle 写入仓库外路径")
+    excluded = {normalize_arxiv_id(item) for item in excluded_arxiv_ids or set()}
+    eligible_rows = [
+        row for row in rows if normalize_arxiv_id(str(row["id"])) not in excluded
+    ]
     ordered_rows = sorted(
-        rows, key=lambda row: _stable_rank(selection_seed, str(row["id"]))
+        eligible_rows, key=lambda row: _stable_rank(selection_seed, str(row["id"]))
     )
     candidate_ids = [str(row["id"]) for row in ordered_rows[:maximum_papers]]
     versions = (
@@ -648,6 +685,9 @@ def build_qasper_dataset(
         "minimum_match_score": minimum_match_score,
         "version_policy": version_policy,
         "prefetch": dict(sorted(Counter(prefetch_outcomes.values()).items())),
+        "source_paper_count": len(rows),
+        "excluded_source_paper_count": len(rows) - len(eligible_rows),
+        "exclusion_sources": exclusion_sources or [],
     }
     (output_dir / "build-receipt.json").write_text(
         json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -676,9 +716,19 @@ def main() -> None:
     )
     parser.add_argument("--prefetch-workers", type=int, default=0)
     parser.add_argument("--offline-pdfs-only", action="store_true")
+    parser.add_argument(
+        "--exclude-manifest",
+        action="append",
+        default=[],
+        type=Path,
+        help="排除已用于校准或其他评测的数据集论文；可重复提供",
+    )
     parser.add_argument("--created-at", required=True)
     args = parser.parse_args()
     rows = fetch_qasper_rows(args.source_split, cache_path=args.source_cache)
+    excluded_arxiv_ids, exclusion_sources = load_exclusion_manifests(
+        args.exclude_manifest
+    )
     receipt = build_qasper_dataset(
         rows=rows,
         source_split=args.source_split,
@@ -698,6 +748,8 @@ def main() -> None:
         output_dir=args.output_dir,
         oracle_output=args.oracle_output,
         created_at=args.created_at,
+        excluded_arxiv_ids=excluded_arxiv_ids,
+        exclusion_sources=exclusion_sources,
     )
     print(json.dumps(receipt, ensure_ascii=False, indent=2))
 

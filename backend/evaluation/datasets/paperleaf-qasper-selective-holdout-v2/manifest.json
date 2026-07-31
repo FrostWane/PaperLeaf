@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-qasper-selective-holdout-v2",
+  "version": "2026-07-31",
+  "created_at": "2026-07-31",
+  "annotation_license": "CC-BY-4.0",
+  "pdf_distribution": "external-links-only",
+  "paper_count": 23,
+  "case_count": 54,
+  "answerable_count": 48,
+  "unanswerable_count": 6,
+  "category_counts": {
+    "extractive": 33,
+    "free_form": 2,
+    "multi_page": 11,
+    "unanswerable": 6,
+    "yes_no": 2
+  },
+  "chunking": {
+    "target_tokens": 700,
+    "overlap_tokens": 100
+  },
+  "papers": [
+    {
+      "id": "arxiv:1701.05574v1",
+      "title": "Harnessing Cognitive Features for Sarcasm Detection",
+      "arxiv_id": "1701.05574v1",
+      "source_url": "https://arxiv.org/abs/1701.05574v1",
+      "pdf_url": "https://arxiv.org/pdf/1701.05574v1",
+      "filename": "1701.05574v1.pdf",
+      "sha256": "6ff8ec71313b548bd235cb77facc620249e8e6e33ba924354e1d601e16a9a5d7",
+      "page_count": 11,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1910.10781v1",
+      "title": "Hierarchical Transformers for Long Document Classification",
+      "arxiv_id": "1910.10781v1",
+      "source_url": "https://arxiv.org/abs/1910.10781v1",
+      "pdf_url": "https://arxiv.org/pdf/1910.10781v1",
+      "filename": "1910.10781v1.pdf",
+      "sha256": "63b6c65aa0c423c90e9a9c83a876d38e68b9c7c62b3409d71cc7bc099f44b6fe",
+      "page_count": 7,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1912.00903v1",
+      "title": "ZuCo 2.0: A Dataset of Physiological Recordings During Natural Reading and Annotation",
+      "arxiv_id": "1912.00903v1",
+      "source_url": "https://arxiv.org/abs/1912.00903v1",
+      "pdf_url": "https://arxiv.org/pdf/1912.00903v1",
+      "filename": "1912.00903v1.pdf",
+      "sha256": "43c81efaf52a3ea554ff84664773203eeb222a88bdb9d90c9a1a5fee0e198244",
+      "page_count": 9,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1908.07195v1",
+      "title": "ARAML: A Stable Adversarial Training Framework for Text Generation",
+      "arxiv_id": "1908.07195v1",
+      "source_url": "https://arxiv.org/abs/1908.07195v1",
+      "pdf_url": "https://arxiv.org/pdf/1908.07195v1",
+      "filename": "1908.07195v1.pdf",
+      "sha256": "370286d4acc15d3908f118ba9148492c8c235c752604459e9eaa9a1aa6f6b4ea",
+      "page_count": 11,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2003.03106v1",
+      "title": "Sensitive Data Detection and Classification in Spanish Clinical Text: Experiments with BERT",
+      "arxiv_id": "2003.03106v1",
+      "source_url": "https://arxiv.org/abs/2003.03106v1",
+      "pdf_url": "https://arxiv.org/pdf/2003.03106v1",
+      "filename": "2003.03106v1.pdf",
+      "sha256": "feb8cc96552ca41b6fe023b9f2987bc9910893e57dd6f3b2ac15d9a390921fb0",
+      "page_count": 9,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1907.04433v1",
+      "title": "GluonCV and GluonNLP: Deep Learning in Computer Vision and Natural Language Processing",
+      "arxiv_id": "1907.04433v1",
+      "source_url": "https://arxiv.org/abs/1907.04433v1",
+      "pdf_url": "https://arxiv.org/pdf/1907.04433v1",
+      "filename": "1907.04433v1.pdf",
+      "sha256": "1409fddbb6243094e32dc586a0b0477f11957342b03247265e1ff22ddc9a5bb6",
+      "page_count": 6,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1912.08904v1",
+      "title": "Macaw: An Extensible Conversational Information Seeking Platform",
+      "arxiv_id": "1912.08904v1",
+      "source_url": "https://arxiv.org/abs/1912.08904v1",
+      "pdf_url": "https://arxiv.org/pdf/1912.08904v1",
+      "filename": "1912.08904v1.pdf",
+      "sha256": "3b4682f9d816d2bba012784a8a2644bc4e48dec07938ec1b86f04e652ad21fb4",
+      "page_count": 5,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2001.08868v1",
+      "title": "Exploration Based Language Learning for Text-Based Games",
+      "arxiv_id": "2001.08868v1",
+      "source_url": "https://arxiv.org/abs/2001.08868v1",
+      "pdf_url": "https://arxiv.org/pdf/2001.08868v1",
+      "filename": "2001.08868v1.pdf",
+      "sha256": "525ba8f95b32e99c41c838ebdf3a766b4eac518256c9f365af4d5c5a367b6695",
+      "page_count": 17,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1610.00956v1",
+      "title": "Embracing data abundance: BookTest Dataset for Reading Comprehension",
+      "arxiv_id": "1610.00956v1",
+      "source_url": "https://arxiv.org/abs/1610.00956v1",
+      "pdf_url": "https://arxiv.org/pdf/1610.00956v1",
+      "filename": "1610.00956v1.pdf",
+      "sha256": "feca90ffee2f82acbb07f0027c7caa3fc07cdc5f3d1c891139f91048b3701daf",
+      "page_count": 10,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1810.12196v1",
+      "title": "ReviewQA: a relational aspect-based opinion reading dataset",
+      "arxiv_id": "1810.12196v1",
+      "source_url": "https://arxiv.org/abs/1810.12196v1",
+      "pdf_url": "https://arxiv.org/pdf/1810.12196v1",
+      "filename": "1810.12196v1.pdf",
+      "sha256": "41e2cca534651ba6ff1dce7799bdacca94f56b89a5c743b092a7219af41f0d90",
+      "page_count": 10,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1903.11283v1",
+      "title": "Grammatical Error Correction and Style Transfer via Zero-shot Monolingual Translation",
+      "arxiv_id": "1903.11283v1",
+      "source_url": "https://arxiv.org/abs/1903.11283v1",
+      "pdf_url": "https://arxiv.org/pdf/1903.11283v1",
+      "filename": "1903.11283v1.pdf",
+      "sha256": "8f2edcb1657ccb57dd0a8bd0824ef463d2959515a1910a8e875ddf92ce484ff3",
+      "page_count": 11,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1908.06941v1",
+      "title": "Why So Down? The Role of Negative (and Positive) Pointwise Mutual Information in Distributional Semantics",
+      "arxiv_id": "1908.06941v1",
+      "source_url": "https://arxiv.org/abs/1908.06941v1",
+      "pdf_url": "https://arxiv.org/pdf/1908.06941v1",
+      "filename": "1908.06941v1.pdf",
+      "sha256": "6829adff82abac9a3b422a14e8ca538eeee3ce6055db8d82cd84fb7532a79238",
+      "page_count": 6,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1911.02855v1",
+      "title": "Dice Loss for Data-imbalanced NLP Tasks",
+      "arxiv_id": "1911.02855v1",
+      "source_url": "https://arxiv.org/abs/1911.02855v1",
+      "pdf_url": "https://arxiv.org/pdf/1911.02855v1",
+      "filename": "1911.02855v1.pdf",
+      "sha256": "fe059ee1043981aa7b1fba8243c8247b9477637f6e1f61b5c84462a4fc072256",
+      "page_count": 11,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1904.07904v1",
+      "title": "Mitigating the Impact of Speech Recognition Errors on Spoken Question Answering by Adversarial Domain Adaptation",
+      "arxiv_id": "1904.07904v1",
+      "source_url": "https://arxiv.org/abs/1904.07904v1",
+      "pdf_url": "https://arxiv.org/pdf/1904.07904v1",
+      "filename": "1904.07904v1.pdf",
+      "sha256": "ad9d00fde56bd937f901f2dc443eb70408cadb90d6a0b32bec39dcec1c169856",
+      "page_count": 6,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1912.10011v1",
+      "title": "A Hierarchical Model for Data-to-Text Generation",
+      "arxiv_id": "1912.10011v1",
+      "source_url": "https://arxiv.org/abs/1912.10011v1",
+      "pdf_url": "https://arxiv.org/pdf/1912.10011v1",
+      "filename": "1912.10011v1.pdf",
+      "sha256": "2804488b04dc4026570ce06bba7f3976b551be3623909324dc033f4e67f97158",
+      "page_count": 16,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1701.04056v1",
+      "title": "Dialog Context Language Modeling with Recurrent Neural Networks",
+      "arxiv_id": "1701.04056v1",
+      "source_url": "https://arxiv.org/abs/1701.04056v1",
+      "pdf_url": "https://arxiv.org/pdf/1701.04056v1",
+      "filename": "1701.04056v1.pdf",
+      "sha256": "6b186210d1032112f0612ce709842b15246275e37b893a7631282c084eda0a01",
+      "page_count": 5,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1803.05223v1",
+      "title": "MCScript: A Novel Dataset for Assessing Machine Comprehension Using Script Knowledge",
+      "arxiv_id": "1803.05223v1",
+      "source_url": "https://arxiv.org/abs/1803.05223v1",
+      "pdf_url": "https://arxiv.org/pdf/1803.05223v1",
+      "filename": "1803.05223v1.pdf",
+      "sha256": "ce331f30afc5c2307c411468d059d0093c6bf4d4bfcd261c225ce8066b5175a6",
+      "page_count": 8,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1909.06162v1",
+      "title": "Neural Architectures for Fine-Grained Propaganda Detection in News",
+      "arxiv_id": "1909.06162v1",
+      "source_url": "https://arxiv.org/abs/1909.06162v1",
+      "pdf_url": "https://arxiv.org/pdf/1909.06162v1",
+      "filename": "1909.06162v1.pdf",
+      "sha256": "f1198410492630e2e06d7104c76f1a79931323120080c98062626d67193bd2a0",
+      "page_count": 6,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1909.03405v1",
+      "title": "Symmetric Regularization based BERT for Pair-wise Semantic Reasoning",
+      "arxiv_id": "1909.03405v1",
+      "source_url": "https://arxiv.org/abs/1909.03405v1",
+      "pdf_url": "https://arxiv.org/pdf/1909.03405v1",
+      "filename": "1909.03405v1.pdf",
+      "sha256": "b870c87546e780d8ceb9480104e7b12b1f98110cdb3d9aea9717d9d7abac97c9",
+      "page_count": 8,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1805.08241v1",
+      "title": "Sparse and Constrained Attention for Neural Machine Translation",
+      "arxiv_id": "1805.08241v1",
+      "source_url": "https://arxiv.org/abs/1805.08241v1",
+      "pdf_url": "https://arxiv.org/pdf/1805.08241v1",
+      "filename": "1805.08241v1.pdf",
+      "sha256": "1206f88a124aa1c3f44d369fef9fe00b71275e5cce6cb83f5b1a7feccd222067",
+      "page_count": 11,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1805.03710v1",
+      "title": "Incorporating Subword Information into Matrix Factorization Word Embeddings",
+      "arxiv_id": "1805.03710v1",
+      "source_url": "https://arxiv.org/abs/1805.03710v1",
+      "pdf_url": "https://arxiv.org/pdf/1805.03710v1",
+      "filename": "1805.03710v1.pdf",
+      "sha256": "ab8c8496c93df85ada4e766e46a5b8a2085ab0f469166eb10d7e56b81044acc5",
+      "page_count": 6,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1911.07555v1",
+      "title": "Short Text Language Identification for Under Resourced Languages",
+      "arxiv_id": "1911.07555v1",
+      "source_url": "https://arxiv.org/abs/1911.07555v1",
+      "pdf_url": "https://arxiv.org/pdf/1911.07555v1",
+      "filename": "1911.07555v1.pdf",
+      "sha256": "d8fd457ade347864b0839a37876c854c7ac9d188c1e3ac5980bbe2487655baa5",
+      "page_count": 6,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1910.06592v1",
+      "title": "FacTweet: Profiling Fake News Twitter Accounts",
+      "arxiv_id": "1910.06592v1",
+      "source_url": "https://arxiv.org/abs/1910.06592v1",
+      "pdf_url": "https://arxiv.org/pdf/1910.06592v1",
+      "filename": "1910.06592v1.pdf",
+      "sha256": "3bdf7e026a91e3f3ee74f6cdc506beb257fbbb6b0e9f9eced99f6913a774a31d",
+      "page_count": 8,
+      "redistribution": "external-link-only"
+    }
+  ]
+}

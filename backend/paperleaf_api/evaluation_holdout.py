@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,7 +74,9 @@ class HoldoutRevealReceipt(BaseModel):
     revealed_at: str
 
 
-SUPPORTED_HOLDOUT_VARIANTS = frozenset({"rrf_page", "rrf_page_adaptive"})
+SUPPORTED_HOLDOUT_VARIANTS = frozenset(
+    {"rrf_page", "rrf_page_quality_gate", "rrf_page_adaptive"}
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -213,10 +216,16 @@ def verify_public_holdout_inputs(
     lock_path: Path,
     manifest_path: Path,
     questions_path: Path,
+    exclusion_manifest_path: Path | None = None,
 ) -> dict[str, object]:
     """CI 无需私有 oracle 即可校验公开输入、范围与预注册哈希。"""
 
     lock = HoldoutLock.model_validate_json(lock_path.read_text(encoding="utf-8"))
+    verify_exclusion_protocol(
+        lock,
+        manifest_path=manifest_path,
+        exclusion_manifest_path=exclusion_manifest_path,
+    )
     mismatches = [
         field
         for field, path in (
@@ -257,6 +266,34 @@ def verify_public_holdout_inputs(
         "candidate_variants": lock.candidate_variants,
         "oracle_sha256": lock.oracle_sha256,
     }
+
+
+def _base_paper_id(value: str) -> str:
+    return re.sub(r"v\d+$", "", value.removeprefix("arxiv:"))
+
+
+def verify_exclusion_protocol(
+    lock: HoldoutLock,
+    *,
+    manifest_path: Path,
+    exclusion_manifest_path: Path | None,
+) -> None:
+    expected_sha = lock.protocol.get("excluded_manifest_sha256")
+    if expected_sha is None:
+        return
+    if exclusion_manifest_path is None:
+        raise ValueError("预注册协议要求提供排除数据集 manifest")
+    if not isinstance(expected_sha, str) or not _matches_locked_text_sha(
+        exclusion_manifest_path, expected_sha
+    ):
+        raise ValueError("排除数据集 manifest 哈希与预注册协议不一致")
+    manifest = read_manifest(manifest_path)
+    excluded_manifest = read_manifest(exclusion_manifest_path)
+    current_ids = {_base_paper_id(item.id) for item in manifest.papers}
+    excluded_ids = {_base_paper_id(item.id) for item in excluded_manifest.papers}
+    overlap = sorted(current_ids & excluded_ids)
+    if overlap:
+        raise ValueError(f"holdout 与排除数据集存在论文交集：{overlap}")
 
 
 def load_locked_cases(
@@ -318,7 +355,7 @@ def _run_candidate(
     variant: str,
     k: int,
 ) -> QueryRanking:
-    if variant == "rrf_page":
+    if variant in {"rrf_page", "rrf_page_quality_gate"}:
         return index.fused(case.query, case.paper_ids, limit=k, page_dedup=True)
     if variant == "rrf_page_adaptive":
         return index.adaptive_fused(case.query, case.paper_ids, limit=k)
@@ -335,6 +372,7 @@ def evaluate_locked_holdout(
     result_path: Path,
     receipt_path: Path,
     mode: Literal["blind-first-run", "diagnostic-after-reveal"],
+    exclusion_manifest_path: Path | None = None,
 ) -> tuple[dict[str, Any], HoldoutRevealReceipt | None]:
     """只运行预注册候选；公开结果不包含逐题预测或私有 oracle。"""
 
@@ -345,12 +383,12 @@ def evaluate_locked_holdout(
     if mode == "diagnostic-after-reveal" and result_path.exists():
         raise FileExistsError("诊断重跑必须使用新的输出路径，不能覆盖首次结果")
 
-    lock, cases, validation = load_locked_cases(
-        lock_path=lock_path,
+    # 先核对预注册实现，再读取私有 oracle，避免实现漂移后接触隐藏答案。
+    lock = HoldoutLock.model_validate_json(lock_path.read_text(encoding="utf-8"))
+    verify_exclusion_protocol(
+        lock,
         manifest_path=manifest_path,
-        questions_path=questions_path,
-        oracle_path=oracle_path,
-        pdf_dir=pdf_dir,
+        exclusion_manifest_path=exclusion_manifest_path,
     )
     unknown = sorted(set(lock.candidate_variants) - SUPPORTED_HOLDOUT_VARIANTS)
     if unknown:
@@ -366,6 +404,28 @@ def evaluate_locked_holdout(
         raise ValueError("预注册协议的 k 必须为正数")
     if int(lock.protocol.get("hash_dimensions", 0)) != 8192:
         raise ValueError("当前隐藏集运行器只支持锁定 hash_dimensions=8192")
+    if "rrf_page_quality_gate" in lock.candidate_variants:
+        quality_path = Path(__file__).parent / "rag" / "retrieval_quality.py"
+        locked_quality = lock.protocol.get("quality_gate_implementation_sha256")
+        if not isinstance(locked_quality, str) or not _matches_locked_text_sha(
+            quality_path, locked_quality
+        ):
+            raise ValueError("质量门禁实现哈希与预注册协议不一致")
+    locked_scorer = lock.protocol.get("evaluation_implementation_sha256")
+    if locked_scorer is not None:
+        scorer_path = Path(__file__).with_name("evaluation.py")
+        if not isinstance(locked_scorer, str) or not _matches_locked_text_sha(
+            scorer_path, locked_scorer
+        ):
+            raise ValueError("评分实现哈希与预注册协议不一致")
+
+    lock, cases, validation = load_locked_cases(
+        lock_path=lock_path,
+        manifest_path=manifest_path,
+        questions_path=questions_path,
+        oracle_path=oracle_path,
+        pdf_dir=pdf_dir,
+    )
 
     manifest = read_manifest(manifest_path)
     index_started = time.perf_counter()
@@ -389,6 +449,7 @@ def evaluate_locked_holdout(
                     ranking,
                     latency_ms=latency_ms,
                     threshold=None,
+                    quality_gate=variant == "rrf_page_quality_gate",
                 )
             )
         predictions[variant] = records
@@ -471,6 +532,7 @@ def _main_verify_public(args: argparse.Namespace) -> None:
         lock_path=args.lock,
         manifest_path=args.manifest,
         questions_path=args.questions,
+        exclusion_manifest_path=args.exclusion_manifest,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -485,6 +547,7 @@ def _main_run(args: argparse.Namespace) -> None:
         result_path=args.output,
         receipt_path=args.receipt,
         mode=args.mode,
+        exclusion_manifest_path=args.exclusion_manifest,
     )
     print(
         json.dumps(
@@ -527,6 +590,7 @@ def main() -> None:
     public_parser.add_argument("--lock", required=True, type=Path)
     public_parser.add_argument("--manifest", required=True, type=Path)
     public_parser.add_argument("--questions", required=True, type=Path)
+    public_parser.add_argument("--exclusion-manifest", type=Path)
     public_parser.set_defaults(handler=_main_verify_public)
 
     run_parser = subparsers.add_parser("run")
@@ -537,6 +601,7 @@ def main() -> None:
     run_parser.add_argument("--pdf-dir", required=True, type=Path)
     run_parser.add_argument("--output", required=True, type=Path)
     run_parser.add_argument("--receipt", required=True, type=Path)
+    run_parser.add_argument("--exclusion-manifest", type=Path)
     run_parser.add_argument(
         "--mode",
         choices=("blind-first-run", "diagnostic-after-reveal"),

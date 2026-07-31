@@ -53,6 +53,56 @@ def test_evaluation_reports_raw_counts_and_illegal_citations() -> None:
     assert metrics["citation_page_accuracy"]["value"] == 1.0
     assert metrics["unanswerable_wrong_answer_rate"]["value"] == 1.0
     assert metrics["illegal_citation_count"] == 1
+    selective = metrics["selective_answering"]
+    assert selective["answered_count"] == 2
+    assert selective["correctly_cited_answered_count"] == 1
+    assert selective["unsafe_answered_count"] == 1
+    assert selective["selective_citation_precision"]["value"] == 0.5
+    assert selective["selective_risk"]["value"] == 0.5
+    assert selective["balanced_safety_accuracy"]["value"] == 0.5
+
+
+def test_selective_metrics_expose_over_refusal_instead_of_hiding_it() -> None:
+    cases = [
+        EvaluationCase(
+            id="answerable",
+            query="结论？",
+            paper_ids=["p1"],
+            answerable=True,
+            expected_pages=[3],
+            category="fact",
+        ),
+        EvaluationCase(
+            id="unanswerable",
+            query="没有依据的问题",
+            paper_ids=["p1"],
+            answerable=False,
+            category="unanswerable",
+        ),
+    ]
+    predictions = [
+        EvaluationPrediction(
+            case_id="answerable",
+            answer="",
+            abstained=True,
+            latency_ms=1,
+        ),
+        EvaluationPrediction(
+            case_id="unanswerable",
+            answer="",
+            abstained=True,
+            latency_ms=1,
+        ),
+    ]
+
+    metrics = evaluate(cases, predictions)
+    selective = metrics["selective_answering"]
+
+    assert metrics["unanswerable_wrong_answer_rate"]["value"] == 0
+    assert selective["answerable_over_refusal_rate"]["value"] == 1
+    assert selective["correctly_cited_answerable_rate"]["value"] == 0
+    assert selective["unanswerable_abstention_rate"]["value"] == 1
+    assert selective["balanced_safety_accuracy"]["value"] == 0.5
 
 
 def test_evaluation_uses_paper_and_physical_page_for_frozen_evidence() -> None:

@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "dataset_id": "paperleaf-qasper-calibration-v1",
+    "version": "2026-07-31",
+    "paper_count": 29,
+    "case_count": 60,
+    "answerable_count": 48,
+    "unanswerable_count": 12,
+    "category_counts": {
+      "extractive": 30,
+      "free_form": 4,
+      "multi_page": 9,
+      "unanswerable": 12,
+      "yes_no": 5
+    },
+    "split_counts": {
+      "dev": 60
+    },
+    "paper_case_counts": {
+      "arxiv:1608.06757v1": 1,
+      "arxiv:1609.00559v1": 1,
+      "arxiv:1612.08205v1": 1,
+      "arxiv:1702.03856v1": 2,
+      "arxiv:1704.04452v1": 3,
+      "arxiv:1707.06806v1": 3,
+      "arxiv:1709.10367v1": 3,
+      "arxiv:1801.07887v1": 1,
+      "arxiv:1802.06024v1": 1,
+      "arxiv:1804.11346v1": 3,
+      "arxiv:1805.06966v1": 2,
+      "arxiv:1809.01541v1": 1,
+      "arxiv:1810.12091v1": 2,
+      "arxiv:1901.05287v1": 1,
+      "arxiv:1901.10133v1": 3,
+      "arxiv:1906.01040v1": 1,
+      "arxiv:1906.01081v1": 1,
+      "arxiv:1906.10225v1": 2,
+      "arxiv:1907.06292v1": 3,
+      "arxiv:1908.10084v1": 1,
+      "arxiv:1909.00326v1": 3,
+      "arxiv:1909.01296v1": 3,
+      "arxiv:1909.05359v1": 2,
+      "arxiv:1910.03634v1": 2,
+      "arxiv:1910.05603v1": 3,
+      "arxiv:1911.00841v1": 3,
+      "arxiv:1911.01371v1": 2,
+      "arxiv:2001.01269v1": 3,
+      "arxiv:2003.04642v1": 3
+    },
+    "pdf_files_verified": 29,
+    "evidence_anchors_verified": 65
+  },
+  "protocol": {
+    "retrieval_variant": "rrf_page",
+    "k": 5,
+    "fit_split": "dev",
+    "hash_dimensions": 8192,
+    "chunk_count": 457,
+    "index_build_ms": 3616,
+    "manifest_sha256": "f9e415a0c9033c088191f5847c3f3e8bbc0e402893e4e367ee5d4c50e58ed45f",
+    "cases_sha256": "424a80cf76368eb5011473bff41ad85c8be655701d15f170fc07e1b12a6df212",
+    "retrieval_implementation_sha256": "8d7d470fe31059bf05bba364f70f324f2c4a7167059f2e29faf6f8f0a31b6241",
+    "selective_implementation_sha256": "f85786ef2a61f13a8508de651a8b755fc85a892863494be0252d9e1d285c4260"
+  },
+  "calibration": {
+    "schema_version": 1,
+    "fit_split": "dev",
+    "objective": "maximise correctly cited answerable coverage under safety constraints",
+    "constraints": {
+      "max_unanswerable_wrong_rate": 0.05,
+      "max_selective_risk": 0.2,
+      "min_correctly_cited_answerable_rate": 0.05
+    },
+    "candidate_count": 2480,
+    "constraint_satisfied": false,
+    "recommended_policy": null,
+    "least_violating_policy": {
+      "min_confidence": 0.0,
+      "min_lexical_coverage": 1.000000000001,
+      "require_channel_agreement": false
+    },
+    "least_violating_metrics": {
+      "answerable_total": 48,
+      "unanswerable_total": 12,
+      "answered_count": 0,
+      "answered_answerable_count": 0,
+      "correctly_cited_answerable_count": 0,
+      "wrong_unanswerable_count": 0,
+      "unsafe_answered_count": 0,
+      "answerable_response_rate": 0.0,
+      "correctly_cited_answerable_rate": 0.0,
+      "unanswerable_wrong_rate": 0.0,
+      "selective_citation_precision": null,
+      "selective_risk": 0.0,
+      "constraint_checks": {
+        "unanswerable_wrong_rate": true,
+        "selective_risk": true,
+        "correctly_cited_answerable_rate": false
+      },
+      "constraint_satisfied": false
+    },
+    "warning": "没有候选同时满足风险、不可回答错误率和正确引用覆盖约束"
+  }
+}

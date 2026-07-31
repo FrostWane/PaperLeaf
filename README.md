@@ -25,7 +25,7 @@ PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保�
 - 管理员创建、停用用户并查看脱敏的模型运行状态；默认不读取用户文献内容
 - 未配置模型时仍可使用文献管理和 PDF 阅读功能
 
-当前 `0.7.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带集合、标签和批量整理能力的演示文献库；跨文献提问会展示与真实 SSE 契约一致的 Agent 运行轨迹和回答核验状态。Docker Compose 构建固定使用 `real` 数据模式并连接 FastAPI。
+当前 `0.8.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带集合、标签和批量整理能力的演示文献库；跨文献提问会展示与真实 SSE 契约一致的 Agent 运行轨迹和回答核验状态。Docker Compose 构建固定使用 `real` 数据模式并连接 FastAPI。
 
 ## 快速开始
 

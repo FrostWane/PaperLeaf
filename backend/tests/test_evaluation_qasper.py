@@ -1,6 +1,8 @@
 from paperleaf_api.evaluation_qasper import (
     _unanimous_answerability,
+    load_exclusion_manifests,
     match_evidence_to_page,
+    normalize_arxiv_id,
     prepare_qasper_case,
     resolve_arxiv_versions,
 )
@@ -42,6 +44,45 @@ def test_version_batch_uses_cache_without_network(tmp_path) -> None:
     versions = resolve_arxiv_versions(["1912.01214"], cache_path=cache)
 
     assert versions == {"1912.01214": "1912.01214v1"}
+
+
+def test_exclusion_manifest_normalizes_versions_without_leaking_local_path(
+    tmp_path,
+) -> None:
+    manifest = tmp_path / "private-folder" / "manifest.json"
+    manifest.parent.mkdir()
+    manifest.write_text(
+        """{
+          "dataset_id": "calibration-v1",
+          "version": "1",
+          "created_at": "2026-07-31",
+          "annotation_license": "CC-BY-4.0",
+          "paper_count": 1,
+          "case_count": 1,
+          "answerable_count": 1,
+          "unanswerable_count": 0,
+          "category_counts": {"extractive": 1},
+          "papers": [{
+            "id": "arxiv:1912.01214v3",
+            "title": "Fixture",
+            "arxiv_id": "1912.01214v3",
+            "source_url": "https://arxiv.org/abs/1912.01214v3",
+            "pdf_url": "https://arxiv.org/pdf/1912.01214v3",
+            "filename": "1912.01214v3.pdf",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "page_count": 1
+          }]
+        }\n""",
+        encoding="utf-8",
+    )
+
+    excluded, sources = load_exclusion_manifests([manifest])
+
+    assert normalize_arxiv_id("arxiv:1912.01214v3") == "1912.01214"
+    assert normalize_arxiv_id("https://arxiv.org/abs/1912.01214v3") == "1912.01214"
+    assert excluded == {"1912.01214"}
+    assert sources[0]["dataset_id"] == "calibration-v1"
+    assert "private-folder" not in str(sources)
 
 
 def test_prepare_qasper_case_builds_alternative_page_groups() -> None:
