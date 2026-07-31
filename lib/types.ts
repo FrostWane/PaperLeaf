@@ -112,6 +112,16 @@ export interface AgentAnswer {
   answer: string;
   citations: Citation[];
   evidenceQuality?: AgentEvidenceQuality;
+  activities?: AgentActivity[];
+}
+
+export interface AgentActivity {
+  key: string;
+  node: string;
+  label: string;
+  step: number;
+  status: "running" | "completed" | "failed";
+  durationMs?: number;
 }
 
 export interface AgentEvidenceQuality {
@@ -164,9 +174,33 @@ export interface AdminJob {
   errorCode?: string;
 }
 
+export interface ModelPurposeHealth {
+  configured: boolean;
+  status: "closed" | "open" | "half_open";
+  consecutiveFailures: number;
+  retryAfterMs: number;
+}
+
+export interface ModelProviderHealth {
+  provider: string;
+  purposes: Record<string, ModelPurposeHealth>;
+}
+
+export interface ModelRuntimeHealth {
+  configured: boolean;
+  providers: ModelProviderHealth[];
+  policy: {
+    timeoutSeconds: number;
+    attemptsPerProvider: number;
+    failureThreshold: number;
+    cooldownSeconds: number;
+  };
+}
+
 export type AgentEventType =
   | "run_started"
   | "node_started"
+  | "node_finished"
   | "tool_started"
   | "tool_finished"
   | "message_delta"

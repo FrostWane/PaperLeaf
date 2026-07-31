@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,11 +26,16 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .agent.graph import build_agent_graph, build_configured_evidence_support_grader
+from .agent.graph import (
+    build_agent_graph,
+    build_configured_answerer,
+    build_configured_evidence_support_grader,
+)
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .artifacts import load_paper_evidence, structure_graph, summarize_evidence
 from .arxiv_service import fetch_arxiv_pdf, search_arxiv
 from .config import Settings, settings
+from .model_runtime import build_model_router, collect_model_attempts
 from .models import PaperStatus, UserRole
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
@@ -64,6 +70,17 @@ from .schemas import (
 from .security import csrf_matches, new_csrf_token, new_session_token, verify_password
 from .storage import ObjectStorage, create_storage, parse_byte_range, validate_pdf
 
+_PUBLIC_AGENT_NODES = {
+    "validate_request",
+    "retrieve_library",
+    "grade_evidence",
+    "generate_answer",
+    "validate_citations",
+    "abstain",
+    "search_arxiv",
+    "propose_import",
+}
+
 
 class AppServices:
     def __init__(
@@ -79,16 +96,49 @@ class AppServices:
             else SQLAlchemyRepository(config.session_secret)
         )
         self.storage = storage or create_storage(config)
-        self.retriever = DemoLibrarySearch() if config.is_demo else SQLLibrarySearch()
-        self.agent_graph = build_agent_graph(
-            retriever=self.retriever,
-            quality_policy=EvidenceQualityPolicy(
-                min_confidence=config.evidence_min_confidence,
-                min_vector_score=config.evidence_min_vector_score,
-                min_lexical_coverage=config.evidence_min_lexical_coverage,
-            ),
-            support_grader=build_configured_evidence_support_grader(config),
+        self.model_router = build_model_router(config)
+        self.retriever = (
+            DemoLibrarySearch()
+            if config.is_demo
+            else SQLLibrarySearch(config, self.model_router)
         )
+        self.agent_graph = self.build_agent_graph()
+        self._agent_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._agent_tasks_lock = asyncio.Lock()
+
+    def build_agent_graph(self, checkpointer: Any | None = None) -> Any:
+        """ç”Ÿäº§é‡å»º Graph æ—¶ä¿æŒä¸Ž App ç›¸åŒçš„æ¨¡åž‹å’Œè´¨é‡ç­–ç•¥ã€‚"""
+
+        return build_agent_graph(
+            retriever=self.retriever,
+            answerer=build_configured_answerer(self.config, self.model_router),
+            checkpointer=checkpointer,
+            quality_policy=EvidenceQualityPolicy(
+                min_confidence=self.config.evidence_min_confidence,
+                min_vector_score=self.config.evidence_min_vector_score,
+                min_lexical_coverage=self.config.evidence_min_lexical_coverage,
+            ),
+            support_grader=build_configured_evidence_support_grader(
+                self.config, self.model_router
+            ),
+        )
+
+    async def register_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
+        async with self._agent_tasks_lock:
+            self._agent_tasks[run_id] = task
+
+    async def unregister_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
+        async with self._agent_tasks_lock:
+            if self._agent_tasks.get(run_id) is task:
+                self._agent_tasks.pop(run_id, None)
+
+    async def cancel_agent_task(self, run_id: str) -> bool:
+        async with self._agent_tasks_lock:
+            task = self._agent_tasks.get(run_id)
+            if not task or task.done():
+                return False
+            task.cancel()
+            return True
 
 
 def _paper_read(paper: PaperRecord) -> PaperRead:
@@ -127,6 +177,9 @@ def _agent_run_read(record: Any) -> AgentRunRead:
         answer=summary.get("answer", ""),
         citations=summary.get("citations", []),
         evidence_quality=summary.get("evidence_quality", {}),
+        node_trace=summary.get("node_trace", []),
+        model_attempts=summary.get("model_attempts", []),
+        duration_ms=getattr(record, "duration_ms", None),
         error=record.error_code,
     )
 
@@ -154,14 +207,12 @@ def create_app(
         checkpoint_url = config.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
         async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
             await checkpointer.setup()
-            services.agent_graph = build_agent_graph(
-                retriever=services.retriever, checkpointer=checkpointer
-            )
+            services.agent_graph = services.build_agent_graph(checkpointer)
             yield
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.4.0",
+        version="0.5.0",
         description="ä¸ªäººç§‘ç ”æ–‡çŒ®åº“ã€é¡µçº§ RAG ä¸Žå—æŽ§ç ”ç©¶ Agent",
         lifespan=lifespan,
     )
@@ -326,651 +377,20 @@ def create_app(
             raise HTTPException(status.HTTP_409_CONFLICT, "ä½œä¸šä¸å­˜åœ¨æˆ–å½“å‰çŠ¶æ€ä¸å¯é‡è¯•")
         return JobRead.model_validate(job)
 
-    @app.get("/api/v1/collections", response_model=list[CollectionRead])
-    async def list_collections(
-        user: Annotated[UserRecord, Depends(current_user)],
-    ) -> list[CollectionRead]:
-        records = await services.repository.list_collections(user.id)
-        memberships = await services.repository.list_collection_memberships(user.id)
-        return [
-            CollectionRead.model_validate(item).model_copy(
-                update={"paper_ids": memberships.get(item.id, [])}
-            )
-            for item in records
-        ]
-
-    @app.post(
-        "/api/v1/collections", response_model=CollectionRead, status_code=status.HTTP_201_CREATED
-    )
-    async def create_collection(
-        payload: CollectionCreate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> CollectionRead:
-        try:
-            record = await services.repository.create_collection(
-                user.id, payload.name, payload.description
-            )
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-        return CollectionRead.model_validate(record)
-
-    @app.patch("/api/v1/collections/{collection_id}", response_model=CollectionRead)
-    async def update_collection(
-        collection_id: str,
-        payload: CollectionUpdate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> CollectionRead:
-        try:
-            record = await services.repository.update_collection(
-                collection_id, user.id, **payload.model_dump(exclude_unset=True)
-            )
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-        if not record:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "é›†åˆä¸å­˜åœ¨")
-        return CollectionRead.model_validate(record)
-
-    @app.delete("/api/v1/collections/{collection_id}")
-    async def delete_collection(
-        collection_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, str]:
-        if not await services.repository.delete_collection(collection_id, user.id):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "é›†åˆä¸å­˜åœ¨")
-        return {"status": "deleted"}
-
-    @app.post("/api/v1/collections/{collection_id}/papers/{paper_id}")
-    async def add_paper_to_collection(
-        collection_id: str,
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, bool]:
-        assigned = await services.repository.set_paper_collection(
-            collection_id, paper_id, user.id, True
-        )
-        if not assigned:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "é›†åˆæˆ–æ–‡çŒ®ä¸å­˜åœ¨")
-        return {"assigned": True}
-
-    @app.delete("/api/v1/collections/{collection_id}/papers/{paper_id}")
-    async def remove_paper_from_collection(
-        collection_id: str,
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, bool]:
-        assigned = await services.repository.set_paper_collection(
-            collection_id, paper_id, user.id, False
-        )
-        if not assigned:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "é›†åˆæˆ–æ–‡çŒ®ä¸å­˜åœ¨")
-        return {"assigned": False}
-
-    @app.get("/api/v1/tags", response_model=list[TagRead])
-    async def list_tags(
-        user: Annotated[UserRecord, Depends(current_user)],
-    ) -> list[TagRead]:
-        records = await services.repository.list_tags(user.id)
-        memberships = await services.repository.list_tag_memberships(user.id)
-        return [
-            TagRead.model_validate(item).model_copy(
-                update={"paper_ids": memberships.get(item.id, [])}
-            )
-            for item in records
-        ]
-
-    @app.post("/api/v1/tags", response_model=TagRead, status_code=status.HTTP_201_CREATED)
-    async def create_tag(
-        payload: TagCreate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> TagRead:
-        try:
-            record = await services.repository.create_tag(user.id, payload.name, payload.color)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-        return TagRead.model_validate(record)
-
-    @app.patch("/api/v1/tags/{tag_id}", response_model=TagRead)
-    async def update_tag(
-        tag_id: str,
-        payload: TagUpdate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> TagRead:
-        try:
-            record = await services.repository.update_tag(
-                tag_id, user.id, **payload.model_dump(exclude_unset=True)
-            )
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-        if not record:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ ‡ç­¾ä¸å­˜åœ¨")
-        return TagRead.model_validate(record)
-
-    @app.delete("/api/v1/tags/{tag_id}")
-    async def delete_tag(
-        tag_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, str]:
-        if not await services.repository.delete_tag(tag_id, user.id):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ ‡ç­¾ä¸å­˜åœ¨")
-        return {"status": "deleted"}
-
-    @app.post("/api/v1/tags/{tag_id}/papers/{paper_id}")
-    async def add_paper_tag(
-        tag_id: str,
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, bool]:
-        assigned = await services.repository.set_paper_tag(tag_id, paper_id, user.id, True)
-        if not assigned:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ ‡ç­¾æˆ–æ–‡çŒ®ä¸å­˜åœ¨")
-        return {"assigned": True}
-
-    @app.delete("/api/v1/tags/{tag_id}/papers/{paper_id}")
-    async def remove_paper_tag(
-        tag_id: str,
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, bool]:
-        assigned = await services.repository.set_paper_tag(tag_id, paper_id, user.id, False)
-        if not assigned:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ ‡ç­¾æˆ–æ–‡çŒ®ä¸å­˜åœ¨")
-        return {"assigned": False}
-
-    @app.get("/api/v1/papers", response_model=list[PaperRead])
-    async def list_papers(user: Annotated[UserRecord, Depends(current_user)]) -> list[PaperRead]:
-        return [_paper_read(item) for item in await services.repository.list_papers(user.id)]
-
-    @app.post("/api/v1/papers/bulk", response_model=PaperBulkActionResponse)
-    async def bulk_paper_action(
-        payload: PaperBulkActionRequest,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> PaperBulkActionResponse:
-        paper_ids = list(dict.fromkeys(payload.paper_ids))
-        for paper_id in paper_ids:
-            if not await services.repository.get_owned_paper(paper_id, user.id):
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "æ–‡çŒ®ä¸å­˜åœ¨")
-
-        if payload.action in {"archive", "unarchive"}:
-            affected_ids = await services.repository.set_papers_archived(
-                paper_ids, user.id, payload.action == "archive"
-            )
-            if affected_ids is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "æ–‡çŒ®ä¸å­˜åœ¨")
-        else:
-            if not payload.target_id:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "æ•´ç†æ“ä½œç¼ºå°‘ç›®æ ‡")
-            assigned = payload.action.startswith("add_")
-            for paper_id in paper_ids:
-                if payload.action.endswith("collection"):
-                    ok = await services.repository.set_paper_collection(
-                        payload.target_id, paper_id, user.id, assigned
-                    )
-                else:
-                    ok = await services.repository.set_paper_tag(
-                        payload.target_id, paper_id, user.id, assigned
-                    )
-                if not ok:
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, "é›†åˆã€æ ‡ç­¾æˆ–æ–‡çŒ®ä¸å­˜åœ¨")
-            affected_ids = paper_ids
-
-        return PaperBulkActionResponse(
-            action=payload.action,
-            affected=len(affected_ids),
-            paper_ids=affected_ids,
-        )
-
-    @app.post("/api/v1/papers", response_model=PaperRead, status_code=status.HTTP_201_CREATED)
-    async def upload_paper(
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-        file: Annotated[UploadFile, File()],
-        title: Annotated[Optional[str], Form()] = None,
-        doi: Annotated[Optional[str], Form()] = None,
-    ) -> PaperRead:
-        content = await file.read(config.max_pdf_bytes + 1)
-        filename = Path(file.filename or "paper.pdf").name
-        try:
-            validate_pdf(content, filename, config.max_pdf_bytes)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-        sha256 = hashlib.sha256(content).hexdigest()
-        paper_id = str(uuid.uuid4())
-        storage_key = f"{user.id}/{paper_id}/{sha256}.pdf"
-        await services.storage.put(storage_key, content, "application/pdf")
-        page_count: Optional[int] = None
-        try:
-            import fitz
-
-            with fitz.open(stream=content, filetype="pdf") as document:
-                page_count = document.page_count
-                if page_count > config.max_pdf_pages:
-                    await services.storage.delete(storage_key)
-                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "PDF è¶…è¿‡é¡µæ•°é™åˆ¶")
-        except ImportError:
-            pass
-        except HTTPException:
-            raise
-        except Exception as exc:
-            await services.storage.delete(storage_key)
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "PDF å·²æŸåæˆ–æ— æ³•è§£æž"
-            ) from exc
-        record = PaperRecord(
-            id=paper_id,
-            owner_id=user.id,
-            title=(title or Path(filename).stem).strip(),
-            authors=[],
-            year=None,
-            abstract=None,
-            doi=doi,
-            arxiv_id=None,
-            filename=filename,
-            storage_key=storage_key,
-            mime_type="application/pdf",
-            size_bytes=len(content),
-            sha256=sha256,
-            page_count=page_count,
-            status=PaperStatus.queued,
-        )
-        try:
-            await services.repository.create_paper(record)
-        except ValueError as exc:
-            await services.storage.delete(storage_key)
-            duplicate_id = str(exc).partition(":")[2]
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={"message": "æ–‡çŒ®å·²å­˜åœ¨", "paper_id": duplicate_id},
-            ) from exc
-        return _paper_read(record)
-
-    async def owned_paper(paper_id: str, user: UserRecord) -> PaperRecord:
-        paper = await services.repository.get_owned_paper(paper_id, user.id)
-        if not paper:
-            # å¯¹æ— æƒèµ„æºä¸Žä¸å­˜åœ¨èµ„æºè¿”å›žç›¸åŒç»“æžœï¼Œé¿å…æžšä¸¾ IDã€‚
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ–‡çŒ®ä¸å­˜åœ¨")
-        return paper
-
-    @app.get("/api/v1/papers/{paper_id}", response_model=PaperRead)
-    async def get_paper(
-        paper_id: str, user: Annotated[UserRecord, Depends(current_user)]
-    ) -> PaperRead:
-        return _paper_read(await owned_paper(paper_id, user))
-
-    @app.post("/api/v1/papers/{paper_id}/opened", response_model=PaperRead)
-    async def record_paper_opened(
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> PaperRead:
-        paper = await services.repository.touch_paper_opened(paper_id, user.id)
-        if not paper:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ–‡çŒ®ä¸å­˜åœ¨")
-        return _paper_read(paper)
-
-    @app.patch("/api/v1/papers/{paper_id}", response_model=PaperRead)
-    async def update_paper(
-        paper_id: str,
-        payload: PaperUpdate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> PaperRead:
-        paper = await services.repository.update_owned_paper(
-            paper_id, user.id, **payload.model_dump(exclude_none=True)
-        )
-        if not paper:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ–‡çŒ®ä¸å­˜åœ¨")
-        return _paper_read(paper)
-
-    @app.delete("/api/v1/papers/{paper_id}", status_code=status.HTTP_202_ACCEPTED)
-    async def delete_paper(
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, str]:
-        paper = await services.repository.delete_owned_paper(paper_id, user.id)
-        if not paper:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "æ–‡çŒ®ä¸å­˜åœ¨")
-        return {"id": paper.id, "status": PaperStatus.deleting.value}
-
-    @app.get("/api/v1/papers/{paper_id}/file")
-    async def read_paper_file(
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        range_header: Annotated[Optional[str], Header(alias="Range")] = None,
-    ) -> Response:
-        paper = await owned_paper(paper_id, user)
-        total = await services.storage.size(paper.storage_key)
-        headers = {"Accept-Ranges": "bytes", "Content-Disposition": "inline"}
-        try:
-            byte_range = parse_byte_range(range_header, total)
-        except ValueError as exc:
-            raise HTTPException(
-                status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                str(exc),
-                headers={"Content-Range": f"bytes */{total}"},
-            ) from exc
-        if byte_range:
-            body = await services.storage.read(paper.storage_key, byte_range.start, byte_range.end)
-            headers.update(
-                {
-                    "Content-Range": byte_range.content_range,
-                    "Content-Length": str(byte_range.length),
-                }
-            )
-            return Response(body, status_code=206, media_type="application/pdf", headers=headers)
-        body = await services.storage.read(paper.storage_key)
-        headers["Content-Length"] = str(total)
-        return Response(body, media_type="application/pdf", headers=headers)
-
-    @app.post("/api/v1/papers/{paper_id}/retry", response_model=PaperRead)
-    async def retry_paper(
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> PaperRead:
-        paper = await owned_paper(paper_id, user)
-        if paper.status not in {PaperStatus.failed, PaperStatus.partial}:
-            raise HTTPException(status.HTTP_409_CONFLICT, "å½“å‰çŠ¶æ€ä¸å…è®¸é‡è¯•")
-        updated = await services.repository.update_owned_paper(
-            paper_id, user.id, status=PaperStatus.queued
-        )
-        return _paper_read(updated)  # type: ignore[arg-type]
-
-    @app.get("/api/v1/discover/arxiv/search", response_model=list[ArxivSearchResponse])
-    async def discover_arxiv(
-        q: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        limit: int = 10,
-    ) -> list[ArxivSearchResponse]:
-        if not q.strip() or len(q) > 500 or not 1 <= limit <= 20:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "æ£€ç´¢å‚æ•°æ— æ•ˆ")
-        try:
-            results = await search_arxiv(q.strip(), limit)
-        except Exception as exc:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv æš‚æ—¶ä¸å¯ç”¨") from exc
-        return [ArxivSearchResponse(**item.__dict__) for item in results]
-
-    @app.post(
-        "/api/v1/discover/arxiv/import",
-        response_model=PaperRead,
-        status_code=status.HTTP_201_CREATED,
-    )
-    async def import_arxiv(
-        payload: ArxivImportRequest,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> PaperRead:
-        try:
-            content = await fetch_arxiv_pdf(payload.arxiv_id, config.max_pdf_bytes)
-            validate_pdf(content, f"{payload.arxiv_id}.pdf", config.max_pdf_bytes)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv PDF ä¸‹è½½å¤±è´¥") from exc
-        sha256 = hashlib.sha256(content).hexdigest()
-        paper_id = str(uuid.uuid4())
-        storage_key = f"{user.id}/{paper_id}/{sha256}.pdf"
-        await services.storage.put(storage_key, content, "application/pdf")
-        record = PaperRecord(
-            id=paper_id,
-            owner_id=user.id,
-            title=f"arXiv {payload.arxiv_id}",
-            authors=[],
-            year=None,
-            abstract=None,
-            doi=None,
-            arxiv_id=payload.arxiv_id,
-            filename=f"{payload.arxiv_id}.pdf",
-            storage_key=storage_key,
-            mime_type="application/pdf",
-            size_bytes=len(content),
-            sha256=sha256,
-            page_count=None,
-            status=PaperStatus.queued,
-        )
-        try:
-            created = await services.repository.create_paper(record)
-        except ValueError as exc:
-            await services.storage.delete(storage_key)
-            raise HTTPException(status.HTTP_409_CONFLICT, "æ–‡çŒ®å·²å¯¼å…¥") from exc
-        return _paper_read(created)
-
-    @app.post("/api/v1/papers/{paper_id}/summary", response_model=SummaryResponse)
-    async def summarize_paper(
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> SummaryResponse:
-        await owned_paper(paper_id, user)
-        if config.is_demo:
-            raise HTTPException(status.HTTP_409_CONFLICT, "æ¼”ç¤ºæ¨¡å¼ä¸å¤„ç†çœŸå®ž PDF")
-        evidence = await load_paper_evidence(user.id, paper_id)
-        if not evidence:
-            raise HTTPException(status.HTTP_409_CONFLICT, "æ–‡çŒ®å°šæœªå®Œæˆè§£æž")
-        content, mode = await summarize_evidence(evidence)
-        return SummaryResponse(
-            paper_id=paper_id,
-            content=content,
-            citations=[
-                ArtifactCitation(chunk_id=item.chunk_id, physical_page=item.physical_page)
-                for item in evidence[:12]
-            ],
-            mode=mode,
-        )
-
-    @app.post("/api/v1/papers/{paper_id}/structure-graph", response_model=StructureGraphResponse)
-    async def build_paper_structure_graph(
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> StructureGraphResponse:
-        await owned_paper(paper_id, user)
-        if config.is_demo:
-            raise HTTPException(status.HTTP_409_CONFLICT, "æ¼”ç¤ºæ¨¡å¼ä¸å¤„ç†çœŸå®ž PDF")
-        evidence = await load_paper_evidence(user.id, paper_id, limit=16)
-        if not evidence:
-            raise HTTPException(status.HTTP_409_CONFLICT, "æ–‡çŒ®å°šæœªå®Œæˆè§£æž")
-        nodes, edges, mermaid = structure_graph(evidence)
-        return StructureGraphResponse(paper_id=paper_id, nodes=nodes, edges=edges, mermaid=mermaid)
-
-    @app.post("/api/v1/chat/sessions/{session_id}/messages")
-    async def send_chat_message(
-        session_id: str,
-        payload: ChatMessageRequest,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> StreamingResponse:
-        if not 1 <= len(session_id) <= 100:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "ä¼šè¯ ID é•¿åº¦æ— æ•ˆ")
-        run_id = str(uuid.uuid4())
-        thread_id = f"{user.id}:{session_id}:{run_id}"
-        initial = {
-            "run_id": run_id,
-            "session_id": session_id,
-            "user_id": user.id,
-            "query": payload.content,
-            "scope": payload.scope,
-            "selected_paper_ids": payload.selected_paper_ids,
-            "web_enabled": payload.web_enabled,
-            "tool_steps": 0,
-            "status": "pending",
+    @app.get("/api/v1/admin/model-health")
+    async def model_health(
+        _: Annotated[UserRecord, Depends(admin_user)],
+    ) -> dict[str, Any]:
+        providers = services.model_router.health()
+        return {
+            "configured": bool(providers),
+            "providers": providers,
+            "policy": {
+                "timeout_seconds": config.model_timeout_seconds,
+                "attempts_per_provider": config.model_attempts_per_provider,
+                "failure_threshold": config.model_circuit_failure_threshold,
+                "cooldown_seconds": config.model_circuit_cooldown_seconds,
+            },
         }
-        await services.repository.create_agent_run(run_id, user.id, session_id, thread_id)
 
-        async def events() -> AsyncIterator[str]:
-            yield SSEEvent(event="run_started", run_id=run_id).encode()
-            yield SSEEvent(
-                event="tool_started", run_id=run_id, data={"tool": "search_library"}
-            ).encode()
-            try:
-                result = await services.agent_graph.ainvoke(
-                    initial, {"recursion_limit": 8, "configurable": {"thread_id": thread_id}}
-                )
-                quality = dict(result.get("evidence_quality", {}))
-                yield SSEEvent(
-                    event="tool_finished",
-                    run_id=run_id,
-                    data={"tool": "search_library", "evidence_quality": quality},
-                ).encode()
-                interrupts = result.get("__interrupt__", [])
-                if interrupts:
-                    pending = getattr(interrupts[0], "value", {})
-                    await services.repository.update_owned_agent_run(
-                        run_id,
-                        user.id,
-                        status="interrupted",
-                        tool_steps=int(result.get("tool_steps", 0)),
-                        pending_action=pending,
-                        result_summary={
-                            "answer": "",
-                            "citations": [],
-                            "evidence_quality": quality,
-                        },
-                    )
-                    yield SSEEvent(
-                        event="interrupt", run_id=run_id, data={"pending_action": pending}
-                    ).encode()
-                    return
-                citation_values = _citation_dicts(
-                    result.get("citations", []), result.get("retrieved_evidence", [])
-                )
-                await services.repository.update_owned_agent_run(
-                    run_id,
-                    user.id,
-                    status=result.get("status", "completed"),
-                    tool_steps=int(result.get("tool_steps", 0)),
-                    pending_action=None,
-                    result_summary={
-                        "answer": str(result.get("answer", "")),
-                        "citations": citation_values,
-                        "evidence_quality": quality,
-                    },
-                    error_code=result.get("error"),
-                )
-                answer = str(result.get("answer", ""))
-                for piece in re.findall(r".{1,48}", answer, flags=re.S):
-                    yield SSEEvent(
-                        event="message_delta", run_id=run_id, data={"delta": piece}
-                    ).encode()
-                    await asyncio.sleep(0)
-                for data in citation_values:
-                    yield SSEEvent(event="citation", run_id=run_id, data=data).encode()
-                yield SSEEvent(
-                    event="run_finished",
-                    run_id=run_id,
-                    data={"status": result.get("status", "completed")},
-                ).encode()
-            except Exception:
-                await services.repository.update_owned_agent_run(
-                    run_id,
-                    user.id,
-                    status="failed",
-                    error_code="AGENT_RUN_FAILED",
-                    result_summary={"answer": "", "citations": [], "evidence_quality": {}},
-                )
-                yield SSEEvent(
-                    event="error", run_id=run_id, data={"message": "Agent è¿è¡Œå¤±è´¥"}
-                ).encode()
-
-        return StreamingResponse(events(), media_type="text/event-stream")
-
-    @app.get("/api/v1/agent/runs/{run_id}", response_model=AgentRunRead)
-    async def get_agent_run(
-        run_id: str, user: Annotated[UserRecord, Depends(current_user)]
-    ) -> AgentRunRead:
-        run = await services.repository.get_owned_agent_run(run_id, user.id)
-        if not run:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "è¿è¡Œä¸å­˜åœ¨")
-        return _agent_run_read(run)
-
-    @app.post("/api/v1/agent/runs/{run_id}/resume", response_model=AgentRunRead)
-    async def resume_agent_run(
-        run_id: str,
-        payload: AgentResumeRequest,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> AgentRunRead:
-        run = await services.repository.get_owned_agent_run(run_id, user.id)
-        if not run:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "è¿è¡Œä¸å­˜åœ¨")
-        if run.status != "interrupted":
-            raise HTTPException(status.HTTP_409_CONFLICT, "è¿è¡Œæœªåœ¨ç­‰å¾…ç¡®è®¤")
-        pending = run.pending_action or {}
-        if pending.get("action_id") != payload.action_id:
-            raise HTTPException(status.HTTP_409_CONFLICT, "å¾…ç¡®è®¤åŠ¨ä½œä¸åŒ¹é…")
-        if not config.is_demo:
-            from langgraph.types import Command
-
-            result = await services.agent_graph.ainvoke(
-                Command(resume=payload.decision),
-                {
-                    "recursion_limit": 8,
-                    "configurable": {"thread_id": run.thread_id},
-                },
-            )
-            await services.repository.update_owned_agent_run(
-                run_id,
-                user.id,
-                status=result.get("status", "completed"),
-                tool_steps=int(result.get("tool_steps", run.tool_steps)),
-                pending_action=None,
-                result_summary={
-                    "answer": str(result.get("answer", "")),
-                    "citations": _citation_dicts(
-                        result.get("citations", []), result.get("retrieved_evidence", [])
-                    ),
-                    "evidence_quality": dict(result.get("evidence_quality", {})),
-                },
-                error_code=result.get("error"),
-            )
-        else:
-            await services.repository.update_owned_agent_run(
-                run_id,
-                user.id,
-                status="completed",
-                pending_action=None,
-                result_summary={
-                    "answer": (
-                        "å·²æ‰¹å‡†å¯¼å…¥ï¼Œè¯·é€‰æ‹©å€™é€‰æ–‡çŒ®å¹¶è°ƒç”¨å—æŽ§å¯¼å…¥æŽ¥å£ã€‚"
-                        if payload.decision == "approve"
-                        else "å·²å–æ¶ˆå¯¼å…¥ã€‚"
-                    ),
-                    "citations": [],
-                    "evidence_quality": run.result_summary.get("evidence_quality", {})
-                    if run.result_summary
-                    else {},
-                },
-            )
-        return await get_agent_run(run_id, user)
-
-    @app.post("/api/v1/agent/runs/{run_id}/cancel", response_model=AgentRunRead)
-    async def cancel_agent_run(
-        run_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> AgentRunRead:
-        run = await services.repository.get_owned_agent_run(run_id, user.id)
-        if not run:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "è¿è¡Œä¸å­˜åœ¨")
-        if run.status in {"completed", "failed", "cancelled"}:
-            raise HTTPException(status.HTTP_409_CONFLICT, "è¿è¡Œå·²ç»ç»“æŸ")
-        await services.repository.update_owned_agent_run(
-            run_id, user.id, status="cancelled", pending_action=None
-        )
-        return await get_agent_run(run_id, user)
-
-    return app
-
-
-app = create_app()
+    @app.geï]ô¶‰žËkºwµçt€ômt(€€€€€€€€€€€…ÑÑ•µÁÑ}‰Õ™™•Èè±¥ÍÑm¹åt€ômt(€€€€€€€€€€€É•ÍÕ±Ðè‘¥ÑmÍÑÈ°¹åt€ô‘¥Ð¡¥¹¥Ñ¥…°¤(€€€€€€€€€€€¥˜ÕÉÉ•¹Ñ}Ñ…Í¬è(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•¥ÍÑ•É}…•¹Ñ}Ñ…Í¬¡ÉÕ¹}¥°ÕÉÉ•¹Ñ}Ñ…Í¬¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€ÉÕ¹}¥°ÕÍ•È¹¥°ÍÑ…ÑÕÌô‰ÉÕ¹¹¥¹œˆ(€€€€€€€€€€€€¤(€€€€€€€€€€€å¥•±MMÙ•¹Ð¡•Ù•¹Ðô‰ÉÕ¹}ÍÑ…ÉÑ•ˆ°ÉÕ¹}¥õÉÕ¹}¥¤¹•¹½‘” ¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€É…Á¡}½¹™¥œ€ôì(€€€€€€€€€€€€€€€€€€€€‰É•ÕÉÍ¥½¹}±¥µ¥Ðˆè€à°(€€€€€€€€€€€€€€€€€€€€‰½¹™¥ÕÉ…‰±”ˆèì‰Ñ¡É•…‘}¥ˆèÑ¡É•…‘}¥‘ô°(€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€Ý¥Ñ ½±±•Ñ}µ½‘•±}…ÑÑ•µÁÑÌ ¤…Ì…ÑÑ•µÁÑ}‰Õ™™•Èè(€€€€€€€€€€€€€€€€€€€¥˜¡…Í…ÑÑÈ¡Í•ÉÙ¥•Ì¹…•¹Ñ}É…Á °€‰…ÍÑÉ•…´ˆ¤è(€€€€€€€€€€€€€€€€€€€€€€€…Íå¹Œ™½ÈÉ…Á¡}•Ù•¹Ð¥¸Í•ÉÙ¥•Ì¹…•¹Ñ}É…Á ¹…ÍÑÉ•…´ (€€€€€€€€€€€€€€€€€€€€€€€€€€€¥¹¥Ñ¥…°°É…Á¡}½¹™¥œ°ÍÑÉ•…µ}µ½‘”ô‰‘•‰Õœˆ(€€€€€€€€€€€€€€€€€€€€€€€€¤è(€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ñ}ÑåÁ”€ôÍÑÈ¡É…Á¡}•Ù•¹Ð¹•Ð ‰ÑåÁ”ˆ°€ˆˆ¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€Á…å±½…‘}‘…Ñ„€ôÉ…Á¡}•Ù•¹Ð¹•Ð ‰Á…å±½…ˆ°íô¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡Á…å±½…‘}‘…Ñ„°‘¥Ð¤è(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€É…Ý}¹½‘”€ôÍÑÈ¡Á…å±½…‘}‘…Ñ„¹•Ð ‰¹…µ”ˆ°€ˆˆ¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€Ñ…Í­}¥€ôÍÑÈ¡Á…å±½…‘}‘…Ñ„¹•Ð ‰¥ˆ°€ˆˆ¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€ÍÑ•À€ô¥¹Ð¡É…Á¡}•Ù•¹Ð¹•Ð ‰ÍÑ•Àˆ°€À¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜•Ù•¹Ñ}ÑåÁ”€ôô€‰Ñ…Í¬ˆè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜É…Ý}¹½‘”¹½Ð¥¸}AU	1%}9Q}9=Lè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¹½‘•}ÍÑ…ÉÑ•‘}…ÑmÑ…Í­}¥‘t€ôÑ¥µ”¹Á•É™}½Õ¹Ñ•È ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¹½‘•}…ÑÑ•µÁÑ}½™™Í•ÑÍmÑ…Í­}¥‘t€ô±•¸¡…ÑÑ•µÁÑ}‰Õ™™•È¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰¹½‘•}ÍÑ…ÉÑ•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„õì‰¹½‘”ˆèÉ…Ý}¹½‘”°€‰ÍÑ•ÀˆèÍÑ•Áô°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜É…Ý}¹½‘”€ôô€‰É•ÑÉ¥•Ù•}±¥‰É…Éäˆè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰Ñ½½±}ÍÑ…ÉÑ•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„õì‰Ñ½½°ˆè€‰Í•…É¡}±¥‰É…Éä‰ô°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•±¥˜É…Ý}¹½‘”€ôô€‰Í•…É¡}…Éá¥Øˆè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰Ñ½½±}ÍÑ…ÉÑ•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„õì‰Ñ½½°ˆè€‰Í•…É¡}…Éá¥Ø‰ô°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜•Ù•¹Ñ}ÑåÁ”€„ô€‰Ñ…Í­}É•ÍÕ±Ðˆè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€‘•±Ñ„€ôÁ…å±½…‘}‘…Ñ„¹•Ð ‰É•ÍÕ±Ðˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜¥Í¥¹ÍÑ…¹”¡‘•±Ñ„°‘¥Ð¤è(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ð¹ÕÁ‘…Ñ”¡‘•±Ñ„¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥¹Ñ•ÉÉÕÁÑÌ€ôÁ…å±½…‘}‘…Ñ„¹•Ð ‰¥¹Ñ•ÉÉÕÁÑÌˆ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜¥¹Ñ•ÉÉÕÁÑÌè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ñl‰}}¥¹Ñ•ÉÉÕÁÑ}|‰t€ô¥¹Ñ•ÉÉÕÁÑÌ(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜É…Ý}¹½‘”¹½Ð¥¸}AU	1%}9Q}9=Lè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€€€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌ€ôÉ½Õ¹ (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¡Ñ¥µ”¹Á•É™}½Õ¹Ñ•È ¤€´¹½‘•}ÍÑ…ÉÑ•‘}…Ð¹Á½À¡Ñ…Í­}¥°ÉÕ¹}ÍÑ…ÉÑ•‘}…Ð¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¨€ÄÀÀÀ(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€½™™Í•Ð€ô¹½‘•}…ÑÑ•µÁÑ}½™™Í•ÑÌ¹Á½À¡Ñ…Í­}¥°±•¸¡…ÑÑ•µÁÑ}‰Õ™™•È¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¹½‘•}µ½‘•±}…ÑÑ•µÁÑÌ€ôl(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€…ÑÑ•µÁÐ¹…Í}‘¥Ð ¤™½È…ÑÑ•µÁÐ¥¸…ÑÑ•µÁÑ}‰Õ™™•Ém½™™Í•Ðét(€€€€€€€€€€€€€€€€€€€€€€€€€€€t(€€€€€€€€€€€€€€€€€€€€€€€€€€€™…¥±•€ô‰½½°¡Á…å±½…‘}‘…Ñ„¹•Ð ‰•ÉÉ½Èˆ¤¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€ÑÉ…•}¥Ñ•´€ôì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰¹½‘”ˆèÉ…Ý}¹½‘”°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰ÍÑ•ÀˆèÍÑ•À°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰ÍÑ…ÑÕÌˆè€‰™…¥±•ˆ¥˜™…¥±••±Í”€‰½µÁ±•Ñ•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰‘ÕÉ…Ñ¥½¹}µÌˆè‘ÕÉ…Ñ¥½¹}µÌ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰•ÉÉ½É}½‘”ˆè€‰9=}aUQ%=9}%1ˆ¥˜™…¥±••±Í”9½¹”°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰µ½‘•±}…ÑÑ•µÁÑÌˆè¹½‘•}µ½‘•±}…ÑÑ•µÁÑÌ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€ô(€€€€€€€€€€€€€€€€€€€€€€€€€€€¹½‘•}ÑÉ…”¹…ÁÁ•¹¡ÑÉ…•}¥Ñ•´¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰¹½‘•}™¥¹¥Í¡•ˆ°ÉÕ¹}¥õÉÕ¹}¥°‘…Ñ„õÑÉ…•}¥Ñ•´(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€¥˜É…Ý}¹½‘”€ôô€‰É…‘•}•Ù¥‘•¹”ˆè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰Ñ½½±}™¥¹¥Í¡•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„õì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰Ñ½½°ˆè€‰Í•…É¡}±¥‰É…Éäˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆè‘¥Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ð¹•Ð ‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆ°íô¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€•±¥˜É…Ý}¹½‘”€ôô€‰Í•…É¡}…Éá¥Øˆè(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰Ñ½½±}™¥¹¥Í¡•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‘…Ñ„õì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰Ñ½½°ˆè€‰Í•…É¡}…Éá¥Øˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰…¹‘¥‘…Ñ•}½Õ¹Ðˆè±•¸ (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ð¹•Ð ‰…Éá¥Ù}…¹‘¥‘…Ñ•Ìˆ°mt¤(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€•±Í”è(€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÉÙ¥•Ì¹…•¹Ñ}É…Á ¹…¥¹Ù½­”¡¥¹¥Ñ¥…°°É…Á¡}½¹™¥œ¤(€€€€€€€€€€€€€€€µ½‘•±}…ÑÑ•µÁÑÌ€ôm…ÑÑ•µÁÐ¹…Í}‘¥Ð ¤™½È…ÑÑ•µÁÐ¥¸…ÑÑ•µÁÑ}‰Õ™™•Ét(€€€€€€€€€€€€€€€ÅÕ…±¥Ñä€ô‘¥Ð¡É•ÍÕ±Ð¹•Ð ‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆ°íô¤¤(€€€€€€€€€€€€€€€¥¹Ñ•ÉÉÕÁÑÌ€ôÉ•ÍÕ±Ð¹•Ð ‰}}¥¹Ñ•ÉÉÕÁÑ}|ˆ°mt¤(€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌ€ôÉ½Õ¹ ¡Ñ¥µ”¹Á•É™}½Õ¹Ñ•È ¤€´ÉÕ¹}ÍÑ…ÉÑ•‘}…Ð¤€¨€ÄÀÀÀ¤(€€€€€€€€€€€€€€€¥˜¥¹Ñ•ÉÉÕÁÑÌè(€€€€€€€€€€€€€€€€€€€Á•¹‘¥¹œ€ô•Ñ…ÑÑÈ¡¥¹Ñ•ÉÉÕÁÑÍlÁt°€‰Ù…±Õ”ˆ°íô¤(€€€€€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€€€€€€€€€€€€€ÍÑ…ÑÕÌô‰¥¹Ñ•ÉÉÕÁÑ•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€Ñ½½±}ÍÑ•ÁÌõ¥¹Ð¡É•ÍÕ±Ð¹•Ð ‰Ñ½½±}ÍÑ•ÁÌˆ°€À¤¤°(€€€€€€€€€€€€€€€€€€€€€€€Á•¹‘¥¹}…Ñ¥½¸õÁ•¹‘¥¹œ°(€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäõì(€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰…¹ÍÝ•Èˆè€ˆˆ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰¥Ñ…Ñ¥½¹Ìˆèmt°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥ÑäˆèÅÕ…±¥Ñä°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰¹½‘•}ÑÉ…”ˆè¹½‘•}ÑÉ…”°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€‰µ½‘•±}…ÑÑ•µÁÑÌˆèµ½‘•±}…ÑÑ•µÁÑÌ°(€€€€€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌõ‘ÕÉ…Ñ¥½¹}µÌ°(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰¥¹Ñ•ÉÉÕÁÐˆ°ÉÕ¹}¥õÉÕ¹}¥°‘…Ñ„õì‰Á•¹‘¥¹}…Ñ¥½¸ˆèÁ•¹‘¥¹ô(€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸(€€€€€€€€€€€€€€€¥Ñ…Ñ¥½¹}Ù…±Õ•Ì€ô}¥Ñ…Ñ¥½¹}‘¥ÑÌ (€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ð¹•Ð ‰¥Ñ…Ñ¥½¹Ìˆ°mt¤°É•ÍÕ±Ð¹•Ð ‰É•ÑÉ¥•Ù•‘}•Ù¥‘•¹”ˆ°mt¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€€€€€€€€€ÍÑ…ÑÕÌõÉ•ÍÕ±Ð¹•Ð ‰ÍÑ…ÑÕÌˆ°€‰½µÁ±•Ñ•ˆ¤°(€€€€€€€€€€€€€€€€€€€Ñ½½±}ÍÑ•ÁÌõ¥¹Ð¡É•ÍÕ±Ð¹•Ð ‰Ñ½½±}ÍÑ•ÁÌˆ°€À¤¤°(€€€€€€€€€€€€€€€€€€€Á•¹‘¥¹}…Ñ¥½¸õ9½¹”°(€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäõì(€€€€€€€€€€€€€€€€€€€€€€€€‰…¹ÍÝ•ÈˆèÍÑÈ¡É•ÍÕ±Ð¹•Ð ‰…¹ÍÝ•Èˆ°€ˆˆ¤¤°(€€€€€€€€€€€€€€€€€€€€€€€€‰¥Ñ…Ñ¥½¹Ìˆè¥Ñ…Ñ¥½¹}Ù…±Õ•Ì°(€€€€€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥ÑäˆèÅÕ…±¥Ñä°(€€€€€€€€€€€€€€€€€€€€€€€€‰¹½‘•}ÑÉ…”ˆè¹½‘•}ÑÉ…”°(€€€€€€€€€€€€€€€€€€€€€€€€‰µ½‘•±}…ÑÑ•µÁÑÌˆèµ½‘•±}…ÑÑ•µÁÑÌ°(€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌõ‘ÕÉ…Ñ¥½¹}µÌ°(€€€€€€€€€€€€€€€€€€€•ÉÉ½É}½‘”õÉ•ÍÕ±Ð¹•Ð ‰•ÉÉ½Èˆ¤°(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€…¹ÍÝ•È€ôÍÑÈ¡É•ÍÕ±Ð¹•Ð ‰…¹ÍÝ•Èˆ°€ˆˆ¤¤(€€€€€€€€€€€€€€€™½ÈÁ¥•”¥¸É”¹™¥¹‘…±°¡Èˆ¹ìÄ°Ðáôˆ°…¹ÍÝ•È°™±…ÌõÉ”¹L¤è(€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰µ•ÍÍ…•}‘•±Ñ„ˆ°ÉÕ¹}¥õÉÕ¹}¥°‘…Ñ„õì‰‘•±Ñ„ˆèÁ¥••ô(€€€€€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€€€€€…Ý…¥Ð…Íå¹¥¼¹Í±••À À¤(€€€€€€€€€€€€€€€™½È‘…Ñ„¥¸¥Ñ…Ñ¥½¹}Ù…±Õ•Ìè(€€€€€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð¡•Ù•¹Ðô‰¥Ñ…Ñ¥½¸ˆ°ÉÕ¹}¥õÉÕ¹}¥°‘…Ñ„õ‘…Ñ„¤¹•¹½‘” ¤(€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰ÉÕ¹}™¥¹¥Í¡•ˆ°(€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€‘…Ñ„õì(€€€€€€€€€€€€€€€€€€€€€€€€‰ÍÑ…ÑÕÌˆèÉ•ÍÕ±Ð¹•Ð ‰ÍÑ…ÑÕÌˆ°€‰½µÁ±•Ñ•ˆ¤°(€€€€€€€€€€€€€€€€€€€€€€€€‰‘ÕÉ…Ñ¥½¹}µÌˆè‘ÕÉ…Ñ¥½¹}µÌ°(€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€•á•ÁÐ…Íå¹¥¼¹…¹•±±•‘ÉÉ½Èè(€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌ€ôÉ½Õ¹ ¡Ñ¥µ”¹Á•É™}½Õ¹Ñ•È ¤€´ÉÕ¹}ÍÑ…ÉÑ•‘}…Ð¤€¨€ÄÀÀÀ¤(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€€€€€€€€€ÍÑ…ÑÕÌô‰…¹•±±•ˆ°(€€€€€€€€€€€€€€€€€€€Á•¹‘¥¹}…Ñ¥½¸õ9½¹”°(€€€€€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌõ‘ÕÉ…Ñ¥½¹}µÌ°(€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäõì(€€€€€€€€€€€€€€€€€€€€€€€€‰…¹ÍÝ•Èˆè€ˆˆ°(€€€€€€€€€€€€€€€€€€€€€€€€‰¥Ñ…Ñ¥½¹Ìˆèmt°(€€€€€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆè‘¥Ð¡É•ÍÕ±Ð¹•Ð ‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆ°íô¤¤°(€€€€€€€€€€€€€€€€€€€€€€€€‰¹½‘•}ÑÉ…”ˆè¹½‘•}ÑÉ…”°(€€€€€€€€€€€€€€€€€€€€€€€€‰µ½‘•±}…ÑÑ•µÁÑÌˆèl(€€€€€€€€€€€€€€€€€€€€€€€€€€€…ÑÑ•µÁÐ¹…Í}‘¥Ð ¤™½È…ÑÑ•µÁÐ¥¸…ÑÑ•µÁÑ}‰Õ™™•È(€€€€€€€€€€€€€€€€€€€€€€€t°(€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€€€€•ÉÉ½É}½‘”ô‰9Q}IU9}911ˆ°(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰ÉÕ¹}™¥¹¥Í¡•ˆ°(€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥õÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€‘…Ñ„õì‰ÍÑ…ÑÕÌˆè€‰…¹•±±•ˆ°€‰‘ÕÉ…Ñ¥½¹}µÌˆè‘ÕÉ…Ñ¥½¹}µÍô°(€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€•á•ÁÐá•ÁÑ¥½¸è(€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌ€ôÉ½Õ¹ ¡Ñ¥µ”¹Á•É™}½Õ¹Ñ•È ¤€´ÉÕ¹}ÍÑ…ÉÑ•‘}…Ð¤€¨€ÄÀÀÀ¤(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€€€€€€€€€ÍÑ…ÑÕÌô‰™…¥±•ˆ°(€€€€€€€€€€€€€€€€€€€•ÉÉ½É}½‘”ô‰9Q}IU9}%1ˆ°(€€€€€€€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌõ‘ÕÉ…Ñ¥½¹}µÌ°(€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäõì(€€€€€€€€€€€€€€€€€€€€€€€€‰…¹ÍÝ•Èˆè€ˆˆ°(€€€€€€€€€€€€€€€€€€€€€€€€‰¥Ñ…Ñ¥½¹Ìˆèmt°(€€€€€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆèíô°(€€€€€€€€€€€€€€€€€€€€€€€€‰¹½‘•}ÑÉ…”ˆè¹½‘•}ÑÉ…”°(€€€€€€€€€€€€€€€€€€€€€€€€‰µ½‘•±}…ÑÑ•µÁÑÌˆèl(€€€€€€€€€€€€€€€€€€€€€€€€€€€…ÑÑ•µÁÐ¹…Í}‘¥Ð ¤™½È…ÑÑ•µÁÐ¥¸…ÑÑ•µÁÑ}‰Õ™™•È(€€€€€€€€€€€€€€€€€€€€€€€t°(€€€€€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€å¥•±MMÙ•¹Ð (€€€€€€€€€€€€€€€€€€€•Ù•¹Ðô‰•ÉÉ½Èˆ°ÉÕ¹}¥õÉÕ¹}¥°‘…Ñ„õì‰µ•ÍÍ…”ˆè€‰•¹Ðƒ¢þC¢†3–’Ç¢Ò”‰ô(€€€€€€€€€€€€€€€€¤¹•¹½‘” ¤(€€€€€€€€€€€™¥¹…±±äè(€€€€€€€€€€€€€€€¥˜ÕÉÉ•¹Ñ}Ñ…Í¬è(€€€€€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹Õ¹É•¥ÍÑ•É}…•¹Ñ}Ñ…Í¬¡ÉÕ¹}¥°ÕÉÉ•¹Ñ}Ñ…Í¬¤((€€€€€€€É•ÑÕÉ¸MÑÉ•…µ¥¹I•ÍÁ½¹Í”¡•Ù•¹ÑÌ ¤°µ•‘¥…}ÑåÁ”ô‰Ñ•áÐ½•Ù•¹ÐµÍÑÉ•…´ˆ¤((€€€…ÁÀ¹•Ð ˆ½…Á¤½ØÄ½…•¹Ð½ÉÕ¹Ì½íÉÕ¹}¥‘ôˆ°É•ÍÁ½¹Í•}µ½‘•°õ•¹ÑIÕ¹I•…¤(€€€…Íå¹Œ‘•˜•Ñ}…•¹Ñ}ÉÕ¸ (€€€€€€€ÉÕ¹}¥èÍÑÈ°ÕÍ•Èè¹¹½Ñ…Ñ•‘mUÍ•ÉI•½É°•Á•¹‘Ì¡ÕÉÉ•¹Ñ}ÕÍ•È¥t(€€€€¤€´ø•¹ÑIÕ¹I•…è(€€€€€€€ÉÕ¸€ô…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹•Ñ}½Ý¹•‘}…•¹Ñ}ÉÕ¸¡ÉÕ¹}¥°ÕÍ•È¹¥¤(€€€€€€€¥˜¹½ÐÉÕ¸è(€€€€€€€€€€€É…¥Í”!QQAá•ÁÑ¥½¸¡ÍÑ…ÑÕÌ¹!QQA|ÐÀÑ}9=Q}=U9°€‹¢þC¢†3’â7–¶c–r ˆ¤(€€€€€€€É•ÑÕÉ¸}…•¹Ñ}ÉÕ¹}É•…¡ÉÕ¸¤((€€€…ÁÀ¹Á½ÍÐ ˆ½…Á¤½ØÄ½…•¹Ð½ÉÕ¹Ì½íÉÕ¹}¥‘ô½É•ÍÕµ”ˆ°É•ÍÁ½¹Í•}µ½‘•°õ•¹ÑIÕ¹I•…¤(€€€…Íå¹Œ‘•˜É•ÍÕµ•}…•¹Ñ}ÉÕ¸ (€€€€€€€ÉÕ¹}¥èÍÑÈ°(€€€€€€€Á…å±½…è•¹ÑI•ÍÕµ•I•ÅÕ•ÍÐ°(€€€€€€€ÕÍ•Èè¹¹½Ñ…Ñ•‘mUÍ•ÉI•½É°•Á•¹‘Ì¡ÕÉÉ•¹Ñ}ÕÍ•È¥t°(€€€€€€€|è¹¹½Ñ…Ñ•‘m9½¹”°•Á•¹‘Ì¡ÍÉ™}ÁÉ½Ñ•Ñ•¥t°(€€€€¤€´ø•¹ÑIÕ¹I•…è(€€€€€€€ÉÕ¸€ô…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹•Ñ}½Ý¹•‘}…•¹Ñ}ÉÕ¸¡ÉÕ¹}¥°ÕÍ•È¹¥¤(€€€€€€€¥˜¹½ÐÉÕ¸è(€€€€€€€€€€€É…¥Í”!QQAá•ÁÑ¥½¸¡ÍÑ…ÑÕÌ¹!QQA|ÐÀÑ}9=Q}=U9°€‹¢þC¢†3’â7–¶c–r ˆ¤(€€€€€€€¥˜ÉÕ¸¹ÍÑ…ÑÕÌ€„ô€‰¥¹Ñ•ÉÉÕÁÑ•ˆè(€€€€€€€€€€€É…¥Í”!QQAá•ÁÑ¥½¸¡ÍÑ…ÑÕÌ¹!QQA|ÐÀå}=91%P°€‹¢þC¢†3šr«–r£ž¶'–úž†»¢ºˆ¤(€€€€€€€Á•¹‘¥¹œ€ôÉÕ¸¹Á•¹‘¥¹}…Ñ¥½¸½Èíô(€€€€€€€¥˜Á•¹‘¥¹œ¹•Ð ‰…Ñ¥½¹}¥ˆ¤€„ôÁ…å±½…¹…Ñ¥½¹}¥è(€€€€€€€€€€€É…¥Í”!QQAá•ÁÑ¥½¸¡ÍÑ…ÑÕÌ¹!QQA|ÐÀå}=91%P°€‹–úž†»¢º“–*£’ös’â7–2ç¦4ˆ¤(€€€€€€€¥˜¹½Ð½¹™¥œ¹¥Í}‘•µ¼è(€€€€€€€€€€€™É½´±…¹É…Á ¹ÑåÁ•Ì¥µÁ½ÉÐ½µµ…¹((€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÉÙ¥•Ì¹…•¹Ñ}É…Á ¹…¥¹Ù½­” (€€€€€€€€€€€€€€€½µµ…¹¡É•ÍÕµ”õÁ…å±½…¹‘•¥Í¥½¸¤°(€€€€€€€€€€€€€€€ì(€€€€€€€€€€€€€€€€€€€€‰É•ÕÉÍ¥½¹}±¥µ¥Ðˆè€à°(€€€€€€€€€€€€€€€€€€€€‰½¹™¥ÕÉ…‰±”ˆèì‰Ñ¡É•…‘}¥ˆèÉÕ¸¹Ñ¡É•…‘}¥‘ô°(€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌõÉ•ÍÕ±Ð¹•Ð ‰ÍÑ…ÑÕÌˆ°€‰½µÁ±•Ñ•ˆ¤°(€€€€€€€€€€€€€€€Ñ½½±}ÍÑ•ÁÌõ¥¹Ð¡É•ÍÕ±Ð¹•Ð ‰Ñ½½±}ÍÑ•ÁÌˆ°ÉÕ¸¹Ñ½½±}ÍÑ•ÁÌ¤¤°(€€€€€€€€€€€€€€€Á•¹‘¥¹}…Ñ¥½¸õ9½¹”°(€€€€€€€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäõì(€€€€€€€€€€€€€€€€€€€€‰…¹ÍÝ•ÈˆèÍÑÈ¡É•ÍÕ±Ð¹•Ð ‰…¹ÍÝ•Èˆ°€ˆˆ¤¤°(€€€€€€€€€€€€€€€€€€€€‰¥Ñ…Ñ¥½¹Ìˆè}¥Ñ…Ñ¥½¹}‘¥ÑÌ (€€€€€€€€€€€€€€€€€€€€€€€É•ÍÕ±Ð¹•Ð ‰¥Ñ…Ñ¥½¹Ìˆ°mt¤°É•ÍÕ±Ð¹•Ð ‰É•ÑÉ¥•Ù•‘}•Ù¥‘•¹”ˆ°mt¤(€€€€€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆè‘¥Ð¡É•ÍÕ±Ð¹•Ð ‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆ°íô¤¤°(€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€€€€•ÉÉ½É}½‘”õÉ•ÍÕ±Ð¹•Ð ‰•ÉÉ½Èˆ¤°(€€€€€€€€€€€€¤(€€€€€€€•±Í”è(€€€€€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌô‰½µÁ±•Ñ•ˆ°(€€€€€€€€€€€€€€€Á•¹‘¥¹}…Ñ¥½¸õ9½¹”°(€€€€€€€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäõì(€€€€€€€€€€€€€€€€€€€€‰…¹ÍÝ•Èˆè€ (€€€€€€€€€€€€€€€€€€€€€€€€‹–ÞËš&ç––¾ó–—¾ò3¢¾ß¦'š.§–g¦'šZž2»–æÛ¢ÂžR£–>_š:Ÿ–¾ó–—š:—–>Žˆ(€€€€€€€€€€€€€€€€€€€€€€€¥˜Á…å±½…¹‘•¥Í¥½¸€ôô€‰…ÁÁÉ½Ù”ˆ(€€€€€€€€€€€€€€€€€€€€€€€•±Í”€‹–ÞË–>[šÚ#–¾ó–—Žˆ(€€€€€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€€€€€€‰¥Ñ…Ñ¥½¹Ìˆèmt°(€€€€€€€€€€€€€€€€€€€€‰•Ù¥‘•¹•}ÅÕ…±¥ÑäˆèÉÕ¸¹É•ÍÕ±Ñ}ÍÕµµ…Éä¹•Ð ‰•Ù¥‘•¹•}ÅÕ…±¥Ñäˆ°íô¤(€€€€€€€€€€€€€€€€€€€¥˜ÉÕ¸¹É•ÍÕ±Ñ}ÍÕµµ…Éä(€€€€€€€€€€€€€€€€€€€•±Í”íô°(€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸…Ý…¥Ð•Ñ}…•¹Ñ}ÉÕ¸¡ÉÕ¹}¥°ÕÍ•È¤((€€€…ÁÀ¹Á½ÍÐ ˆ½…Á¤½ØÄ½…•¹Ð½ÉÕ¹Ì½íÉÕ¹}¥‘ô½…¹•°ˆ°É•ÍÁ½¹Í•}µ½‘•°õ•¹ÑIÕ¹I•…¤(€€€…Íå¹Œ‘•˜…¹•±}…•¹Ñ}ÉÕ¸ (€€€€€€€ÉÕ¹}¥èÍÑÈ°(€€€€€€€ÕÍ•Èè¹¹½Ñ…Ñ•‘mUÍ•ÉI•½É°•Á•¹‘Ì¡ÕÉÉ•¹Ñ}ÕÍ•È¥t°(€€€€€€€|è¹¹½Ñ…Ñ•‘m9½¹”°•Á•¹‘Ì¡ÍÉ™}ÁÉ½Ñ•Ñ•¥t°(€€€€¤€´ø•¹ÑIÕ¹I•…è(€€€€€€€ÉÕ¸€ô…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹•Ñ}½Ý¹•‘}…•¹Ñ}ÉÕ¸¡ÉÕ¹}¥°ÕÍ•È¹¥¤(€€€€€€€¥˜¹½ÐÉÕ¸è(€€€€€€€€€€€É…¥Í”!QQAá•ÁÑ¥½¸¡ÍÑ…ÑÕÌ¹!QQA|ÐÀÑ}9=Q}=U9°€‹¢þC¢†3’â7–¶c–r ˆ¤(€€€€€€€¥˜ÉÕ¸¹ÍÑ…ÑÕÌ€ôô€‰…¹•±±•ˆè(€€€€€€€€€€€É•ÑÕÉ¸}…•¹Ñ}ÉÕ¹}É•…¡ÉÕ¸¤(€€€€€€€¥˜ÉÕ¸¹ÍÑ…ÑÕÌ¥¸ì‰½µÁ±•Ñ•ˆ°€‰™…¥±•‰ôè(€€€€€€€€€€€É…¥Í”!QQAá•ÁÑ¥½¸¡ÍÑ…ÑÕÌ¹!QQA|ÐÀå}=91%P°€‹¢þC¢†3–ÞËžî?žîOšv|ˆ¤(€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹É•Á½Í¥Ñ½Éä¹ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€€€€€ÉÕ¹}¥°(€€€€€€€€€€€ÕÍ•È¹¥°(€€€€€€€€€€€ÍÑ…ÑÕÌô‰…¹•±±•ˆ°(€€€€€€€€€€€Á•¹‘¥¹}…Ñ¥½¸õ9½¹”°(€€€€€€€€€€€•ÉÉ½É}½‘”ô‰9Q}IU9}911ˆ°(€€€€€€€€¤(€€€€€€€…Ý…¥ÐÍ•ÉÙ¥•Ì¹…¹•±}…•¹Ñ}Ñ…Í¬¡ÉÕ¹}¥¤(€€€€€€€É•ÑÕÉ¸…Ý…¥Ð•Ñ}…•¹Ñ}ÉÕ¸¡ÉÕ¹}¥°ÕÍ•È¤((€€€É•ÑÕÉ¸…ÁÀ(()…ÁÀ€ôÉ•…Ñ•}…ÁÀ ¤

@@ -1,11 +1,13 @@
 import asyncio
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from paperleaf_api.config import settings
-from paperleaf_api.main import create_app
+from paperleaf_api.main import AppServices, create_app
 from paperleaf_api.models import JobStatus, UserRole
 from paperleaf_api.repository import MemoryRepository
 from paperleaf_api.storage import LocalObjectStorage
@@ -17,6 +19,39 @@ def _login(client: TestClient, email: str, password: str) -> str:
     token = client.cookies.get("paperleaf_csrf")
     assert token
     return token
+
+
+def test_app_services_rebuild_keeps_quality_policy_and_checkpointer(tmp_path, monkeypatch) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        evidence_min_confidence=0.61,
+        evidence_min_vector_score=0.47,
+        evidence_min_lexical_coverage=0.29,
+    )
+    captured: list[dict] = []
+
+    def capture_graph(**kwargs):
+        captured.append(kwargs)
+        return object()
+
+    monkeypatch.setattr("paperleaf_api.main.build_agent_graph", capture_graph)
+    services = AppServices(
+        config,
+        repository=MemoryRepository(config.session_secret),
+        storage=LocalObjectStorage(tmp_path),
+    )
+    checkpointer = object()
+    services.build_agent_graph(checkpointer)
+
+    rebuilt = captured[-1]
+    assert rebuilt["checkpointer"] is checkpointer
+    assert rebuilt["quality_policy"].min_confidence == 0.61
+    assert rebuilt["quality_policy"].min_vector_score == 0.47
+    assert rebuilt["quality_policy"].min_lexical_coverage == 0.29
+    assert callable(rebuilt["answerer"])
+    assert callable(rebuilt["support_grader"])
 
 
 def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes: bytes) -> None:
@@ -33,6 +68,10 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
     with TestClient(app) as admin_client:
         assert admin_client.get("/health").json()["status"] == "ok"
         csrf = _login(admin_client, "admin@example.com", "admin-password-123")
+        model_health = admin_client.get("/api/v1/admin/model-health")
+        assert model_health.status_code == 200
+        assert model_health.json()["configured"] is False
+        assert model_health.json()["providers"] == []
         created = admin_client.post(
             "/api/v1/admin/users",
             headers={"X-CSRF-Token": csrf},
@@ -209,6 +248,8 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
             json={"content": "什么是 RAG？", "scope": "library", "web_enabled": False},
         )
         assert response.status_code == 200
+        assert "event: node_started" in response.text
+        assert "event: node_finished" in response.text
         assert "event: tool_finished" in response.text
         assert '"evidence_quality"' in response.text
         assert '"paper_title"' in response.text
@@ -216,6 +257,19 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
             record for record in repository.agent_runs.values() if record.user_id == owner.id
         )
         assert owner_run.result_summary["evidence_quality"]["grade"] == "sufficient"
+        assert [item["node"] for item in owner_run.result_summary["node_trace"]] == [
+            "validate_request",
+            "retrieve_library",
+            "grade_evidence",
+            "generate_answer",
+            "validate_citations",
+        ]
+        assert owner_run.duration_ms is not None
+        assert owner_run.duration_ms >= 0
+        public_run = owner_client.get(f"/api/v1/agent/runs/{owner_run.id}").json()
+        assert public_run["node_trace"] == owner_run.result_summary["node_trace"]
+        assert public_run["model_attempts"] == []
+        assert public_run["duration_ms"] == owner_run.duration_ms
 
     with TestClient(app_before_restart) as other_client:
         other_csrf = _login(other_client, "other@example.com", "other-password-123")
@@ -271,3 +325,70 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
     with TestClient(app_after_restart) as other_client:
         _login(other_client, "other@example.com", "other-password-123")
         assert other_client.get(f"/api/v1/agent/runs/{interrupted_id}").status_code == 404
+
+
+def test_agent_cancel_is_idempotent_and_stops_active_graph(tmp_path) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+    )
+    repository = MemoryRepository(config.session_secret)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+
+    class SlowGraph:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.cancelled = threading.Event()
+
+        async def astream(self, initial, graph_config, stream_mode):
+            assert stream_mode == "debug"
+            yield {
+                "step": 1,
+                "type": "task",
+                "payload": {"id": "slow-node", "name": "retrieve_library"},
+            }
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    slow_graph = SlowGraph()
+    app.state.services.agent_graph = slow_graph
+
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as executor:
+        csrf = _login(client, "admin@example.com", "admin-password-123")
+
+        def send_message():
+            return client.post(
+                "/api/v1/chat/sessions/cancel-test/messages",
+                headers={"X-CSRF-Token": csrf},
+                json={"content": "等待取消", "scope": "library", "web_enabled": False},
+            )
+
+        response_future = executor.submit(send_message)
+        assert slow_graph.started.wait(timeout=5)
+        run = next(iter(repository.agent_runs.values()))
+
+        cancelled = client.post(
+            f"/api/v1/agent/runs/{run.id}/cancel",
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert slow_graph.cancelled.wait(timeout=5)
+
+        stream_response = response_future.result(timeout=5)
+        assert stream_response.status_code == 200
+        assert '"status":"cancelled"' in stream_response.text
+
+        repeated = client.post(
+            f"/api/v1/agent/runs/{run.id}/cancel",
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["status"] == "cancelled"
