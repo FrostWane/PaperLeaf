@@ -209,4 +209,4 @@ flowchart LR
 
 ## 许可证
 
-PaperLeaf 基于 [Apache License 2.0](LICENSE) 发布。依赖项和字体遵循各自许可证。
+PaperLeaf 基于 [Apache License 2.0](LICENSE) 发布。依赖项和字体遵循各自许可证；仓库内自托管的 Geist 字体保留其 [SIL Open Font License 1.1](public/fonts/LICENSE-Geist.txt)。

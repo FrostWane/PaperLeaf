@@ -6,6 +6,15 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
   await page.goto("/demo");
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
 
+  const [sansFont, monoFont] = await Promise.all([
+    page.request.get("/fonts/geist-sans/Geist-Variable.woff2"),
+    page.request.get("/fonts/geist-mono/GeistMono-Variable.woff2"),
+  ]);
+  expect(sansFont.status()).toBe(200);
+  expect(monoFont.status()).toBe(200);
+  expect(sansFont.headers()["content-type"]).toContain("font/woff2");
+  expect(monoFont.headers()["content-type"]).toContain("font/woff2");
+
   const sizeOf = async (selector: string) =>
     page.locator(`.workspace-desktop ${selector}`).first().evaluate((element) =>
       Number.parseFloat(getComputedStyle(element).fontSize),
