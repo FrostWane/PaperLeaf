@@ -3,6 +3,7 @@ FROM ${NODE_IMAGE} AS dependencies
 WORKDIR /app
 RUN corepack enable && corepack install --global pnpm@9.7.0
 COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS build
