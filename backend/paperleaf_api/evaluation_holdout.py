@@ -84,6 +84,29 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_text_bytes(path: Path, *, newline: str = "\n") -> bytes:
+    """以显式换行格式编码文本，避免 Git checkout 改变锁校验结果。"""
+
+    text = path.read_text(encoding="utf-8")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return newline.join(normalized.split("\n")).encode("utf-8")
+
+
+def _sha256_canonical_text(path: Path) -> str:
+    return hashlib.sha256(_canonical_text_bytes(path)).hexdigest()
+
+
+def _matches_locked_text_sha(path: Path, expected: str) -> bool:
+    """兼容修复前由 Windows CRLF 生成的锁，同时保持内容变更可检测。"""
+
+    candidates = {
+        sha256_file(path),
+        _sha256_canonical_text(path),
+        hashlib.sha256(_canonical_text_bytes(path, newline="\r\n")).hexdigest(),
+    }
+    return expected in candidates
+
+
 def _read_jsonl(path: Path, model: type[BaseModel]) -> list[BaseModel]:
     records: list[BaseModel] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -155,9 +178,9 @@ def create_lock(
 ) -> HoldoutLock:
     return HoldoutLock(
         dataset_id=dataset_id,
-        manifest_sha256=sha256_file(manifest_path),
-        questions_sha256=sha256_file(questions_path),
-        oracle_sha256=sha256_file(oracle_path),
+        manifest_sha256=_sha256_canonical_text(manifest_path),
+        questions_sha256=_sha256_canonical_text(questions_path),
+        oracle_sha256=_sha256_canonical_text(oracle_path),
         candidate_variants=candidate_variants,
         protocol=protocol,
         locked_at=locked_at or datetime.now(UTC).isoformat(),
@@ -171,13 +194,15 @@ def verify_lock(
     questions_path: Path,
     oracle_path: Path,
 ) -> None:
-    actual = {
-        "manifest_sha256": sha256_file(manifest_path),
-        "questions_sha256": sha256_file(questions_path),
-        "oracle_sha256": sha256_file(oracle_path),
+    paths = {
+        "manifest_sha256": manifest_path,
+        "questions_sha256": questions_path,
+        "oracle_sha256": oracle_path,
     }
     mismatches = [
-        name for name, value in actual.items() if value != getattr(lock, name)
+        name
+        for name, path in paths.items()
+        if not _matches_locked_text_sha(path, getattr(lock, name))
     ]
     if mismatches:
         raise ValueError(f"holdout lock 校验失败：{mismatches}")
@@ -198,7 +223,7 @@ def verify_public_holdout_inputs(
             ("manifest_sha256", manifest_path),
             ("questions_sha256", questions_path),
         )
-        if sha256_file(path) != getattr(lock, field)
+        if not _matches_locked_text_sha(path, getattr(lock, field))
     ]
     if mismatches:
         raise ValueError(f"holdout 公开输入校验失败：{mismatches}")
@@ -332,7 +357,9 @@ def evaluate_locked_holdout(
         raise ValueError(f"锁中存在未注册候选：{unknown}")
     implementation_path = Path(__file__).with_name("evaluation_offline.py")
     locked_implementation = lock.protocol.get("retrieval_implementation_sha256")
-    if locked_implementation != sha256_file(implementation_path):
+    if not isinstance(locked_implementation, str) or not _matches_locked_text_sha(
+        implementation_path, locked_implementation
+    ):
         raise ValueError("检索实现哈希与预注册协议不一致")
     k = int(lock.protocol.get("k", 0))
     if k <= 0:

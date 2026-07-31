@@ -99,6 +99,34 @@ def test_holdout_lock_detects_any_input_change(tmp_path: Path) -> None:
         )
 
 
+def test_holdout_lock_is_portable_across_line_endings(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    questions = tmp_path / "questions.jsonl"
+    oracle = tmp_path / "oracle.jsonl"
+    for path in (manifest, questions, oracle):
+        path.write_bytes(b'{"first":true}\n{"second":true}\n')
+
+    lock = create_lock(
+        dataset_id="holdout",
+        manifest_path=manifest,
+        questions_path=questions,
+        oracle_path=oracle,
+        candidate_variants=["rrf_page"],
+        protocol={"k": 5},
+        locked_at="2026-07-31T00:00:00+00:00",
+    )
+
+    for path in (manifest, questions, oracle):
+        path.write_bytes(b'{"first":true}\r\n{"second":true}\r\n')
+
+    verify_lock(
+        lock,
+        manifest_path=manifest,
+        questions_path=questions,
+        oracle_path=oracle,
+    )
+
+
 def test_first_reveal_receipt_is_single_use(tmp_path: Path) -> None:
     lock = tmp_path / "lock.json"
     result = tmp_path / "result.json"
