@@ -16,6 +16,7 @@ flowchart TB
         Worker["Python Worker\n解析 / OCR / 切块 / 嵌入 / 清理"]
         Graph["LangGraph\n状态 / 路由 / 中断 / 恢复"]
         RAG["页级 RAG\n向量 + 关键词 + RRF"]
+        Runtime["模型运行时\n超时 / 主备 / 熔断 / 脱敏轨迹"]
     end
     subgraph Data["数据层"]
         DB[("PostgreSQL + pgvector")]
@@ -30,11 +31,12 @@ flowchart TB
     API --> Graph
     Graph --> RAG
     Graph --> Arxiv
-    Graph --> Model
+    Graph --> Runtime
+    Runtime --> Model
     RAG --> DB
     Worker --> DB
     Worker --> Store
-    Worker --> Model
+    Worker --> Runtime
 ```
 
 ### Web
@@ -48,7 +50,7 @@ flowchart TB
 - 校验会话、CSRF、资源所有权、管理员权限和输入模型。
 - 生成 PDF 的鉴权 Range 响应，不公开 MinIO Bucket。
 - 创建后台任务和 Agent Run，不在请求线程中解析大 PDF。
-- 将可公开的工具活动通过 SSE 返回，不输出隐藏推理。
+- 将可公开的节点开始/完成、工具活动、耗时和错误码通过 SSE 返回，不输出隐藏推理。
 
 ### Worker
 
@@ -100,6 +102,18 @@ Chunk 不跨物理页，引用始终关联 `paper_id + page_number + chunk_id`�
 
 `tool_finished` SSE 只向前端发送上述可公开的质量摘要，不发送思维链。该边界使切块、召回、页聚合、检索质量、答案支持、拒答和引用准确率可以分别测试。
 
+## 模型运行时
+
+问答、证据支持检查、论文总结、查询/文献嵌入和视觉 OCR 共用同一类运行策略，但按 `provider + purpose` 隔离故障状态：
+
+1. 先调用主服务；可重试故障在配置的 1~3 次范围内重试。
+2. 主服务失败或熔断时尝试备用服务；未配置备用服务时进入相应能力的确定性降级。
+3. 每次调用由应用层统一设置超时，SDK 内建重试关闭，避免嵌套重试放大请求量。
+4. 连续失败达到阈值后打开熔断器；冷却结束只允许一个半开探测，成功后关闭，失败则重新计时。
+5. 用户取消会沿异步任务传播到当前 Graph 和模型调用，取消不会计入服务故障。
+
+运行记录只包含用途、服务别名、模型名、成功/失败/超时/取消状态、尝试序号、耗时和稳定错误码。API Key、Base URL、提示词、证据正文、响应正文与隐藏推理均不进入公开轨迹。
+
 ## Agent 边界
 
 当前 LangGraph 只编排以下受限工具：
@@ -123,7 +137,8 @@ arXiv 下载由独立、鉴权且需要 CSRF 的导入接口完成；论文总�
 - `migrate` 容器成功后 API 和 Worker 才启动。
 - PostgreSQL 与 MinIO 使用健康检查和持久卷。
 - 作业记录阶段、尝试次数和错误码；重复执行不应生成重复 Chunk 或对象。
-- Agent Run 所有权与中断状态、LangGraph Checkpoint 均写入 PostgreSQL，API 重建后可按原运行 ID 恢复；其他用户访问同一 ID 仍返回 404。
+- Agent Run 所有权、中断状态、节点轨迹与 LangGraph Checkpoint 均写入 PostgreSQL，API 重建后可按原运行 ID 恢复；其他用户访问同一 ID 仍返回 404。
+- API 维护当前进程内运行任务表；取消接口先持久化取消状态，再向对应异步任务传播取消。重复取消返回同一结果，完成或失败的运行不能被改写为取消。
 - 删除采用 `deleting` 状态和后台清理，避免部分删除对外可见。
 
 ## 扩展点

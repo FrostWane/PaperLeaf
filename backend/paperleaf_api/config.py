@@ -54,6 +54,27 @@ class Settings:
         if os.getenv("PAPERLEAF_EMBEDDING_DIMENSIONS")
         else None
     )
+    fallback_openai_api_key: str | None = os.getenv("PAPERLEAF_FALLBACK_OPENAI_API_KEY")
+    fallback_openai_base_url: str = os.getenv(
+        "PAPERLEAF_FALLBACK_OPENAI_BASE_URL", "https://api.openai.com/v1"
+    )
+    fallback_chat_model: str = os.getenv(
+        "PAPERLEAF_FALLBACK_CHAT_MODEL", "gpt-4.1-mini"
+    )
+    fallback_vision_model: str | None = os.getenv("PAPERLEAF_FALLBACK_VISION_MODEL")
+    fallback_embedding_model: str = os.getenv(
+        "PAPERLEAF_FALLBACK_EMBEDDING_MODEL", "text-embedding-3-small"
+    )
+    model_timeout_seconds: float = float(os.getenv("PAPERLEAF_MODEL_TIMEOUT_SECONDS", "30"))
+    model_attempts_per_provider: int = int(
+        os.getenv("PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER", "1")
+    )
+    model_circuit_failure_threshold: int = int(
+        os.getenv("PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD", "3")
+    )
+    model_circuit_cooldown_seconds: float = float(
+        os.getenv("PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS", "30")
+    )
     evidence_min_confidence: float = float(os.getenv("PAPERLEAF_EVIDENCE_MIN_CONFIDENCE", "0.35"))
     evidence_min_vector_score: float = float(
         os.getenv("PAPERLEAF_EVIDENCE_MIN_VECTOR_SCORE", "0.35")
@@ -81,6 +102,14 @@ class Settings:
         )
         if any(value < 0 or value > 1 for value in quality_values):
             raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
+        if self.model_timeout_seconds <= 0:
+            raise RuntimeError("模型超时必须大于 0")
+        if not 1 <= self.model_attempts_per_provider <= 3:
+            raise RuntimeError("单端点模型尝试次数必须位于 1 到 3 之间")
+        if self.model_circuit_failure_threshold < 1:
+            raise RuntimeError("模型断路器失败阈值必须至少为 1")
+        if self.model_circuit_cooldown_seconds <= 0:
+            raise RuntimeError("模型断路器冷却时间必须大于 0")
         if self.mode != "production":
             return
         weak = {"local-demo-only-change-me", "paperleaf-dev-admin", "paperleaf-local"}

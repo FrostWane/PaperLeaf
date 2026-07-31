@@ -1,6 +1,6 @@
 import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
-import type { AdminJob, AgentAnswer, AgentEvidenceQuality, ArxivResult, BulkPaperActionInput, CollectionInput, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTag, PaperUpdateInput, SessionUser, TagInput, UserRecord } from "./types";
+import type { AdminJob, AgentActivity, AgentAnswer, AgentEvidenceQuality, ArxivResult, BulkPaperActionInput, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTag, PaperUpdateInput, SessionUser, TagInput, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -164,12 +164,84 @@ export async function retryAdminJob(jobId: string): Promise<AdminJob> {
   return mapAdminJob(await response.json() as Record<string, unknown>);
 }
 
+function mapPurposeHealth(item: Record<string, unknown>): ModelPurposeHealth {
+  const status = String(item.status ?? "closed");
+  return {
+    configured: item.configured === true,
+    status: status === "open" ? "open" : status === "half_open" ? "half_open" : "closed",
+    consecutiveFailures: Number(item.consecutive_failures ?? 0),
+    retryAfterMs: Number(item.retry_after_ms ?? 0),
+  };
+}
+
+export async function getAdminModelHealth(): Promise<ModelRuntimeHealth> {
+  const response = await fetch(`${API_BASE_URL}/admin/model-health`, { credentials: "include" });
+  if (!response.ok) throw new Error("模型运行状态读取失败");
+  const raw = await response.json() as Record<string, unknown>;
+  const policy = (raw.policy ?? {}) as Record<string, unknown>;
+  const providers = Array.isArray(raw.providers) ? raw.providers : [];
+  return {
+    configured: raw.configured === true,
+    providers: providers.map((entry) => {
+      const item = entry as Record<string, unknown>;
+      const rawPurposes = (item.purposes ?? {}) as Record<string, unknown>;
+      return {
+        provider: String(item.provider ?? "unknown"),
+        purposes: Object.fromEntries(Object.entries(rawPurposes).map(([key, value]) => [key, mapPurposeHealth((value ?? {}) as Record<string, unknown>)])),
+      };
+    }),
+    policy: {
+      timeoutSeconds: Number(policy.timeout_seconds ?? 0),
+      attemptsPerProvider: Number(policy.attempts_per_provider ?? 0),
+      failureThreshold: Number(policy.failure_threshold ?? 0),
+      cooldownSeconds: Number(policy.cooldown_seconds ?? 0),
+    },
+  };
+}
+
+const nodeLabels: Record<string, string> = {
+  validate_request: "检查问题范围",
+  classify_intent: "识别研究意图",
+  retrieve_library: "检索文献证据",
+  grade_evidence: "核验证据质量",
+  search_arxiv: "搜索 arXiv",
+  propose_import: "等待导入确认",
+  summarize_paper: "整理论文概览",
+  build_structure_graph: "构建证据结构",
+  generate_answer: "组织证据回答",
+  validate_citations: "校验页码引用",
+  abstain: "说明证据不足",
+  finalize: "完成回答",
+};
+
+function mapAgentActivity(data: unknown, status: AgentActivity["status"]): AgentActivity | null {
+  if (!data || typeof data !== "object") return null;
+  const item = data as Record<string, unknown>;
+  const node = String(item.node ?? "");
+  if (!node) return null;
+  const step = Number(item.step ?? 0);
+  return {
+    key: `${step}:${node}`,
+    node,
+    label: nodeLabels[node] ?? "处理研究任务",
+    step,
+    status,
+    durationMs: item.duration_ms === undefined ? undefined : Number(item.duration_ms),
+  };
+}
+
+function upsertActivity(items: AgentActivity[], next: AgentActivity): AgentActivity[] {
+  const index = items.findIndex((item) => item.key === next.key);
+  if (index < 0) return [...items, next];
+  return items.map((item, itemIndex) => itemIndex === index ? { ...item, ...next } : item);
+}
+
 export interface PaperLeafDataSource {
   listPapers(): Promise<Paper[]>;
   getPaper(paperId: string): Promise<Paper>;
   searchArxiv(query: string): Promise<ArxivResult[]>;
   importArxiv(arxivId: string): Promise<void>;
-  ask(question: string, paperIds?: string[]): Promise<AgentAnswer>;
+  ask(question: string, paperIds?: string[], onActivity?: (activity: AgentActivity) => void): Promise<AgentAnswer>;
   upload(file: File, onProgress: (value: number) => void): Promise<Paper>;
   updatePaper(paperId: string, input: PaperUpdateInput): Promise<Paper>;
   deletePaper(paperId: string): Promise<void>;
@@ -219,7 +291,19 @@ export const demoDataSource: PaperLeafDataSource = {
   async getPaper(paperId) { await wait(80); return demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; },
   async searchArxiv(query) { await wait(220); return arxivResults.filter((item) => `${item.title} ${item.summary}`.toLowerCase().includes(query.toLowerCase()) || !query); },
   async importArxiv() { await wait(320); },
-  async ask(question) { await wait(420); return { ...groundedAnswer, question }; },
+  async ask(question, _paperIds, onActivity) {
+    const steps = ["validate_request", "retrieve_library", "grade_evidence", "generate_answer", "validate_citations"];
+    const activities: AgentActivity[] = [];
+    for (const [index, node] of steps.entries()) {
+      const running = mapAgentActivity({ node, step: index + 1 }, "running")!;
+      onActivity?.(running);
+      await wait(90);
+      const completed = { ...running, status: "completed" as const, durationMs: 72 + index * 11 };
+      activities.push(completed);
+      onActivity?.(completed);
+    }
+    return { ...groundedAnswer, question, activities };
+  },
   async upload(file, onProgress) {
     for (const value of [18, 42, 71, 100]) { await wait(130); onProgress(value); }
     const uploaded: Paper = { id: `local-${Date.now()}`, title: file.name.replace(/\.pdf$/i, ""), authors: "待识别", year: new Date().getFullYear(), venue: "本地上传", pages: 0, status: "indexing", progress: 0, tags: [], abstract: "PDF 已上传，正在解析元数据与页面文本。", createdAt: new Date().toISOString() };
@@ -288,17 +372,21 @@ export const realDataSource: PaperLeafDataSource = {
     return raw.map((item) => ({ id: String(item.arxiv_id), title: String(item.title), authors: Array.isArray(item.authors) ? item.authors.join("、") : "", year: Number(String(item.published ?? "").slice(0, 4)), summary: String(item.abstract ?? "") }));
   },
   async importArxiv(arxivId) { const r = await fetch(`${API_BASE_URL}/discover/arxiv/import`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ arxiv_id: arxivId }) }); if (!r.ok) throw new Error("arXiv 导入失败"); },
-  async ask(question, paperIds = []) {
+  async ask(question, paperIds = [], onActivity) {
     const r = await fetch(`${API_BASE_URL}/chat/sessions/default/messages`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ content: question, scope: paperIds.length === 1 ? "paper" : paperIds.length > 1 ? "selection" : "library", selected_paper_ids: paperIds, web_enabled: false }) });
     if (!r.ok) throw new Error("提问失败");
-    let answer = ""; const citations: AgentAnswer["citations"] = []; let evidenceQuality: AgentEvidenceQuality | undefined;
+    let answer = ""; const citations: AgentAnswer["citations"] = []; let evidenceQuality: AgentEvidenceQuality | undefined; let activities: AgentActivity[] = [];
     for await (const event of readAgentStream(r)) {
+      if (event.type === "node_started" || event.type === "node_finished") {
+        const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : ((event.data as Record<string, unknown>)?.status === "failed" ? "failed" : "completed"));
+        if (activity) { activities = upsertActivity(activities, activity); onActivity?.(activity); }
+      }
       if (event.type === "message_delta" && typeof event.data === "object" && event.data && "delta" in event.data) answer += String((event.data as { delta: unknown }).delta);
       if (event.type === "tool_finished" && typeof event.data === "object" && event.data && "evidence_quality" in event.data) { const quality = (event.data as { evidence_quality?: unknown }).evidence_quality; if (typeof quality === "object" && quality) evidenceQuality = mapEvidenceQuality(quality as Record<string, unknown>); }
       if (event.type === "citation" && typeof event.data === "object" && event.data) { const item = event.data as Record<string, unknown>; const page = Number(item.physical_page ?? item.page ?? 1); citations.push({ id: String(item.chunk_id ?? `c${citations.length + 1}`), chunkId: String(item.chunk_id ?? ""), paperId: String(item.paper_id ?? ""), paperTitle: String(item.paper_title ?? "文献"), page, quote: String(item.excerpt ?? item.quote ?? item.text ?? ""), href: `${API_BASE_URL}/papers/${encodeURIComponent(String(item.paper_id ?? ""))}/file#page=${page}` }); }
       if (event.type === "error") throw new Error("Agent 运行失败");
     }
-    return { question, answer, citations, evidenceQuality };
+    return { question, answer, citations, evidenceQuality, activities };
   },
   async upload(file, onProgress) { const body = new FormData(); body.set("file", file); onProgress(10); const r = await fetch(`${API_BASE_URL}/papers`, { method: "POST", credentials: "include", headers: mutationHeaders(), body }); if (!r.ok) throw new Error("上传失败"); onProgress(100); return mapPaper(await r.json() as Record<string, unknown>); },
   async updatePaper(paperId, input) {

@@ -17,12 +17,14 @@ PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保�
 - 向量检索、关键词检索与 RRF 融合，不依赖一键式 RAG Chain
 - 混合候选按物理页去重并合并通道信号；弱匹配与缺少答案支持时拒答
 - 使用 LangGraph 编排有界条件路由、人工确认、持久恢复与引用校验
+- Agent 通过 SSE 展示可公开的节点进度与耗时，运行中的任务可被真正取消
+- 主/备用 OpenAI-compatible 服务统一经过超时、受控重试和按用途隔离的熔断器
 - 搜索 arXiv，并在用户确认后导入开放 PDF
 - 后端 API 生成论文总结和带证据的结构图
-- 管理员创建、停用用户；默认不读取用户文献内容
+- 管理员创建、停用用户并查看脱敏的模型运行状态；默认不读取用户文献内容
 - 未配置模型时仍可使用文献管理和 PDF 阅读功能
 
-当前 `0.4.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带集合、标签和批量整理能力的演示文献库；Docker Compose 构建则固定使用 `real` 数据模式并连接 FastAPI。
+当前 `0.5.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带集合、标签和批量整理能力的演示文献库；跨文献提问会展示与真实 SSE 契约一致的 Agent 运行轨迹。Docker Compose 构建固定使用 `real` 数据模式并连接 FastAPI。
 
 ## 快速开始
 
@@ -84,6 +86,14 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_EMBEDDING_MODEL` | 向量模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 向量维度，必须与模型输出一致 |
 | `PAPERLEAF_VISION_MODEL` | 可选；低文本页 OCR 使用的视觉模型 |
+| `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用服务 Key；不配置则只使用主服务 |
+| `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用 OpenAI-compatible 根地址 |
+| `PAPERLEAF_FALLBACK_CHAT_MODEL` | 备用问答与总结模型 |
+| `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
+| `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
+| `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务最多尝试次数，范围 1~3 |
+| `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败多少次后打开熔断器 |
+| `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断后的冷却时间 |
 
 修改嵌入模型或维度后，需要对既有文献重新建立索引。未配置 API Key 时，生产环境不会把文献发送给任何模型：系统保留全文检索、引用校验和提取式产物，但不会生成向量、调用模型回答或执行视觉 OCR。
 

@@ -25,6 +25,9 @@ test("跨文献提问展示证据质量并跳到引用物理页", async ({ page 
   await page.getByPlaceholder(/这些论文如何解释/).fill("作者为什么放弃循环结构？");
   await page.getByRole("button", { name: "开始提问" }).click();
 
+  const trace = page.getByLabel("Agent 运行轨迹");
+  await expect(trace).toBeVisible();
+  await expect(trace).toContainText("检查问题范围");
   await expect(page.getByRole("status")).toContainText("关键词与语义检索相互印证");
   await page.getByRole("link", { name: /Attention Is All You Need.*PDF 2/ }).click();
 

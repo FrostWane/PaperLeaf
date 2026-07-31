@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 
 from ..config import settings
 from ..db import get_session_factory
+from ..model_runtime import ModelRouter, ModelRuntimeError, build_model_router
 from ..models import Paper, PaperChunk
 from ..rag.citations import Evidence
 from ..rag.retrieval_quality import deduplicate_evidence_by_page
@@ -84,19 +85,35 @@ class ArxivSearch:
 class SQLLibrarySearch:
     """按用户隔离的 PostgreSQL 全文 + 可选向量检索。"""
 
+    def __init__(
+        self,
+        config: Any = settings,
+        model_router: ModelRouter[Any] | None = None,
+    ) -> None:
+        self.config = config
+        self.model_router = model_router or build_model_router(config)
+
     async def _embed_query(self, query: str) -> list[float] | None:
-        if not settings.openai_api_key:
+        if not self.model_router.has_provider("embedding"):
             return None
         from langchain_openai import OpenAIEmbeddings
 
-        kwargs: dict[str, Any] = {
-            "model": settings.embedding_model,
-            "api_key": settings.openai_api_key,
-            "base_url": settings.openai_base_url,
-        }
-        if settings.embedding_dimensions:
-            kwargs["dimensions"] = settings.embedding_dimensions
-        return await OpenAIEmbeddings(**kwargs).aembed_query(query)
+        async def invoke(provider: Any) -> list[float]:
+            kwargs: dict[str, Any] = {
+                "model": provider.embedding_model,
+                "api_key": provider.api_key,
+                "base_url": provider.base_url,
+                "max_retries": 0,
+            }
+            if self.config.embedding_dimensions:
+                kwargs["dimensions"] = self.config.embedding_dimensions
+            return await OpenAIEmbeddings(**kwargs).aembed_query(query)
+
+        try:
+            return await self.model_router.execute("embedding", invoke)
+        except ModelRuntimeError:
+            # 向量服务故障时保留关键词检索，不让整个文库问答不可用。
+            return None
 
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
         async with get_session_factory()() as session:

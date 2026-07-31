@@ -106,6 +106,9 @@ class AgentRunRead(BaseModel):
     answer: str = ""
     citations: list[dict[str, Any]] = Field(default_factory=list)
     evidence_quality: dict[str, Any] = Field(default_factory=dict)
+    node_trace: list[dict[str, Any]] = Field(default_factory=list)
+    model_attempts: list[dict[str, Any]] = Field(default_factory=list)
+    duration_ms: Optional[int] = None
     error: Optional[str] = None
 
 
@@ -238,6 +241,7 @@ class SSEEvent(BaseModel):
     event: Literal[
         "run_started",
         "node_started",
+        "node_finished",
         "tool_started",
         "tool_finished",
         "message_delta",

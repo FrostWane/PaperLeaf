@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,11 +26,16 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .agent.graph import build_agent_graph, build_configured_evidence_support_grader
+from .agent.graph import (
+    build_agent_graph,
+    build_configured_answerer,
+    build_configured_evidence_support_grader,
+)
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .artifacts import load_paper_evidence, structure_graph, summarize_evidence
 from .arxiv_service import fetch_arxiv_pdf, search_arxiv
 from .config import Settings, settings
+from .model_runtime import build_model_router, collect_model_attempts
 from .models import PaperStatus, UserRole
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
@@ -64,6 +70,17 @@ from .schemas import (
 from .security import csrf_matches, new_csrf_token, new_session_token, verify_password
 from .storage import ObjectStorage, create_storage, parse_byte_range, validate_pdf
 
+_PUBLIC_AGENT_NODES = {
+    "validate_request",
+    "retrieve_library",
+    "grade_evidence",
+    "generate_answer",
+    "validate_citations",
+    "abstain",
+    "search_arxiv",
+    "propose_import",
+}
+
 
 class AppServices:
     def __init__(
@@ -79,16 +96,49 @@ class AppServices:
             else SQLAlchemyRepository(config.session_secret)
         )
         self.storage = storage or create_storage(config)
-        self.retriever = DemoLibrarySearch() if config.is_demo else SQLLibrarySearch()
-        self.agent_graph = build_agent_graph(
-            retriever=self.retriever,
-            quality_policy=EvidenceQualityPolicy(
-                min_confidence=config.evidence_min_confidence,
-                min_vector_score=config.evidence_min_vector_score,
-                min_lexical_coverage=config.evidence_min_lexical_coverage,
-            ),
-            support_grader=build_configured_evidence_support_grader(config),
+        self.model_router = build_model_router(config)
+        self.retriever = (
+            DemoLibrarySearch()
+            if config.is_demo
+            else SQLLibrarySearch(config, self.model_router)
         )
+        self.agent_graph = self.build_agent_graph()
+        self._agent_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._agent_tasks_lock = asyncio.Lock()
+
+    def build_agent_graph(self, checkpointer: Any | None = None) -> Any:
+        """生产重建 Graph 时保持与 App 相同的模型和质量策略。"""
+
+        return build_agent_graph(
+            retriever=self.retriever,
+            answerer=build_configured_answerer(self.config, self.model_router),
+            checkpointer=checkpointer,
+            quality_policy=EvidenceQualityPolicy(
+                min_confidence=self.config.evidence_min_confidence,
+                min_vector_score=self.config.evidence_min_vector_score,
+                min_lexical_coverage=self.config.evidence_min_lexical_coverage,
+            ),
+            support_grader=build_configured_evidence_support_grader(
+                self.config, self.model_router
+            ),
+        )
+
+    async def register_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
+        async with self._agent_tasks_lock:
+            self._agent_tasks[run_id] = task
+
+    async def unregister_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
+        async with self._agent_tasks_lock:
+            if self._agent_tasks.get(run_id) is task:
+                self._agent_tasks.pop(run_id, None)
+
+    async def cancel_agent_task(self, run_id: str) -> bool:
+        async with self._agent_tasks_lock:
+            task = self._agent_tasks.get(run_id)
+            if not task or task.done():
+                return False
+            task.cancel()
+            return True
 
 
 def _paper_read(paper: PaperRecord) -> PaperRead:
@@ -127,6 +177,9 @@ def _agent_run_read(record: Any) -> AgentRunRead:
         answer=summary.get("answer", ""),
         citations=summary.get("citations", []),
         evidence_quality=summary.get("evidence_quality", {}),
+        node_trace=summary.get("node_trace", []),
+        model_attempts=summary.get("model_attempts", []),
+        duration_ms=getattr(record, "duration_ms", None),
         error=record.error_code,
     )
 
@@ -154,14 +207,12 @@ def create_app(
         checkpoint_url = config.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
         async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
             await checkpointer.setup()
-            services.agent_graph = build_agent_graph(
-                retriever=services.retriever, checkpointer=checkpointer
-            )
+            services.agent_graph = services.build_agent_graph(checkpointer)
             yield
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.4.0",
+        version="0.5.0",
         description="个人科研文献库、页级 RAG 与受控研究 Agent",
         lifespan=lifespan,
     )
@@ -325,6 +376,22 @@ def create_app(
         if not job:
             raise HTTPException(status.HTTP_409_CONFLICT, "作业不存在或当前状态不可重试")
         return JobRead.model_validate(job)
+
+    @app.get("/api/v1/admin/model-health")
+    async def model_health(
+        _: Annotated[UserRecord, Depends(admin_user)],
+    ) -> dict[str, Any]:
+        providers = services.model_router.health()
+        return {
+            "configured": bool(providers),
+            "providers": providers,
+            "policy": {
+                "timeout_seconds": config.model_timeout_seconds,
+                "attempts_per_provider": config.model_attempts_per_provider,
+                "failure_threshold": config.model_circuit_failure_threshold,
+                "cooldown_seconds": config.model_circuit_cooldown_seconds,
+            },
+        }
 
     @app.get("/api/v1/collections", response_model=list[CollectionRead])
     async def list_collections(
@@ -758,7 +825,9 @@ def create_app(
         evidence = await load_paper_evidence(user.id, paper_id)
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
-        content, mode = await summarize_evidence(evidence)
+        content, mode = await summarize_evidence(
+            evidence, model_router=services.model_router, config=config
+        )
         return SummaryResponse(
             paper_id=paper_id,
             content=content,
@@ -809,21 +878,118 @@ def create_app(
         await services.repository.create_agent_run(run_id, user.id, session_id, thread_id)
 
         async def events() -> AsyncIterator[str]:
+            run_started_at = time.perf_counter()
+            current_task = asyncio.current_task()
+            node_started_at: dict[str, float] = {}
+            node_attempt_offsets: dict[str, int] = {}
+            node_trace: list[dict[str, Any]] = []
+            attempt_buffer: list[Any] = []
+            result: dict[str, Any] = dict(initial)
+            if current_task:
+                await services.register_agent_task(run_id, current_task)
+            await services.repository.update_owned_agent_run(
+                run_id, user.id, status="running"
+            )
             yield SSEEvent(event="run_started", run_id=run_id).encode()
-            yield SSEEvent(
-                event="tool_started", run_id=run_id, data={"tool": "search_library"}
-            ).encode()
             try:
-                result = await services.agent_graph.ainvoke(
-                    initial, {"recursion_limit": 8, "configurable": {"thread_id": thread_id}}
-                )
+                graph_config = {
+                    "recursion_limit": 8,
+                    "configurable": {"thread_id": thread_id},
+                }
+                with collect_model_attempts() as attempt_buffer:
+                    if hasattr(services.agent_graph, "astream"):
+                        async for graph_event in services.agent_graph.astream(
+                            initial, graph_config, stream_mode="debug"
+                        ):
+                            event_type = str(graph_event.get("type", ""))
+                            payload_data = graph_event.get("payload", {})
+                            if not isinstance(payload_data, dict):
+                                continue
+                            raw_node = str(payload_data.get("name", ""))
+                            task_id = str(payload_data.get("id", ""))
+                            step = int(graph_event.get("step", 0))
+                            if event_type == "task":
+                                if raw_node not in _PUBLIC_AGENT_NODES:
+                                    continue
+                                node_started_at[task_id] = time.perf_counter()
+                                node_attempt_offsets[task_id] = len(attempt_buffer)
+                                yield SSEEvent(
+                                    event="node_started",
+                                    run_id=run_id,
+                                    data={"node": raw_node, "step": step},
+                                ).encode()
+                                if raw_node == "retrieve_library":
+                                    yield SSEEvent(
+                                        event="tool_started",
+                                        run_id=run_id,
+                                        data={"tool": "search_library"},
+                                    ).encode()
+                                elif raw_node == "search_arxiv":
+                                    yield SSEEvent(
+                                        event="tool_started",
+                                        run_id=run_id,
+                                        data={"tool": "search_arxiv"},
+                                    ).encode()
+                                continue
+                            if event_type != "task_result":
+                                continue
+                            delta = payload_data.get("result")
+                            if isinstance(delta, dict):
+                                result.update(delta)
+                            interrupts = payload_data.get("interrupts")
+                            if interrupts:
+                                result["__interrupt__"] = interrupts
+                            if raw_node not in _PUBLIC_AGENT_NODES:
+                                continue
+                            duration_ms = round(
+                                (time.perf_counter() - node_started_at.pop(task_id, run_started_at))
+                                * 1000
+                            )
+                            offset = node_attempt_offsets.pop(task_id, len(attempt_buffer))
+                            node_model_attempts = [
+                                attempt.as_dict() for attempt in attempt_buffer[offset:]
+                            ]
+                            failed = bool(payload_data.get("error"))
+                            trace_item = {
+                                "node": raw_node,
+                                "step": step,
+                                "status": "failed" if failed else "completed",
+                                "duration_ms": duration_ms,
+                                "error_code": "NODE_EXECUTION_FAILED" if failed else None,
+                                "model_attempts": node_model_attempts,
+                            }
+                            node_trace.append(trace_item)
+                            yield SSEEvent(
+                                event="node_finished", run_id=run_id, data=trace_item
+                            ).encode()
+                            if raw_node == "grade_evidence":
+                                yield SSEEvent(
+                                    event="tool_finished",
+                                    run_id=run_id,
+                                    data={
+                                        "tool": "search_library",
+                                        "evidence_quality": dict(
+                                            result.get("evidence_quality", {})
+                                        ),
+                                    },
+                                ).encode()
+                            elif raw_node == "search_arxiv":
+                                yield SSEEvent(
+                                    event="tool_finished",
+                                    run_id=run_id,
+                                    data={
+                                        "tool": "search_arxiv",
+                                        "candidate_count": len(
+                                            result.get("arxiv_candidates", [])
+                                        ),
+                                    },
+                                ).encode()
+                    else:
+                        result = await services.agent_graph.ainvoke(initial, graph_config)
+                model_attempts = [attempt.as_dict() for attempt in attempt_buffer]
                 quality = dict(result.get("evidence_quality", {}))
-                yield SSEEvent(
-                    event="tool_finished",
-                    run_id=run_id,
-                    data={"tool": "search_library", "evidence_quality": quality},
-                ).encode()
                 interrupts = result.get("__interrupt__", [])
+                duration_ms = round((time.perf_counter() - run_started_at) * 1000)
                 if interrupts:
                     pending = getattr(interrupts[0], "value", {})
                     await services.repository.update_owned_agent_run(
@@ -836,7 +1002,10 @@ def create_app(
                             "answer": "",
                             "citations": [],
                             "evidence_quality": quality,
+                            "node_trace": node_trace,
+                            "model_attempts": model_attempts,
                         },
+                        duration_ms=duration_ms,
                     )
                     yield SSEEvent(
                         event="interrupt", run_id=run_id, data={"pending_action": pending}
@@ -855,7 +1024,10 @@ def create_app(
                         "answer": str(result.get("answer", "")),
                         "citations": citation_values,
                         "evidence_quality": quality,
+                        "node_trace": node_trace,
+                        "model_attempts": model_attempts,
                     },
+                    duration_ms=duration_ms,
                     error_code=result.get("error"),
                 )
                 answer = str(result.get("answer", ""))
@@ -869,19 +1041,59 @@ def create_app(
                 yield SSEEvent(
                     event="run_finished",
                     run_id=run_id,
-                    data={"status": result.get("status", "completed")},
+                    data={
+                        "status": result.get("status", "completed"),
+                        "duration_ms": duration_ms,
+                    },
+                ).encode()
+            except asyncio.CancelledError:
+                duration_ms = round((time.perf_counter() - run_started_at) * 1000)
+                await services.repository.update_owned_agent_run(
+                    run_id,
+                    user.id,
+                    status="cancelled",
+                    pending_action=None,
+                    duration_ms=duration_ms,
+                    result_summary={
+                        "answer": "",
+                        "citations": [],
+                        "evidence_quality": dict(result.get("evidence_quality", {})),
+                        "node_trace": node_trace,
+                        "model_attempts": [
+                            attempt.as_dict() for attempt in attempt_buffer
+                        ],
+                    },
+                    error_code="AGENT_RUN_CANCELLED",
+                )
+                yield SSEEvent(
+                    event="run_finished",
+                    run_id=run_id,
+                    data={"status": "cancelled", "duration_ms": duration_ms},
                 ).encode()
             except Exception:
+                duration_ms = round((time.perf_counter() - run_started_at) * 1000)
                 await services.repository.update_owned_agent_run(
                     run_id,
                     user.id,
                     status="failed",
                     error_code="AGENT_RUN_FAILED",
-                    result_summary={"answer": "", "citations": [], "evidence_quality": {}},
+                    duration_ms=duration_ms,
+                    result_summary={
+                        "answer": "",
+                        "citations": [],
+                        "evidence_quality": {},
+                        "node_trace": node_trace,
+                        "model_attempts": [
+                            attempt.as_dict() for attempt in attempt_buffer
+                        ],
+                    },
                 )
                 yield SSEEvent(
                     event="error", run_id=run_id, data={"message": "Agent 运行失败"}
                 ).encode()
+            finally:
+                if current_task:
+                    await services.unregister_agent_task(run_id, current_task)
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -963,11 +1175,18 @@ def create_app(
         run = await services.repository.get_owned_agent_run(run_id, user.id)
         if not run:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "运行不存在")
-        if run.status in {"completed", "failed", "cancelled"}:
+        if run.status == "cancelled":
+            return _agent_run_read(run)
+        if run.status in {"completed", "failed"}:
             raise HTTPException(status.HTTP_409_CONFLICT, "运行已经结束")
         await services.repository.update_owned_agent_run(
-            run_id, user.id, status="cancelled", pending_action=None
+            run_id,
+            user.id,
+            status="cancelled",
+            pending_action=None,
+            error_code="AGENT_RUN_CANCELLED",
         )
+        await services.cancel_agent_task(run_id)
         return await get_agent_run(run_id, user)
 
     return app

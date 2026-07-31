@@ -97,8 +97,17 @@ docker compose up -d web
 | `PAPERLEAF_EMBEDDING_MODEL` | 嵌入模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 嵌入向量维度 |
 | `PAPERLEAF_VISION_MODEL` | 可选 OCR 视觉模型 |
+| `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用 OpenAI-compatible Key |
+| `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用服务根地址 |
+| `PAPERLEAF_FALLBACK_CHAT_MODEL` | 备用问答、支持检查与总结模型 |
+| `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用嵌入模型，维度必须与主模型一致 |
+| `PAPERLEAF_FALLBACK_VISION_MODEL` | 可选备用 OCR 视觉模型 |
+| `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 每次模型调用的超时秒数 |
+| `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务的最大尝试次数，范围 1~3 |
+| `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败熔断阈值 |
+| `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断冷却秒数 |
 
-不配置 Key 时文献 CRUD、PDF 阅读、全文检索、引用校验和提取式产物仍可工作；向量、模型生成与视觉 OCR 会降级。修改嵌入模型或维度后必须重新索引，不能混用不同维度的向量。
+不配置 Key 时文献 CRUD、PDF 阅读、全文检索、引用校验和提取式产物仍可工作；向量、模型生成与视觉 OCR 会降级。主服务达到连续失败阈值后，相应用途会在冷却期内快速失败并切换备用服务；回答、证据核验、总结、嵌入与视觉 OCR 分别维护熔断状态，单项故障不会直接关闭全部模型能力。修改嵌入模型或维度后必须重新索引；主、备用嵌入模型也必须输出相同维度。
 
 ## 反向代理
 
@@ -163,3 +172,4 @@ docker compose config --quiet
 - Web 无法请求 API：检查构建时 API URL、CORS、HTTPS 混合内容和代理 SSE 配置。
 - PDF 可读但无法检索：检查 Worker、解析状态、嵌入配置与向量维度。
 - 扫描 PDF 检索为空：配置视觉模型或确认状态是否为 `ocr_unavailable`。
+- 管理页显示模型“需检查”：查看对应服务和用途；等待冷却后系统会执行一次半开探测，也可先修复 Key、模型名或网络配置。

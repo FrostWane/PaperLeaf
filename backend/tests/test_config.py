@@ -38,3 +38,17 @@ def test_production_rejects_example_placeholders_and_short_secrets() -> None:
 def test_evidence_quality_thresholds_must_be_probabilities() -> None:
     with pytest.raises(RuntimeError, match="证据质量阈值"):
         replace(settings, evidence_min_confidence=1.1).validate_production()
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"model_timeout_seconds": 0}, "模型超时"),
+        ({"model_attempts_per_provider": 4}, "尝试次数"),
+        ({"model_circuit_failure_threshold": 0}, "失败阈值"),
+        ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),
+    ],
+)
+def test_model_runtime_policy_rejects_invalid_values(changes: dict, message: str) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        replace(settings, **changes).validate_production()

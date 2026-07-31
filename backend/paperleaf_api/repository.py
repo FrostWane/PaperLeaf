@@ -112,6 +112,8 @@ class AgentRunRecord:
     thread_id: str
     status: str = "pending"
     tool_steps: int = 0
+    duration_ms: int | None = None
+    token_usage: dict | None = None
     result_summary: dict | None = None
     pending_action: dict | None = None
     error_code: str | None = None
@@ -497,6 +499,8 @@ class MemoryRepository:
         for key in (
             "status",
             "tool_steps",
+            "duration_ms",
+            "token_usage",
             "result_summary",
             "pending_action",
             "error_code",
@@ -1030,6 +1034,8 @@ class SQLAlchemyRepository:
             for key in (
                 "status",
                 "tool_steps",
+                "duration_ms",
+                "token_usage",
                 "result_summary",
                 "pending_action",
                 "error_code",
