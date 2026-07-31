@@ -47,6 +47,19 @@ def test_page_dedup_and_scope_diversity_keep_both_papers() -> None:
     assert [hit.chunk.paper_id for hit in diversified[:2]] == ["p1", "p2"]
 
 
+def test_window_bm25_promotes_short_fact_inside_long_chunk() -> None:
+    filler = "background " * 180
+    chunks = [
+        _chunk("p1-1", "p1", 1, f"{filler} compiler version GCC eleven {filler}"),
+        _chunk("p1-2", "p1", 2, "compiler systems background"),
+    ]
+    index = OfflineRetrievalIndex(chunks, dimensions=256)
+
+    result = index.window_bm25("Which compiler version uses GCC eleven?", ["p1"], limit=2)
+
+    assert result.hits[0].chunk.physical_page == 1
+
+
 def test_abstention_calibration_prioritizes_zero_dev_false_answers() -> None:
     cases = [
         EvaluationCase(

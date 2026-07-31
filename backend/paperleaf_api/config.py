@@ -54,6 +54,13 @@ class Settings:
         if os.getenv("PAPERLEAF_EMBEDDING_DIMENSIONS")
         else None
     )
+    evidence_min_confidence: float = float(os.getenv("PAPERLEAF_EVIDENCE_MIN_CONFIDENCE", "0.35"))
+    evidence_min_vector_score: float = float(
+        os.getenv("PAPERLEAF_EVIDENCE_MIN_VECTOR_SCORE", "0.35")
+    )
+    evidence_min_lexical_coverage: float = float(
+        os.getenv("PAPERLEAF_EVIDENCE_MIN_LEXICAL_COVERAGE", "0.18")
+    )
 
     @property
     def is_demo(self) -> bool:
@@ -67,6 +74,13 @@ class Settings:
         return origins
 
     def validate_production(self) -> None:
+        quality_values = (
+            self.evidence_min_confidence,
+            self.evidence_min_vector_score,
+            self.evidence_min_lexical_coverage,
+        )
+        if any(value < 0 or value > 1 for value in quality_values):
+            raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
         if self.mode != "production":
             return
         weak = {"local-demo-only-change-me", "paperleaf-dev-admin", "paperleaf-local"}

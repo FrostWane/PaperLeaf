@@ -42,10 +42,12 @@ describe("真实 API 契约", () => {
   it("Chat 使用 content/scope/selected_paper_ids/web_enabled 并聚合 SSE", async () => {
     document.cookie = "paperleaf_csrf=chat-token; path=/";
     let payload: Record<string, unknown> = {};
-    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, async ({ request }) => { payload = await request.json() as Record<string, unknown>; return new HttpResponse('event: message_delta\ndata: {"event":"message_delta","run_id":"r1","data":{"delta":"有依据"}}\n\nevent: citation\ndata: {"event":"citation","run_id":"r1","data":{"paper_id":"p1","paper_title":"论文","physical_page":2,"chunk_id":"c1","quote":"原文"}}\n\nevent: run_finished\ndata: {"event":"run_finished","run_id":"r1","data":{"status":"completed"}}\n\n', { headers: { "content-type": "text/event-stream" } }); }));
+    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, async ({ request }) => { payload = await request.json() as Record<string, unknown>; return new HttpResponse('event: tool_finished\ndata: {"event":"tool_finished","run_id":"r1","data":{"tool":"search_library","evidence_quality":{"grade":"sufficient","confidence":0.82,"reason_code":"channel_agreement","summary":"已定位 1 个证据页，关键词与语义检索相互印证","evidence_count":1,"page_count":1,"paper_count":1,"channels":["keyword","vector"]}}}\n\nevent: message_delta\ndata: {"event":"message_delta","run_id":"r1","data":{"delta":"有依据"}}\n\nevent: citation\ndata: {"event":"citation","run_id":"r1","data":{"paper_id":"p1","paper_title":"论文","physical_page":2,"chunk_id":"c1","excerpt":"原文"}}\n\nevent: run_finished\ndata: {"event":"run_finished","run_id":"r1","data":{"status":"completed"}}\n\n', { headers: { "content-type": "text/event-stream" } }); }));
     const answer = await realDataSource.ask("为什么？", ["p1"]);
     expect(payload).toEqual({ content: "为什么？", scope: "paper", selected_paper_ids: ["p1"], web_enabled: false });
     expect(answer.answer).toBe("有依据"); expect(answer.citations[0]).toMatchObject({ paperId: "p1", page: 2, chunkId: "c1" });
+    expect(answer.citations[0].quote).toBe("原文");
+    expect(answer.evidenceQuality).toMatchObject({ grade: "sufficient", confidence: 0.82, pageCount: 1, channels: ["keyword", "vector"] });
   });
 
   it("修改、重试和删除文献都使用 CSRF 且映射最新状态", async () => {

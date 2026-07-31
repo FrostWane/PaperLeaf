@@ -47,12 +47,12 @@ function PaperState({ paper }: { paper: Paper }) {
   return <span className="status-pill indexing"><span className="spinner" />正在建立索引</span>;
 }
 
-export function PaperWorkspace({ paperId = "attention", demo = false }: { paperId?: string; demo?: boolean }) {
+export function PaperWorkspace({ paperId = "attention", demo = false, initialPage }: { paperId?: string; demo?: boolean; initialPage?: number }) {
   const isReal = !demo && process.env.NEXT_PUBLIC_DATA_MODE === "real";
   const dataSource = demo ? demoDataSource : getDataSource();
   const fallbackPaper = papers.find((item) => item.id === paperId) ?? papers[0];
   const [paper, setPaper] = useState<Paper | null>(isReal ? null : fallbackPaper);
-  const [currentPage, setCurrentPage] = useState(demo ? 2 : 1);
+  const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage ?? (demo ? 2 : 1)));
   const [mobilePane, setMobilePane] = useState<MobilePane>("pdf");
   const [assistantView, setAssistantView] = useState<AssistantView>("ask");
   const [answer, setAnswer] = useState<AgentAnswer | null>(isReal ? null : groundedAnswer);
@@ -200,7 +200,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false }: { paperI
   </section>;
 
   const askContent = <div className="conversation">
-    {answer ? <><div className="run-note">已保留 {answer.citations.length} 条可验证证据</div><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">基于原文回答</span><p className="answer-text">{answer.answer} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`查看第 ${citation.page} 页引用`}>[{index + 1}]</button>)}</p><div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div></> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
+    {answer ? <><div className={`run-note ${answer.evidenceQuality?.grade === "insufficient" ? "quality-insufficient" : ""}`} role="status">{answer.evidenceQuality?.summary ?? `已保留 ${answer.citations.length} 条可验证证据`}</div><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">{answer.evidenceQuality?.grade === "insufficient" ? "证据状态" : "基于原文回答"}</span><p className="answer-text">{answer.answer} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`查看第 ${citation.page} 页引用`}>[{index + 1}]</button>)}</p>{answer.citations.length > 0 && <div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div>}</> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
     {askMessage && <p className="field-error" role="alert">{askMessage}</p>}
   </div>;
 

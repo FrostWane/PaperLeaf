@@ -19,9 +19,7 @@ def _login(client: TestClient, email: str, password: str) -> str:
     return token
 
 
-def test_auth_paper_contract_and_cross_user_isolation(
-    tmp_path, valid_pdf_bytes: bytes
-) -> None:
+def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes: bytes) -> None:
     config = replace(
         settings,
         mode="test",
@@ -30,9 +28,7 @@ def test_auth_paper_contract_and_cross_user_isolation(
         bootstrap_admin_password="admin-password-123",
     )
     repository = MemoryRepository(config.session_secret)
-    app = create_app(
-        config, repository=repository, storage=LocalObjectStorage(tmp_path)
-    )
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
 
     with TestClient(app) as admin_client:
         assert admin_client.get("/health").json()["status"] == "ok"
@@ -170,9 +166,7 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
         assert jobs.status_code == 200
         assert "error_message" not in jobs.json()[0]
         assert "text" not in jobs.json()[0]
-        retried = client.post(
-            f"/api/v1/admin/jobs/{job.id}/retry", headers={"X-CSRF-Token": csrf}
-        )
+        retried = client.post(f"/api/v1/admin/jobs/{job.id}/retry", headers={"X-CSRF-Token": csrf})
         assert retried.status_code == 200
         assert retried.json()["status"] == "queued"
 
@@ -215,9 +209,13 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
             json={"content": "什么是 RAG？", "scope": "library", "web_enabled": False},
         )
         assert response.status_code == 200
+        assert "event: tool_finished" in response.text
+        assert '"evidence_quality"' in response.text
+        assert '"paper_title"' in response.text
         owner_run = next(
             record for record in repository.agent_runs.values() if record.user_id == owner.id
         )
+        assert owner_run.result_summary["evidence_quality"]["grade"] == "sufficient"
 
     with TestClient(app_before_restart) as other_client:
         other_csrf = _login(other_client, "other@example.com", "other-password-123")

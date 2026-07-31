@@ -3,8 +3,11 @@ import { AppShell } from "@/components/app-shell";
 import { PaperWorkspace } from "@/components/paper-workspace";
 
 export const metadata: Metadata = { title: "论文工作台" };
-export default async function PaperPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ demo?: string }> }) {
+export default async function PaperPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ demo?: string; page?: string }> }) {
   const { id } = await params;
-  const demo = (await searchParams).demo === "1";
-  return <AppShell active="/library" title="论文工作台" eyebrow="Library / Reading" flush demo={demo}><PaperWorkspace key={id} paperId={id} demo={demo} /></AppShell>;
+  const query = await searchParams;
+  const demo = query.demo === "1";
+  const requestedPage = Number.parseInt(query.page ?? "", 10);
+  const initialPage = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : undefined;
+  return <AppShell active="/library" title="论文工作台" eyebrow="Library / Reading" flush demo={demo}><PaperWorkspace key={`${id}:${initialPage ?? "default"}`} paperId={id} demo={demo} initialPage={initialPage} /></AppShell>;
 }

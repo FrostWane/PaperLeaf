@@ -21,6 +21,7 @@ class AgentState(TypedDict, total=False):
     retrieved_evidence: list[Evidence]
     arxiv_candidates: list[dict[str, Any]]
     evidence_grade: Literal["sufficient", "insufficient"]
+    evidence_quality: dict[str, Any]
     tool_steps: int
     pending_action: dict[str, Any] | None
     citations: list[CitationClaim]

@@ -105,6 +105,7 @@ class AgentRunRead(BaseModel):
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]
     answer: str = ""
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_quality: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
 
 

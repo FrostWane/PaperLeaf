@@ -50,6 +50,30 @@ python -m paperleaf_api.evaluation_offline \
 dev 集选择，报告默认单列 test 集。原始预测可能包含论文片段，只有明确传入
 `--predictions-dir` 才会写出，且不应提交到公共仓库。
 
+## 可选神经检索与重排诊断
+
+安装可选依赖后，可以用本地 ONNX 模型比较真实 dense retrieval 和 Cross-Encoder：
+
+```bash
+python -m pip install -e ".[dev,eval]"
+python -m paperleaf_api.evaluation_neural \
+  --manifest evaluation/datasets/paperleaf-rag-v1/manifest.json \
+  --cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl \
+  --pdf-dir <PDF目录> \
+  --cache-dir <模型缓存目录> \
+  --output <metrics.json> \
+  --report <REPORT.md> \
+  --reranker-only --rerank-focus-window -k 5
+```
+
+默认 embedding 为 MIT 许可的 `BAAI/bge-small-en-v1.5`；默认重排器为 Apache-2.0 的
+`Xenova/ms-marco-MiniLM-L-6-v2`。模型只在显式运行该命令时下载，默认 API 与 Worker 不依赖
+FastEmbed。FastEmbed 官方说明见其[支持模型列表](https://qdrant.github.io/fastembed/examples/Supported_Models/)
+与[重排文档](https://qdrant.tech/documentation/fastembed/fastembed-rerankers/)。
+
+v1 的 test 已经被用于诊断，后续实验必须明确标记 `diagnostic_not_blind`，不能把它重新称为
+盲测 holdout。0.4.0 的诊断结果与未采用方案见[诊断报告](results/paperleaf-rag-v1/DIAGNOSTIC-0.4.md)。
+
 ## 指标边界
 
 聚合指标保留分子、分母和比率，包括页级 Recall@K、MRR@K、首个引用物理页准确率、
