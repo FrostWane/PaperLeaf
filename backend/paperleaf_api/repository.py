@@ -399,4 +399,650 @@ class MemoryRepository:
     async def create_tag(self, owner_id: str, name: str, color: str | None) -> TagRecord:
         normalized_name = name.strip()
         if not normalized_name:
-            raise Valuß½y¶‰žËkºwµç@€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€™½È­•ä¥¸€ ‰Ñ¥Ñ±”ˆ°€‰…ÕÑ¡½ÉÌˆ°€‰å•…Èˆ°€‰…‰ÍÑÉ…Ðˆ°€‰‘½¤ˆ°€‰ÍÑ…ÑÕÌˆ¤è(€€€€€€€€€€€€€€€¥˜­•ä¥¸¡…¹•Ì…¹¡…¹•Ím­•åt¥Ì¹½Ð9½¹”è(€€€€€€€€€€€€€€€€€€€Í•Ñ…ÑÑÈ¡Á…Á•È°­•ä°¡…¹•Ím­•åt¤(€€€€€€€€€€€Á…Á•È¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡Á…Á•È¤(€€€€€€€€€€€É•ÑÕÉ¸Á…Á•È((€€€…Íå¹Œ‘•˜‘•±•Ñ•}½Ý¹•‘}Á…Á•È¡Í•±˜°Á…Á•É}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ¤€´øA…Á•Èð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Á…Á•È€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡A…Á•È¤¹Ý¡•É”¡A…Á•È¹¥€ôôÁ…Á•É}¥°A…Á•È¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½ÐÁ…Á•Èè(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€Á…Á•È¹ÍÑ…ÑÕÌ€ôA…Á•ÉMÑ…ÑÕÌ¹‘•±•Ñ¥¹œ(€€€€€€€€€€€Á…Á•È¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€…Ñ¥Ù•}‘•±•Ñ”€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡)½ˆ¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€)½ˆ¹Á…Á•É}¥€ôôÁ…Á•È¹¥°(€€€€€€€€€€€€€€€€€€€)½ˆ¹ÑåÁ”€ôô€‰‘•±•Ñ•}Á…Á•Èˆ°(€€€€€€€€€€€€€€€€€€€)½ˆ¹ÍÑ…ÑÕÌ¹¥¹|¡m)½‰MÑ…ÑÕÌ¹ÅÕ•Õ•°)½‰MÑ…ÑÕÌ¹ÉÕ¹¹¥¹t¤°(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½Ð…Ñ¥Ù•}‘•±•Ñ”è(€€€€€€€€€€€€€€€Í•ÍÍ¥½¸¹…‘¡)½ˆ¡Á…Á•É}¥õÁ…Á•È¹¥°ÑåÁ”ô‰‘•±•Ñ•}Á…Á•Èˆ¤¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡Á…Á•È¤(€€€€€€€€€€€É•ÑÕÉ¸Á…Á•È((€€€…Íå¹Œ‘•˜Ñ½Õ¡}Á…Á•É}½Á•¹•¡Í•±˜°Á…Á•É}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ¤€´øA…Á•Èð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Á…Á•È€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡A…Á•È¤¹Ý¡•É”¡A…Á•È¹¥€ôôÁ…Á•É}¥°A…Á•È¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½ÐÁ…Á•Èè(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€Á…Á•È¹±…ÍÑ}½Á•¹•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€Á…Á•È¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡Á…Á•È¤(€€€€€€€€€€€É•ÑÕÉ¸Á…Á•È((€€€…Íå¹Œ‘•˜Í•Ñ}Á…Á•ÉÍ}…É¡¥Ù• (€€€€€€€Í•±˜°Á…Á•É}¥‘Ìè±¥ÍÑmÍÑÉt°½Ý¹•É}¥èÍÑÈ°…É¡¥Ù•è‰½½°(€€€€¤€´ø±¥ÍÑmÍÑÉtð9½¹”è(€€€€€€€Õ¹¥ÅÕ•}¥‘Ì€ô±¥ÍÐ¡‘¥Ð¹™É½µ­•åÌ¡Á…Á•É}¥‘Ì¤¤(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€½Ý¹•‘}¥‘Ì€ô±¥ÍÐ (€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…ÉÌ (€€€€€€€€€€€€€€€€€€€Í•±•Ð¡A…Á•È¹¥¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€€€€€A…Á•È¹½Ý¹•É}¥€ôô½Ý¹•É}¥°(€€€€€€€€€€€€€€€€€€€€€€€A…Á•È¹¥¹¥¹|¡Õ¹¥ÅÕ•}¥‘Ì¤°(€€€€€€€€€€€€€€€€€€€€€€€A…Á•È¹ÍÑ…ÑÕÌ€„ôA…Á•ÉMÑ…ÑÕÌ¹‘•±•Ñ¥¹œ°(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜Í•Ð¡½Ý¹•‘}¥‘Ì¤€„ôÍ•Ð¡Õ¹¥ÅÕ•}¥‘Ì¤è(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€Ñ¥µ•ÍÑ…µÀ€ô¹½Ü ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€ÕÁ‘…Ñ”¡A…Á•È¤(€€€€€€€€€€€€€€€€¹Ý¡•É”¡A…Á•È¹½Ý¹•É}¥€ôô½Ý¹•É}¥°A…Á•È¹¥¹¥¹|¡Õ¹¥ÅÕ•}¥‘Ì¤¤(€€€€€€€€€€€€€€€€¹Ù…±Õ•Ì (€€€€€€€€€€€€€€€€€€€…É¡¥Ù•‘}…ÐõÑ¥µ•ÍÑ…µÀ¥˜…É¡¥Ù••±Í”9½¹”°(€€€€€€€€€€€€€€€€€€€ÕÁ‘…Ñ•‘}…ÐõÑ¥µ•ÍÑ…µÀ°(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€É•ÑÕÉ¸Õ¹¥ÅÕ•}¥‘Ì((€€€…Íå¹Œ‘•˜½Õ¹Ñ}…Ñ¥Ù•}…‘µ¥¹Ì¡Í•±˜¤€´ø¥¹Ðè(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Ù…±Õ”€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡™Õ¹Œ¹½Õ¹Ð ¤¤¹Í•±•Ñ}™É½´¡UÍ•È¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€UÍ•È¹…Ñ¥Ù”¹¥Í|¡QÉÕ”¤°UÍ•È¹É½±”€ôôUÍ•ÉI½±”¹…‘µ¥¸(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸¥¹Ð¡Ù…±Õ”½È€À¤((€€€…Íå¹Œ‘•˜É•…Ñ•}½±±•Ñ¥½¸ (€€€€€€€Í•±˜°½Ý¹•É}¥èÍÑÈ°¹…µ”èÍÑÈ°‘•ÍÉ¥ÁÑ¥½¸èÍÑÈð9½¹”(€€€€¤€´ø½±±•Ñ¥½¸è(€€€€€€€¹½Éµ…±¥é•‘}¹…µ”€ô¹…µ”¹ÍÑÉ¥À ¤(€€€€€€€¥˜¹½Ð¹½Éµ…±¥é•‘}¹…µ”è(€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹¦n–B#–B7žžÃ’â7¢÷’âëž¦èˆ¤(€€€€€€€É•½É€ô½±±•Ñ¥½¸¡½Ý¹•É}¥õ½Ý¹•É}¥°¹…µ”õ¹½Éµ…±¥é•‘}¹…µ”°‘•ÍÉ¥ÁÑ¥½¸õ‘•ÍÉ¥ÁÑ¥½¸¤(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Í•ÍÍ¥½¸¹…‘¡É•½É¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€•á•ÁÐ%¹Ñ•É¥ÑåÉÉ½È…Ì•áŒè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É½±±‰…¬ ¤(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹¦n–B#–B7žžÃ–ÞË–¶c–r ˆ¤™É½´•áŒ(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡É•½É¤(€€€€€€€€€€€É•ÑÕÉ¸É•½É((€€€…Íå¹Œ‘•˜±¥ÍÑ}½±±•Ñ¥½¹Ì¡Í•±˜°½Ý¹•É}¥èÍÑÈ¤€´ø±¥ÍÑm½±±•Ñ¥½¹tè(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…ÉÌ (€€€€€€€€€€€€€€€Í•±•Ð¡½±±•Ñ¥½¸¤(€€€€€€€€€€€€€€€€¹Ý¡•É”¡½±±•Ñ¥½¸¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€€€€€¹½É‘•É}‰ä¡½±±•Ñ¥½¸¹¹…µ”¤(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸±¥ÍÐ¡É•ÍÕ±Ð¤((€€€…Íå¹Œ‘•˜±¥ÍÑ}½±±•Ñ¥½¹}µ•µ‰•ÉÍ¡¥ÁÌ¡Í•±˜°½Ý¹•É}¥èÍÑÈ¤€´ø‘¥ÑmÍÑÈ°±¥ÍÑmÍÑÉutè(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É½ÝÌ€ô€ (€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€Í•±•Ð¡½±±•Ñ¥½¸¹¥°Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹Á…Á•É}¥¤(€€€€€€€€€€€€€€€€€€€€¹©½¥¸ (€€€€€€€€€€€€€€€€€€€€€€€Á…Á•É}½±±•Ñ¥½¹Ì°(€€€€€€€€€€€€€€€€€€€€€€€Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹½±±•Ñ¥½¹}¥€ôô½±±•Ñ¥½¸¹¥°(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€¹Ý¡•É”¡½±±•Ñ¥½¸¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€€€€€€€€€¹½É‘•É}‰ä¡½±±•Ñ¥½¸¹¥°Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹Á…Á•É}¥¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤¹…±° ¤(€€€€€€€€€€€µ•µ‰•ÉÍ¡¥ÁÌè‘¥ÑmÍÑÈ°±¥ÍÑmÍÑÉut€ôíô(€€€€€€€€€€€™½È½±±•Ñ¥½¹}¥°Á…Á•É}¥¥¸É½ÝÌè(€€€€€€€€€€€€€€€µ•µ‰•ÉÍ¡¥ÁÌ¹Í•Ñ‘•™…Õ±Ð¡½±±•Ñ¥½¹}¥°mt¤¹…ÁÁ•¹¡Á…Á•É}¥¤(€€€€€€€€€€€É•ÑÕÉ¸µ•µ‰•ÉÍ¡¥ÁÌ((€€€…Íå¹Œ‘•˜ÕÁ‘…Ñ•}½±±•Ñ¥½¸ (€€€€€€€Í•±˜°½±±•Ñ¥½¹}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ°€¨©¡…¹•Ìè½‰©•Ð(€€€€¤€´ø½±±•Ñ¥½¸ð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•½É€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡½±±•Ñ¥½¸¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€½±±•Ñ¥½¸¹¥€ôô½±±•Ñ¥½¹}¥°½±±•Ñ¥½¸¹½Ý¹•É}¥€ôô½Ý¹•É}¥(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½ÐÉ•½Éè(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€¥˜€‰¹…µ”ˆ¥¸¡…¹•Ìè(€€€€€€€€€€€€€€€¹½Éµ…±¥é•‘}¹…µ”€ôÍÑÈ¡¡…¹•Íl‰¹…µ”‰t¤¹ÍÑÉ¥À ¤(€€€€€€€€€€€€€€€¥˜¹½Ð¹½Éµ…±¥é•‘}¹…µ”è(€€€€€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹¦n–B#–B7žžÃ’â7¢÷’âëž¦èˆ¤(€€€€€€€€€€€€€€€¡…¹•Íl‰¹…µ”‰t€ô¹½Éµ…±¥é•‘}¹…µ”(€€€€€€€€€€€™½È­•ä¥¸€ ‰¹…µ”ˆ°€‰‘•ÍÉ¥ÁÑ¥½¸ˆ¤è(€€€€€€€€€€€€€€€¥˜­•ä¥¸¡…¹•Ìè(€€€€€€€€€€€€€€€€€€€Í•Ñ…ÑÑÈ¡É•½É°­•ä°¡…¹•Ím­•åt¤(€€€€€€€€€€€É•½É¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€•á•ÁÐ%¹Ñ•É¥ÑåÉÉ½È…Ì•áŒè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É½±±‰…¬ ¤(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹¦n–B#–B7žžÃ–ÞË–¶c–r ˆ¤™É½´•áŒ(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡É•½É¤(€€€€€€€€€€€É•ÑÕÉ¸É•½É((€€€…Íå¹Œ‘•˜‘•±•Ñ•}½±±•Ñ¥½¸¡Í•±˜°½±±•Ñ¥½¹}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ¤€´ø‰½½°è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€‘•±•Ñ”¡½±±•Ñ¥½¸¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€½±±•Ñ¥½¸¹¥€ôô½±±•Ñ¥½¹}¥°½±±•Ñ¥½¸¹½Ý¹•É}¥€ôô½Ý¹•É}¥(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€É•ÑÕÉ¸‰½½°¡É•ÍÕ±Ð¹É½Ý½Õ¹Ð¤((€€€…Íå¹Œ‘•˜Í•Ñ}Á…Á•É}½±±•Ñ¥½¸ (€€€€€€€Í•±˜°½±±•Ñ¥½¹}¥èÍÑÈ°Á…Á•É}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ°…ÍÍ¥¹•è‰½½°(€€€€¤€´ø‰½½°è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€½±±•Ñ¥½¸€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡½±±•Ñ¥½¸¹¥¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€½±±•Ñ¥½¸¹¥€ôô½±±•Ñ¥½¹}¥°½±±•Ñ¥½¸¹½Ý¹•É}¥€ôô½Ý¹•É}¥(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€Á…Á•È€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡A…Á•È¹¥¤¹Ý¡•É”¡A…Á•È¹¥€ôôÁ…Á•É}¥°A…Á•È¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½Ð½±±•Ñ¥½¸½È¹½ÐÁ…Á•Èè(€€€€€€€€€€€€€€€É•ÑÕÉ¸…±Í”(€€€€€€€€€€€•á¥ÍÑÌ€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹Á…Á•É}¥¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹Á…Á•É}¥€ôôÁ…Á•É}¥°(€€€€€€€€€€€€€€€€€€€Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹½±±•Ñ¥½¹}¥€ôô½±±•Ñ¥½¹}¥°(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜…ÍÍ¥¹•…¹¹½Ð•á¥ÍÑÌè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€¥¹Í•ÉÐ¡Á…Á•É}½±±•Ñ¥½¹Ì¤¹Ù…±Õ•Ì (€€€€€€€€€€€€€€€€€€€€€€€Á…Á•É}¥õÁ…Á•É}¥°½±±•Ñ¥½¹}¥õ½±±•Ñ¥½¹}¥(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€•±¥˜¹½Ð…ÍÍ¥¹•…¹•á¥ÍÑÌè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€‘•±•Ñ”¡Á…Á•É}½±±•Ñ¥½¹Ì¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€€€€€Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹Á…Á•É}¥€ôôÁ…Á•É}¥°(€€€€€€€€€€€€€€€€€€€€€€€Á…Á•É}½±±•Ñ¥½¹Ì¹Œ¹½±±•Ñ¥½¹}¥€ôô½±±•Ñ¥½¹}¥°(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€É•ÑÕÉ¸QÉÕ”((€€€…Íå¹Œ‘•˜É•…Ñ•}Ñ…œ¡Í•±˜°½Ý¹•É}¥èÍÑÈ°¹…µ”èÍÑÈ°½±½ÈèÍÑÈð9½¹”¤€´øQ…œè(€€€€€€€¹½Éµ…±¥é•‘}¹…µ”€ô¹…µ”¹ÍÑÉ¥À ¤(€€€€€€€¥˜¹½Ð¹½Éµ…±¥é•‘}¹…µ”è(€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹š‚ž¶û–B7žžÃ’â7¢÷’âëž¦èˆ¤(€€€€€€€É•½É€ôQ…œ¡½Ý¹•É}¥õ½Ý¹•É}¥°¹…µ”õ¹½Éµ…±¥é•‘}¹…µ”°½±½Èõ½±½È¤(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Í•ÍÍ¥½¸¹…‘¡É•½É¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€•á•ÁÐ%¹Ñ•É¥ÑåÉÉ½È…Ì•áŒè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É½±±‰…¬ ¤(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹š‚ž¶û–B7žžÃ–ÞË–¶c–r ˆ¤™É½´•áŒ(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡É•½É¤(€€€€€€€€€€€É•ÑÕÉ¸É•½É((€€€…Íå¹Œ‘•˜±¥ÍÑ}Ñ…Ì¡Í•±˜°½Ý¹•É}¥èÍÑÈ¤€´ø±¥ÍÑmQ…tè(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…ÉÌ (€€€€€€€€€€€€€€€Í•±•Ð¡Q…œ¤¹Ý¡•É”¡Q…œ¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤¹½É‘•É}‰ä¡Q…œ¹¹…µ”¤(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸±¥ÍÐ¡É•ÍÕ±Ð¤((€€€…Íå¹Œ‘•˜±¥ÍÑ}Ñ…}µ•µ‰•ÉÍ¡¥ÁÌ¡Í•±˜°½Ý¹•É}¥èÍÑÈ¤€´ø‘¥ÑmÍÑÈ°±¥ÍÑmÍÑÉutè(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É½ÝÌ€ô€ (€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€Í•±•Ð¡Q…œ¹¥°Á…Á•É}Ñ…Ì¹Œ¹Á…Á•É}¥¤(€€€€€€€€€€€€€€€€€€€€¹©½¥¸¡Á…Á•É}Ñ…Ì°Á…Á•É}Ñ…Ì¹Œ¹Ñ…}¥€ôôQ…œ¹¥¤(€€€€€€€€€€€€€€€€€€€€¹Ý¡•É”¡Q…œ¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€€€€€€€€€¹½É‘•É}‰ä¡Q…œ¹¥°Á…Á•É}Ñ…Ì¹Œ¹Á…Á•É}¥¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤¹…±° ¤(€€€€€€€€€€€µ•µ‰•ÉÍ¡¥ÁÌè‘¥ÑmÍÑÈ°±¥ÍÑmÍÑÉut€ôíô(€€€€€€€€€€€™½ÈÑ…}¥°Á…Á•É}¥¥¸É½ÝÌè(€€€€€€€€€€€€€€€µ•µ‰•ÉÍ¡¥ÁÌ¹Í•Ñ‘•™…Õ±Ð¡Ñ…}¥°mt¤¹…ÁÁ•¹¡Á…Á•É}¥¤(€€€€€€€€€€€É•ÑÕÉ¸µ•µ‰•ÉÍ¡¥ÁÌ((€€€…Íå¹Œ‘•˜ÕÁ‘…Ñ•}Ñ…œ (€€€€€€€Í•±˜°Ñ…}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ°€¨©¡…¹•Ìè½‰©•Ð(€€€€¤€´øQ…œð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•½É€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡Q…œ¤¹Ý¡•É”¡Q…œ¹¥€ôôÑ…}¥°Q…œ¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½ÐÉ•½Éè(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€¥˜€‰¹…µ”ˆ¥¸¡…¹•Ìè(€€€€€€€€€€€€€€€¹½Éµ…±¥é•‘}¹…µ”€ôÍÑÈ¡¡…¹•Íl‰¹…µ”‰t¤¹ÍÑÉ¥À ¤(€€€€€€€€€€€€€€€¥˜¹½Ð¹½Éµ…±¥é•‘}¹…µ”è(€€€€€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹š‚ž¶û–B7žžÃ’â7¢÷’âëž¦èˆ¤(€€€€€€€€€€€€€€€¡…¹•Íl‰¹…µ”‰t€ô¹½Éµ…±¥é•‘}¹…µ”(€€€€€€€€€€€™½È­•ä¥¸€ ‰¹…µ”ˆ°€‰½±½Èˆ¤è(€€€€€€€€€€€€€€€¥˜­•ä¥¸¡…¹•Ìè(€€€€€€€€€€€€€€€€€€€Í•Ñ…ÑÑÈ¡É•½É°­•ä°¡…¹•Ím­•åt¤(€€€€€€€€€€€É•½É¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€•á•ÁÐ%¹Ñ•É¥ÑåÉÉ½È…Ì•áŒè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É½±±‰…¬ ¤(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‹š‚ž¶û–B7žžÃ–ÞË–¶c–r ˆ¤™É½´•áŒ(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡É•½É¤(€€€€€€€€€€€É•ÑÕÉ¸É•½É((€€€…Íå¹Œ‘•˜‘•±•Ñ•}Ñ…œ¡Í•±˜°Ñ…}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ¤€´ø‰½½°è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€‘•±•Ñ”¡Q…œ¤¹Ý¡•É”¡Q…œ¹¥€ôôÑ…}¥°Q…œ¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€É•ÑÕÉ¸‰½½°¡É•ÍÕ±Ð¹É½Ý½Õ¹Ð¤((€€€…Íå¹Œ‘•˜Í•Ñ}Á…Á•É}Ñ…œ (€€€€€€€Í•±˜°Ñ…}¥èÍÑÈ°Á…Á•É}¥èÍÑÈ°½Ý¹•É}¥èÍÑÈ°…ÍÍ¥¹•è‰½½°(€€€€¤€´ø‰½½°è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Ñ…œ€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡Q…œ¹¥¤¹Ý¡•É”¡Q…œ¹¥€ôôÑ…}¥°Q…œ¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€Á…Á•È€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡A…Á•È¹¥¤¹Ý¡•É”¡A…Á•È¹¥€ôôÁ…Á•É}¥°A…Á•È¹½Ý¹•É}¥€ôô½Ý¹•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½ÐÑ…œ½È¹½ÐÁ…Á•Èè(€€€€€€€€€€€€€€€É•ÑÕÉ¸…±Í”(€€€€€€€€€€€•á¥ÍÑÌ€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡Á…Á•É}Ñ…Ì¹Œ¹Á…Á•É}¥¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€Á…Á•É}Ñ…Ì¹Œ¹Á…Á•É}¥€ôôÁ…Á•É}¥°Á…Á•É}Ñ…Ì¹Œ¹Ñ…}¥€ôôÑ…}¥(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜…ÍÍ¥¹•…¹¹½Ð•á¥ÍÑÌè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ”¡¥¹Í•ÉÐ¡Á…Á•É}Ñ…Ì¤¹Ù…±Õ•Ì¡Á…Á•É}¥õÁ…Á•É}¥°Ñ…}¥õÑ…}¥¤¤(€€€€€€€€€€€•±¥˜¹½Ð…ÍÍ¥¹•…¹•á¥ÍÑÌè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹•á•ÕÑ” (€€€€€€€€€€€€€€€€€€€‘•±•Ñ”¡Á…Á•É}Ñ…Ì¤¹Ý¡•É” (€€€€€€€€€€€€€€€€€€€€€€€Á…Á•É}Ñ…Ì¹Œ¹Á…Á•É}¥€ôôÁ…Á•É}¥°Á…Á•É}Ñ…Ì¹Œ¹Ñ…}¥€ôôÑ…}¥(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€É•ÑÕÉ¸QÉÕ”((€€€…Íå¹Œ‘•˜±¥ÍÑ}©½‰Ì¡Í•±˜¤€´ø±¥ÍÑm)½‰tè(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•ÍÕ±Ð€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…ÉÌ¡Í•±•Ð¡)½ˆ¤¹½É‘•É}‰ä¡)½ˆ¹É•…Ñ•‘}…Ð¹‘•ÍŒ ¤¤¹±¥µ¥Ð ÈÀÀ¤¤(€€€€€€€€€€€É•ÑÕÉ¸±¥ÍÐ¡É•ÍÕ±Ð¤((€€€…Íå¹Œ‘•˜É•ÑÉå}©½ˆ¡Í•±˜°©½‰}¥èÍÑÈ¤€´ø)½ˆð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€©½ˆ€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡)½ˆ¤¹Ý¡•É”¡)½ˆ¹¥€ôô©½‰}¥°)½ˆ¹ÍÑ…ÑÕÌ€ôô)½‰MÑ…ÑÕÌ¹™…¥±•¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½Ð©½ˆè(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€©½ˆ¹ÍÑ…ÑÕÌ€ô)½‰MÑ…ÑÕÌ¹ÅÕ•Õ•(€€€€€€€€€€€©½ˆ¹ÁÉ½É•ÍÌ€ô€À(€€€€€€€€€€€©½ˆ¹…ÑÑ•µÁÑÌ€ô€À(€€€€€€€€€€€©½ˆ¹•ÉÉ½É}½‘”€ô9½¹”(€€€€€€€€€€€©½ˆ¹•ÉÉ½É}µ•ÍÍ…”€ô9½¹”(€€€€€€€€€€€©½ˆ¹…Ù…¥±…‰±•}…Ð€ô¹½Ü ¤(€€€€€€€€€€€©½ˆ¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡©½ˆ¤(€€€€€€€€€€€É•ÑÕÉ¸©½ˆ((€€€…Íå¹Œ‘•˜É•…Ñ•}…•¹Ñ}ÉÕ¸ (€€€€€€€Í•±˜°ÉÕ¹}¥èÍÑÈ°ÕÍ•É}¥èÍÑÈ°Í•ÍÍ¥½¹}¥èÍÑÈ°Ñ¡É•…‘}¥èÍÑÈ(€€€€¤€´ø•¹ÑIÕ¸è(€€€€€€€É•½É€ô•¹ÑIÕ¸ (€€€€€€€€€€€¥õÉÕ¹}¥°(€€€€€€€€€€€ÕÍ•É}¥õÕÍ•É}¥°(€€€€€€€€€€€Í•ÍÍ¥½¹}¥õÍ•ÍÍ¥½¹}¥°(€€€€€€€€€€€Ñ¡É•…‘}¥õÑ¡É•…‘}¥°(€€€€€€€€€€€ÍÑ…ÑÕÌô‰Á•¹‘¥¹œˆ°(€€€€€€€€¤(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€Í•ÍÍ¥½¸¹…‘¡É•½É¤(€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€•á•ÁÐ%¹Ñ•É¥ÑåÉÉ½È…Ì•áŒè(€€€€€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É½±±‰…¬ ¤(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‰•¹ÐIÕ¸ƒ–ÞË–¶c–r ˆ¤™É½´•áŒ(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡É•½É¤(€€€€€€€€€€€É•ÑÕÉ¸É•½É((€€€…Íå¹Œ‘•˜•Ñ}½Ý¹•‘}…•¹Ñ}ÉÕ¸¡Í•±˜°ÉÕ¹}¥èÍÑÈ°ÕÍ•É}¥èÍÑÈ¤€´ø•¹ÑIÕ¸ð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•ÑÕÉ¸…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡•¹ÑIÕ¸¤¹Ý¡•É”¡•¹ÑIÕ¸¹¥€ôôÉÕ¹}¥°•¹ÑIÕ¸¹ÕÍ•É}¥€ôôÕÍ•É}¥¤(€€€€€€€€€€€€¤((€€€…Íå¹Œ‘•˜ÕÁ‘…Ñ•}½Ý¹•‘}…•¹Ñ}ÉÕ¸ (€€€€€€€Í•±˜°ÉÕ¹}¥èÍÑÈ°ÕÍ•É}¥èÍÑÈ°€¨©¡…¹•Ìè½‰©•Ð(€€€€¤€´ø•¹ÑIÕ¸ð9½¹”è(€€€€€€€…Íå¹ŒÝ¥Ñ •Ñ}Í•ÍÍ¥½¹}™…Ñ½Éä ¤ ¤…ÌÍ•ÍÍ¥½¸è(€€€€€€€€€€€É•½É€ô…Ý…¥ÐÍ•ÍÍ¥½¸¹Í…±…È (€€€€€€€€€€€€€€€Í•±•Ð¡•¹ÑIÕ¸¤¹Ý¡•É”¡•¹ÑIÕ¸¹¥€ôôÉÕ¹}¥°•¹ÑIÕ¸¹ÕÍ•É}¥€ôôÕÍ•É}¥¤(€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜¹½ÐÉ•½Éè(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”(€€€€€€€€€€€™½È­•ä¥¸€ (€€€€€€€€€€€€€€€€‰ÍÑ…ÑÕÌˆ°(€€€€€€€€€€€€€€€€‰Ñ½½±}ÍÑ•ÁÌˆ°(€€€€€€€€€€€€€€€€‰‘ÕÉ…Ñ¥½¹}µÌˆ°(€€€€€€€€€€€€€€€€‰Ñ½­•¹}ÕÍ…”ˆ°(€€€€€€€€€€€€€€€€‰É•ÍÕ±Ñ}ÍÕµµ…Éäˆ°(€€€€€€€€€€€€€€€€‰Á•¹‘¥¹}…Ñ¥½¸ˆ°(€€€€€€€€€€€€€€€€‰•ÉÉ½É}½‘”ˆ°(€€€€€€€€€€€€¤è(€€€€€€€€€€€€€€€¥˜­•ä¥¸¡…¹•Ìè(€€€€€€€€€€€€€€€€€€€Í•Ñ…ÑÑÈ¡É•½É°­•ä°¡…¹•Ím­•åt¤(€€€€€€€€€€€É•½É¹ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹½µµ¥Ð ¤(€€€€€€€€€€€…Ý…¥ÐÍ•ÍÍ¥½¸¹É•™É•Í ¡É•½É¤(€€€€€€€€€€€É•ÑÕÉ¸É•½É(
+            raise ValueError("æ ‡ç­¾åç§°ä¸èƒ½ä¸ºç©º")
+        if any(
+            item.owner_id == owner_id and item.name.casefold() == normalized_name.casefold()
+            for item in self.tags.values()
+        ):
+            raise ValueError("æ ‡ç­¾åç§°å·²å­˜åœ¨")
+        record = TagRecord(str(uuid.uuid4()), owner_id, normalized_name, color)
+        self.tags[record.id] = record
+        return record
+
+    async def list_tags(self, owner_id: str) -> list[TagRecord]:
+        return [item for item in self.tags.values() if item.owner_id == owner_id]
+
+    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        owned = {item.id for item in self.tags.values() if item.owner_id == owner_id}
+        memberships = {tag_id: [] for tag_id in owned}
+        for paper_id, tag_id in sorted(self.paper_tags):
+            if tag_id in owned:
+                memberships[tag_id].append(paper_id)
+        return memberships
+
+    async def update_tag(
+        self, tag_id: str, owner_id: str, **changes: object
+    ) -> TagRecord | None:
+        record = self.tags.get(tag_id)
+        if not record or record.owner_id != owner_id:
+            return None
+        if "name" in changes:
+            normalized_name = str(changes["name"]).strip()
+            if not normalized_name:
+                raise ValueError("æ ‡ç­¾åç§°ä¸èƒ½ä¸ºç©º")
+            if any(
+                item.id != record.id
+                and item.owner_id == owner_id
+                and item.name.casefold() == normalized_name.casefold()
+                for item in self.tags.values()
+            ):
+                raise ValueError("æ ‡ç­¾åç§°å·²å­˜åœ¨")
+            changes["name"] = normalized_name
+        for key in ("name", "color"):
+            if key in changes:
+                setattr(record, key, changes[key])
+        record.updated_at = now()
+        return record
+
+    async def delete_tag(self, tag_id: str, owner_id: str) -> bool:
+        record = self.tags.get(tag_id)
+        if not record or record.owner_id != owner_id:
+            return False
+        del self.tags[tag_id]
+        self.paper_tags = {pair for pair in self.paper_tags if pair[1] != tag_id}
+        return True
+
+    async def set_paper_tag(
+        self, tag_id: str, paper_id: str, owner_id: str, assigned: bool
+    ) -> bool:
+        tag = self.tags.get(tag_id)
+        paper = await self.get_owned_paper(paper_id, owner_id)
+        if not tag or tag.owner_id != owner_id or not paper:
+            return False
+        pair = (paper_id, tag_id)
+        self.paper_tags.add(pair) if assigned else self.paper_tags.discard(pair)
+        return True
+
+    async def list_jobs(self) -> list[JobRecord]:
+        return sorted(self.jobs.values(), key=lambda item: item.created_at, reverse=True)
+
+    async def retry_job(self, job_id: str) -> JobRecord | None:
+        job = self.jobs.get(job_id)
+        if not job or job.status != JobStatus.failed:
+            return None
+        job.status = JobStatus.queued
+        job.progress = 0
+        job.attempts = 0
+        job.error_code = None
+        job.updated_at = now()
+        return job
+
+    async def create_agent_run(
+        self, run_id: str, user_id: str, session_id: str, thread_id: str
+    ) -> AgentRunRecord:
+        record = AgentRunRecord(run_id, user_id, session_id, thread_id)
+        self.agent_runs[run_id] = record
+        return record
+
+    async def get_owned_agent_run(
+        self, run_id: str, user_id: str
+    ) -> AgentRunRecord | None:
+        record = self.agent_runs.get(run_id)
+        return record if record and record.user_id == user_id else None
+
+    async def update_owned_agent_run(
+        self, run_id: str, user_id: str, **changes: object
+    ) -> AgentRunRecord | None:
+        record = await self.get_owned_agent_run(run_id, user_id)
+        if not record:
+            return None
+        for key in (
+            "status",
+            "tool_steps",
+            "duration_ms",
+            "token_usage",
+            "result_summary",
+            "pending_action",
+            "error_code",
+        ):
+            if key in changes:
+                setattr(record, key, changes[key])
+        record.updated_at = now()
+        return record
+
+
+class SQLAlchemyRepository:
+    """ç”Ÿäº§ä»“åº“ï¼›æ¯ä¸ªæ–¹æ³•éƒ½æ˜¯ç‹¬ç«‹çŸ­äº‹åŠ¡ã€‚"""
+
+    def __init__(self, session_secret: str) -> None:
+        self.session_secret = session_secret
+
+    async def ensure_admin(self, email: str, password: str) -> User:
+        existing = await self.find_user_by_email(email)
+        if existing:
+            return existing
+        try:
+            return await self.create_user(email, password, UserRole.admin, False)
+        except ValueError:
+            existing = await self.find_user_by_email(email)
+            if not existing:
+                raise
+            return existing
+
+    async def find_user_by_email(self, email: str) -> User | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(select(User).where(User.email == email.strip().casefold()))
+
+    async def get_user(self, user_id: str) -> User | None:
+        async with get_session_factory()() as session:
+            return await session.get(User, user_id)
+
+    async def create_user(
+        self, email: str, password: str, role: UserRole, must_change_password: bool = True
+    ) -> User:
+        user = User(
+            email=email.strip().casefold(),
+            password_hash=hash_password(password),
+            role=role,
+            must_change_password=must_change_password,
+        )
+        async with get_session_factory()() as session:
+            session.add(user)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("é‚®ç®±å·²å­˜åœ¨") from exc
+            await session.refresh(user)
+            return user
+
+    async def authenticate(self, email: str, password: str) -> User | None:
+        user = await self.find_user_by_email(email)
+        if not user or not user.active or not verify_password(user.password_hash, password):
+            return None
+        return user
+
+    async def list_users(self) -> list[User]:
+        async with get_session_factory()() as session:
+            result = await session.scalars(select(User).order_by(User.created_at))
+            return list(result)
+
+    async def update_user(self, user_id: str, **changes: object) -> User | None:
+        async with get_session_factory()() as session:
+            user = await session.get(User, user_id)
+            if not user:
+                return None
+            for key in ("active", "role", "must_change_password"):
+                if key in changes and changes[key] is not None:
+                    setattr(user, key, changes[key])
+            if changes.get("active") is False:
+                sessions = await session.scalars(
+                    select(UserSession).where(UserSession.user_id == user_id)
+                )
+                for item in sessions:
+                    await session.delete(item)
+            await session.commit()
+            await session.refresh(user)
+            return user
+
+    async def create_session(self, user_id: str, token: str, ttl_seconds: int) -> None:
+        digest = digest_session_token(token, self.session_secret)
+        record = UserSession(
+            id=digest,
+            user_id=user_id,
+            expires_at=now() + timedelta(seconds=ttl_seconds),
+        )
+        async with get_session_factory()() as session:
+            session.add(record)
+            await session.commit()
+
+    async def user_for_session(self, token: str) -> User | None:
+        digest = digest_session_token(token, self.session_secret)
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(UserSession, User)
+                .join(User, User.id == UserSession.user_id)
+                .where(
+                    UserSession.id == digest,
+                    UserSession.expires_at > now(),
+                    User.active.is_(True),
+                )
+            )
+            row = result.first()
+            return row[1] if row else None
+
+    async def delete_session(self, token: str) -> None:
+        digest = digest_session_token(token, self.session_secret)
+        async with get_session_factory()() as session:
+            record = await session.get(UserSession, digest)
+            if record:
+                await session.delete(record)
+                await session.commit()
+
+    async def set_password(self, user_id: str, password: str) -> None:
+        async with get_session_factory()() as session:
+            user = await session.get(User, user_id)
+            if not user:
+                raise KeyError(user_id)
+            user.password_hash = hash_password(password)
+            user.must_change_password = False
+            await session.commit()
+
+    async def create_paper(self, paper: PaperRecord) -> Paper:
+        record = Paper(**paper.__dict__)
+        async with get_session_factory()() as session:
+            session.add(record)
+            try:
+                # Job åªæŒæœ‰ paper_idï¼Œå¹¶æ²¡æœ‰ ORM relationship å¯ä¾› unit-of-work
+                # æŽ¨æ–­æ’å…¥é¡ºåºï¼›å…ˆ flush Paperï¼Œé¿å… PostgreSQL å¤–é”®ç«žæ€ã€‚
+                await session.flush()
+                session.add(Job(paper_id=record.id, type="parse_pdf", status=JobStatus.queued))
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                duplicate = await session.scalar(
+                    select(Paper).where(
+                        Paper.owner_id == paper.owner_id, Paper.sha256 == paper.sha256
+                    )
+                )
+                if duplicate:
+                    raise ValueError(f"æ–‡çŒ®å·²å­˜åœ¨:{duplicate.id}") from exc
+                # éžé‡å¤é”®çº¦æŸé”™è¯¯ä¸èƒ½ä¼ªè£…æˆ 409ï¼›äº¤ç»™å…¨å±€é”™è¯¯å¤„ç†è®°å½•ä¸ºæœåŠ¡ç«¯æ•…éšœã€‚
+                raise
+            await session.refresh(record)
+            return record
+
+    async def list_papers(self, owner_id: str) -> list[Paper]:
+        async with get_session_factory()() as session:
+            result = await session.scalars(
+                select(Paper)
+                .where(Paper.owner_id == owner_id, Paper.status != PaperStatus.deleting)
+                .order_by(Paper.created_at.desc())
+            )
+            return list(result)
+
+    async def get_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+
+    async def update_owned_paper(
+        self, paper_id: str, owner_id: str, **changes: object
+    ) -> Paper | None:
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+            if not paper:
+                return None
+            for key in ("title", "authors", "year", "abstract", "doi", "status"):
+                if key in changes and changes[key] is not None:
+                    setattr(paper, key, changes[key])
+            paper.updated_at = now()
+            await session.commit()
+            await session.refresh(paper)
+            return paper
+
+    async def delete_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+            if not paper:
+                return None
+            paper.status = PaperStatus.deleting
+            paper.updated_at = now()
+            active_delete = await session.scalar(
+                select(Job).where(
+                    Job.paper_id == paper.id,
+                    Job.type == "delete_paper",
+                    Job.status.in_([JobStatus.queued, JobStatus.running]),
+                )
+            )
+            if not active_delete:
+                session.add(Job(paper_id=paper.id, type="delete_paper"))
+            await session.commit()
+            await session.refresh(paper)
+            return paper
+
+    async def touch_paper_opened(self, paper_id: str, owner_id: str) -> Paper | None:
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+            if not paper:
+                return None
+            paper.last_opened_at = now()
+            paper.updated_at = now()
+            await session.commit()
+            await session.refresh(paper)
+            return paper
+
+    async def set_papers_archived(
+        self, paper_ids: list[str], owner_id: str, archived: bool
+    ) -> list[str] | None:
+        unique_ids = list(dict.fromkeys(paper_ids))
+        async with get_session_factory()() as session:
+            owned_ids = list(
+                await session.scalars(
+                    select(Paper.id).where(
+                        Paper.owner_id == owner_id,
+                        Paper.id.in_(unique_ids),
+                        Paper.status != PaperStatus.deleting,
+                    )
+                )
+            )
+            if set(owned_ids) != set(unique_ids):
+                return None
+            timestamp = now()
+            await session.execute(
+                update(Paper)
+                .where(Paper.owner_id == owner_id, Paper.id.in_(unique_ids))
+                .values(
+                    archived_at=timestamp if archived else None,
+                    updated_at=timestamp,
+                )
+            )
+            await session.commit()
+            return unique_ids
+
+    async def count_active_admins(self) -> int:
+        async with get_session_factory()() as session:
+            value = await session.scalar(
+                select(func.count()).select_from(User).where(
+                    User.active.is_(True), User.role == UserRole.admin
+                )
+            )
+            return int(value or 0)
+
+    async def create_collection(
+        self, owner_id: str, name: str, description: str | None
+    ) -> Collection:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("é›†åˆåç§°ä¸èƒ½ä¸ºç©º")
+        record = Collection(owner_id=owner_id, name=normalized_name, description=description)
+        async with get_session_factory()() as session:
+            session.add(record)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("é›†åˆåç§°å·²å­˜åœ¨") from exc
+            await session.refresh(record)
+            return record
+
+    async def list_collections(self, owner_id: str) -> list[Collection]:
+        async with get_session_factory()() as session:
+            result = await session.scalars(
+                select(Collection)
+                .where(Collection.owner_id == owner_id)
+                .order_by(Collection.name)
+            )
+            return list(result)
+
+    async def list_collection_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(Collection.id, paper_collections.c.paper_id)
+                    .join(
+                        paper_collections,
+                        paper_collections.c.collection_id == Collection.id,
+                    )
+                    .where(Collection.owner_id == owner_id)
+                    .order_by(Collection.id, paper_collections.c.paper_id)
+                )
+            ).all()
+            memberships: dict[str, list[str]] = {}
+            for collection_id, paper_id in rows:
+                memberships.setdefault(collection_id, []).append(paper_id)
+            return memberships
+
+    async def update_collection(
+        self, collection_id: str, owner_id: str, **changes: object
+    ) -> Collection | None:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(Collection).where(
+                    Collection.id == collection_id, Collection.owner_id == owner_id
+                )
+            )
+            if not record:
+                return None
+            if "name" in changes:
+                normalized_name = str(changes["name"]).strip()
+                if not normalized_name:
+                    raise ValueError("é›†åˆåç§°ä¸èƒ½ä¸ºç©º")
+                changes["name"] = normalized_name
+            for key in ("name", "description"):
+                if key in changes:
+                    setattr(record, key, changes[key])
+            record.updated_at = now()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("é›†åˆåç§°å·²å­˜åœ¨") from exc
+            await session.refresh(record)
+            return record
+
+    async def delete_collection(self, collection_id: str, owner_id: str) -> bool:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                delete(Collection).where(
+                    Collection.id == collection_id, Collection.owner_id == owner_id
+                )
+            )
+            await session.commit()
+            return bool(result.rowcount)
+
+    async def set_paper_collection(
+        self, collection_id: str, paper_id: str, owner_id: str, assigned: bool
+    ) -> bool:
+        async with get_session_factory()() as session:
+            collection = await session.scalar(
+                select(Collection.id).where(
+                    Collection.id == collection_id, Collection.owner_id == owner_id
+                )
+            )
+            paper = await session.scalar(
+                select(Paper.id).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+            if not collection or not paper:
+                return False
+            exists = await session.scalar(
+                select(paper_collections.c.paper_id).where(
+                    paper_collections.c.paper_id == paper_id,
+                    paper_collections.c.collection_id == collection_id,
+                )
+            )
+            if assigned and not exists:
+                await session.execute(
+                    insert(paper_collections).values(
+                        paper_id=paper_id, collection_id=collection_id
+                    )
+                )
+            elif not assigned and exists:
+                await session.execute(
+                    delete(paper_collections).where(
+                        paper_collections.c.paper_id == paper_id,
+                        paper_collections.c.collection_id == collection_id,
+                    )
+                )
+            await session.commit()
+            return True
+
+    async def create_tag(self, owner_id: str, name: str, color: str | None) -> Tag:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("æ ‡ç­¾åç§°ä¸èƒ½ä¸ºç©º")
+        record = Tag(owner_id=owner_id, name=normalized_name, color=color)
+        async with get_session_factory()() as session:
+            session.add(record)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("æ ‡ç­¾åç§°å·²å­˜åœ¨") from exc
+            await session.refresh(record)
+            return record
+
+    async def list_tags(self, owner_id: str) -> list[Tag]:
+        async with get_session_factory()() as session:
+            result = await session.scalars(
+                select(Tag).where(Tag.owner_id == owner_id).order_by(Tag.name)
+            )
+            return list(result)
+
+    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]:
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(Tag.id, paper_tags.c.paper_id)
+                    .join(paper_tags, paper_tags.c.tag_id == Tag.id)
+                    .where(Tag.owner_id == owner_id)
+                    .order_by(Tag.id, paper_tags.c.paper_id)
+                )
+            ).all()
+            memberships: dict[str, list[str]] = {}
+            for tag_id, paper_id in rows:
+                memberships.setdefault(tag_id, []).append(paper_id)
+            return memberships
+
+    async def update_tag(
+        self, tag_id: str, owner_id: str, **changes: object
+    ) -> Tag | None:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(Tag).where(Tag.id == tag_id, Tag.owner_id == owner_id)
+            )
+            if not record:
+                return None
+            if "name" in changes:
+                normalized_name = str(changes["name"]).strip()
+                if not normalized_name:
+                    raise ValueError("æ ‡ç­¾åç§°ä¸èƒ½ä¸ºç©º")
+                changes["name"] = normalized_name
+            for key in ("name", "color"):
+                if key in changes:
+                    setattr(record, key, changes[key])
+            record.updated_at = now()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("æ ‡ç­¾åç§°å·²å­˜åœ¨") from exc
+            await session.refresh(record)
+            return record
+
+    async def delete_tag(self, tag_id: str, owner_id: str) -> bool:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                delete(Tag).where(Tag.id == tag_id, Tag.owner_id == owner_id)
+            )
+            await session.commit()
+            return bool(result.rowcount)
+
+    async def set_paper_tag(
+        self, tag_id: str, paper_id: str, owner_id: str, assigned: bool
+    ) -> bool:
+        async with get_session_factory()() as session:
+            tag = await session.scalar(
+                select(Tag.id).where(Tag.id == tag_id, Tag.owner_id == owner_id)
+            )
+            paper = await session.scalar(
+                select(Paper.id).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+            if not tag or not paper:
+                return False
+            exists = await session.scalar(
+                select(paper_tags.c.paper_id).where(
+                    paper_tags.c.paper_id == paper_id, paper_tags.c.tag_id == tag_id
+                )
+            )
+            if assigned and not exists:
+                await session.execute(insert(paper_tags).values(paper_id=paper_id, tag_id=tag_id))
+            elif not assigned and exists:
+                await session.execute(
+                    delete(paper_tags).where(
+                        paper_tags.c.paper_id == paper_id, paper_tags.c.tag_id == tag_id
+                    )
+                )
+            await session.commit()
+            return True
+
+    async def list_jobs(self) -> list[Job]:
+        async with get_session_factory()() as session:
+            result = await session.scalars(select(Job).order_by(Job.created_at.desc()).limit(200))
+            return list(result)
+
+    async def retry_job(self, job_id: str) -> Job | None:
+        async with get_session_factory()() as session:
+            job = await session.scalar(
+                select(Job).where(Job.id == job_id, Job.status == JobStatus.failed)
+            )
+            if not job:
+                return None
+            job.status = JobStatus.queued
+            job.progress = 0
+            job.attempts = 0
+            job.error_code = None
+            job.error_message = None
+            job.available_at = now()
+            job.updated_at = now()
+            await session.commit()
+            await session.refresh(job)
+            return job
+
+    async def create_agent_run(
+        self, run_id: str, user_id: str, session_id: str, thread_id: str
+    ) -> AgentRun:
+        record = AgentRun(
+            id=run_id,
+            user_id=user_id,
+            session_id=session_id,
+            thread_id=thread_id,
+            status="pending",
+        )
+        async with get_session_factory()() as session:
+            session.add(record)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("Agent Run å·²å­˜åœ¨") from exc
+            await session.refresh(record)
+            return record
+
+    async def get_owned_agent_run(self, run_id: str, user_id: str) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+            )
+
+    async def update_owned_agent_run(
+        self, run_id: str, user_id: str, **changes: object
+    ) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+            )
+            if not record:
+                return None
+            for key in (
+                "status",
+                "tool_steps",
+                "duration_ms",
+                "token_usage",
+                "result_summary",
+                "pending_action",
+                "error_code",
+            ):
+                if key in changes:
+                    setattr(record, key, changes[key])
+            record.updated_at = now()
+            await session.commit()
+            await session.refresh(record)
+            return record
