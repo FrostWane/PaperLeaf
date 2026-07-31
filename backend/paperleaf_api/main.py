@@ -25,12 +25,14 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .agent.graph import build_agent_graph
+from .agent.graph import build_agent_graph, build_configured_evidence_support_grader
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .artifacts import load_paper_evidence, structure_graph, summarize_evidence
 from .arxiv_service import fetch_arxiv_pdf, search_arxiv
 from .config import Settings, settings
 from .models import PaperStatus, UserRole
+from .rag.citations import Evidence
+from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import MemoryRepository, PaperRecord, SQLAlchemyRepository, UserRecord
 from .schemas import (
     AgentResumeRequest,
@@ -78,7 +80,15 @@ class AppServices:
         )
         self.storage = storage or create_storage(config)
         self.retriever = DemoLibrarySearch() if config.is_demo else SQLLibrarySearch()
-        self.agent_graph = build_agent_graph(retriever=self.retriever)
+        self.agent_graph = build_agent_graph(
+            retriever=self.retriever,
+            quality_policy=EvidenceQualityPolicy(
+                min_confidence=config.evidence_min_confidence,
+                min_vector_score=config.evidence_min_vector_score,
+                min_lexical_coverage=config.evidence_min_lexical_coverage,
+            ),
+            support_grader=build_configured_evidence_support_grader(config),
+        )
 
 
 def _paper_read(paper: PaperRecord) -> PaperRead:
@@ -89,11 +99,23 @@ def _user_read(user: UserRecord) -> UserRead:
     return UserRead.model_validate(user)
 
 
-def _citation_dicts(items: list[Any]) -> list[dict[str, Any]]:
-    return [
-        item.__dict__ if hasattr(item, "__dict__") else dict(item)
-        for item in items
-    ]
+def _citation_dicts(
+    items: list[Any], evidence: list[Evidence] | None = None
+) -> list[dict[str, Any]]:
+    evidence_by_chunk = {item.chunk_id: item for item in evidence or []}
+    result: list[dict[str, Any]] = []
+    for item in items:
+        value = item.__dict__ if hasattr(item, "__dict__") else dict(item)
+        citation = dict(value)
+        source = evidence_by_chunk.get(str(citation.get("chunk_id", "")))
+        if source:
+            citation["paper_title"] = source.paper_title
+            citation["excerpt"] = citation.get("excerpt") or source.text[:320]
+            citation["viewer_url"] = (
+                f"/api/v1/papers/{source.paper_id}/file#page={source.physical_page}"
+            )
+        result.append(citation)
+    return result
 
 
 def _agent_run_read(record: Any) -> AgentRunRead:
@@ -104,6 +126,7 @@ def _agent_run_read(record: Any) -> AgentRunRead:
         status=record.status,
         answer=summary.get("answer", ""),
         citations=summary.get("citations", []),
+        evidence_quality=summary.get("evidence_quality", {}),
         error=record.error_code,
     )
 
@@ -138,7 +161,7 @@ def create_app(
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.3.0",
+        version="0.4.0",
         description="个人科研文献库、页级 RAG 与受控研究 Agent",
         lifespan=lifespan,
     )
@@ -209,9 +232,7 @@ def create_app(
             "max_age": config.session_ttl_seconds,
             "path": "/",
         }
-        response.set_cookie(
-            config.session_cookie, session_token, httponly=True, **cookie_options
-        )
+        response.set_cookie(config.session_cookie, session_token, httponly=True, **cookie_options)
         response.set_cookie(config.csrf_cookie, csrf_token, httponly=False, **cookie_options)
         return _user_read(user)
 
@@ -640,9 +661,7 @@ def create_app(
                 headers={"Content-Range": f"bytes */{total}"},
             ) from exc
         if byte_range:
-            body = await services.storage.read(
-                paper.storage_key, byte_range.start, byte_range.end
-            )
+            body = await services.storage.read(paper.storage_key, byte_range.start, byte_range.end)
             headers.update(
                 {
                     "Content-Range": byte_range.content_range,
@@ -750,9 +769,7 @@ def create_app(
             mode=mode,
         )
 
-    @app.post(
-        "/api/v1/papers/{paper_id}/structure-graph", response_model=StructureGraphResponse
-    )
+    @app.post("/api/v1/papers/{paper_id}/structure-graph", response_model=StructureGraphResponse)
     async def build_paper_structure_graph(
         paper_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
@@ -765,9 +782,7 @@ def create_app(
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
         nodes, edges, mermaid = structure_graph(evidence)
-        return StructureGraphResponse(
-            paper_id=paper_id, nodes=nodes, edges=edges, mermaid=mermaid
-        )
+        return StructureGraphResponse(paper_id=paper_id, nodes=nodes, edges=edges, mermaid=mermaid)
 
     @app.post("/api/v1/chat/sessions/{session_id}/messages")
     async def send_chat_message(
@@ -802,6 +817,12 @@ def create_app(
                 result = await services.agent_graph.ainvoke(
                     initial, {"recursion_limit": 8, "configurable": {"thread_id": thread_id}}
                 )
+                quality = dict(result.get("evidence_quality", {}))
+                yield SSEEvent(
+                    event="tool_finished",
+                    run_id=run_id,
+                    data={"tool": "search_library", "evidence_quality": quality},
+                ).encode()
                 interrupts = result.get("__interrupt__", [])
                 if interrupts:
                     pending = getattr(interrupts[0], "value", {})
@@ -811,13 +832,19 @@ def create_app(
                         status="interrupted",
                         tool_steps=int(result.get("tool_steps", 0)),
                         pending_action=pending,
-                        result_summary={"answer": "", "citations": []},
+                        result_summary={
+                            "answer": "",
+                            "citations": [],
+                            "evidence_quality": quality,
+                        },
                     )
                     yield SSEEvent(
                         event="interrupt", run_id=run_id, data={"pending_action": pending}
                     ).encode()
                     return
-                citation_values = _citation_dicts(result.get("citations", []))
+                citation_values = _citation_dicts(
+                    result.get("citations", []), result.get("retrieved_evidence", [])
+                )
                 await services.repository.update_owned_agent_run(
                     run_id,
                     user.id,
@@ -827,12 +854,10 @@ def create_app(
                     result_summary={
                         "answer": str(result.get("answer", "")),
                         "citations": citation_values,
+                        "evidence_quality": quality,
                     },
                     error_code=result.get("error"),
                 )
-                yield SSEEvent(
-                    event="tool_finished", run_id=run_id, data={"tool": "search_library"}
-                ).encode()
                 answer = str(result.get("answer", ""))
                 for piece in re.findall(r".{1,48}", answer, flags=re.S):
                     yield SSEEvent(
@@ -852,7 +877,7 @@ def create_app(
                     user.id,
                     status="failed",
                     error_code="AGENT_RUN_FAILED",
-                    result_summary={"answer": "", "citations": []},
+                    result_summary={"answer": "", "citations": [], "evidence_quality": {}},
                 )
                 yield SSEEvent(
                     event="error", run_id=run_id, data={"message": "Agent 运行失败"}
@@ -902,7 +927,10 @@ def create_app(
                 pending_action=None,
                 result_summary={
                     "answer": str(result.get("answer", "")),
-                    "citations": _citation_dicts(result.get("citations", [])),
+                    "citations": _citation_dicts(
+                        result.get("citations", []), result.get("retrieved_evidence", [])
+                    ),
+                    "evidence_quality": dict(result.get("evidence_quality", {})),
                 },
                 error_code=result.get("error"),
             )
@@ -919,6 +947,9 @@ def create_app(
                         else "已取消导入。"
                     ),
                     "citations": [],
+                    "evidence_quality": run.result_summary.get("evidence_quality", {})
+                    if run.result_summary
+                    else {},
                 },
             )
         return await get_agent_run(run_id, user)

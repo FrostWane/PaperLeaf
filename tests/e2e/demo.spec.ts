@@ -19,6 +19,21 @@ test("公开演示可以提问并通过引用跳到论文页", async ({ page }) 
   await expect(reader.getByText("06 / 15")).toBeVisible();
 });
 
+test("跨文献提问展示证据质量并跳到引用物理页", async ({ page }) => {
+  await page.goto("/ask");
+  await expect(page.locator('.ask-layout[data-client-ready="true"]')).toBeVisible();
+  await page.getByPlaceholder(/这些论文如何解释/).fill("作者为什么放弃循环结构？");
+  await page.getByRole("button", { name: "开始提问" }).click();
+
+  await expect(page.getByRole("status")).toContainText("关键词与语义检索相互印证");
+  await page.getByRole("link", { name: /Attention Is All You Need.*PDF 2/ }).click();
+
+  await expect(page).toHaveURL(/\/library\/attention\?page=2/);
+  const mobile = page.viewportSize()!.width < 760;
+  const reader = mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader");
+  await expect(reader.getByText("02 / 15")).toBeVisible();
+});
+
 test("首页没有严重无障碍问题", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /让每一次回答/ })).toBeVisible();

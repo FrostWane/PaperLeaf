@@ -12,6 +12,9 @@ class Evidence:
     paper_title: str
     physical_page: int
     text: str
+    retrieval_score: float = 0.0
+    retrieval_channels: tuple[str, ...] = ()
+    channel_scores: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)

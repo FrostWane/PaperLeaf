@@ -16,6 +16,19 @@ export const groundedAnswer: AgentAnswer = {
     { id: "c2", paperId: "attention", paperTitle: "Attention Is All You Need", page: 6, chunkId: "p6-c1", quote: "maximum path length between any two positions", href: "/api/v1/papers/attention/file#page=6" },
     { id: "c3", paperId: "attention", paperTitle: "Attention Is All You Need", page: 11, chunkId: "p11-c2", quote: "significantly less time to train", href: "/api/v1/papers/attention/file#page=11" },
   ],
+  evidenceQuality: {
+    grade: "sufficient",
+    confidence: 0.86,
+    reasonCode: "channel_agreement",
+    summary: "已定位 3 个证据页，关键词与语义检索相互印证",
+    evidenceCount: 3,
+    pageCount: 3,
+    paperCount: 1,
+    channels: ["keyword", "vector"],
+    retrievalGrade: "sufficient",
+    answerSupportGrade: "supported",
+    answerSupportConfidence: 0.91,
+  },
 };
 
 export const paperSummary: PaperSummary = {

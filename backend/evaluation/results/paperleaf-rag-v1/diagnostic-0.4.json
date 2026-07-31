@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-rag-v1",
+  "evaluation_status": "diagnostic_not_blind",
+  "reported_split": "test",
+  "k": 5,
+  "results": [
+    {"variant":"rrf_page","recall":{"numerator":68,"denominator":90,"value":0.7555555556},"mrr":0.5889583333,"latency_p95_ms":51,"decision":"adopt"},
+    {"variant":"bge_dense_page","recall":{"numerator":49,"denominator":90,"value":0.5444444444},"mrr":0.3191666667,"latency_p95_ms":76,"decision":"reject"},
+    {"variant":"bge_rrf_page","recall":{"numerator":59,"denominator":90,"value":0.6555555556},"mrr":0.4395833333,"latency_p95_ms":123,"decision":"reject"},
+    {"variant":"rrf_page_cross_encoder","recall":{"numerator":65,"denominator":90,"value":0.7222222222},"mrr":0.5275,"latency_p95_ms":5128,"decision":"reject"},
+    {"variant":"rrf_page_cross_encoder_focus","recall":{"numerator":63,"denominator":90,"value":0.7},"mrr":0.4952083333,"latency_p95_ms":4996,"decision":"reject"},
+    {"variant":"window_bm25","recall":{"numerator":63,"denominator":90,"value":0.7},"mrr":0.5702083333,"latency_p95_ms":17,"decision":"reject"},
+    {"variant":"rrf_page_window","recall":{"numerator":66,"denominator":90,"value":0.7333333333},"mrr":0.59,"latency_p95_ms":68,"decision":"reject"}
+  ],
+  "quality_gate": {
+    "unanswerable_wrong_answer_rate": {"numerator":1,"denominator":10,"value":0.1},
+    "citation_coverage": {"numerator":22,"denominator":80,"value":0.275},
+    "illegal_citation_count": 0
+  }
+}

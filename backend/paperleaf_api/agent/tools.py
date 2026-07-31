@@ -15,6 +15,7 @@ from ..config import settings
 from ..db import get_session_factory
 from ..models import Paper, PaperChunk
 from ..rag.citations import Evidence
+from ..rag.retrieval_quality import deduplicate_evidence_by_page
 from ..rag.rrf import RankedHit, reciprocal_rank_fusion
 
 
@@ -62,6 +63,9 @@ class DemoLibrarySearch:
                 paper_title="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
                 physical_page=3,
                 text="RAG combines parametric and non-parametric memory for generation.",
+                retrieval_score=1.0,
+                retrieval_channels=("demo",),
+                channel_scores=(("demo", 1.0),),
             )
         ]
 
@@ -119,7 +123,7 @@ class SQLLibrarySearch:
                     .join(Paper, Paper.id == PaperChunk.paper_id)
                     .where(*conditions)
                     .order_by(rank.desc())
-                    .limit(max(request.limit * 2, 10))
+                    .limit(max(request.limit * 5, 40))
                 )
             ).all()
 
@@ -139,7 +143,7 @@ class SQLLibrarySearch:
                         .join(Paper, Paper.id == PaperChunk.paper_id)
                         .where(*vector_conditions)
                         .order_by(distance)
-                        .limit(max(request.limit * 2, 10))
+                        .limit(max(request.limit * 5, 40))
                     )
                 ).all()
 
@@ -162,8 +166,33 @@ class SQLLibrarySearch:
         channels = [hits for hits in (vector_hits, keyword_hits) if hits]
         if not channels:
             return []
-        return [
-            hit.payload
-            for hit in reciprocal_rank_fusion(channels, limit=request.limit)
-            if isinstance(hit.payload, Evidence)
-        ]
+        channel_limit = max(request.limit * 5, 40)
+        keyword_scores = {hit.id: hit.score for hit in keyword_hits}
+        vector_scores = {hit.id: hit.score for hit in vector_hits}
+        fused_evidence: list[Evidence] = []
+        for hit in reciprocal_rank_fusion(channels, limit=channel_limit):
+            if not isinstance(hit.payload, Evidence):
+                continue
+            hit_channels = tuple(
+                name
+                for name, scores in (("keyword", keyword_scores), ("vector", vector_scores))
+                if hit.id in scores
+            )
+            channel_scores = tuple(
+                (name, scores[hit.id])
+                for name, scores in (("keyword", keyword_scores), ("vector", vector_scores))
+                if hit.id in scores
+            )
+            fused_evidence.append(
+                Evidence(
+                    chunk_id=hit.payload.chunk_id,
+                    paper_id=hit.payload.paper_id,
+                    paper_title=hit.payload.paper_title,
+                    physical_page=hit.payload.physical_page,
+                    text=hit.payload.text,
+                    retrieval_score=hit.score,
+                    retrieval_channels=hit_channels,
+                    channel_scores=channel_scores,
+                )
+            )
+        return deduplicate_evidence_by_page(fused_evidence, limit=request.limit)

@@ -111,6 +111,21 @@ export interface AgentAnswer {
   question: string;
   answer: string;
   citations: Citation[];
+  evidenceQuality?: AgentEvidenceQuality;
+}
+
+export interface AgentEvidenceQuality {
+  grade: "sufficient" | "insufficient";
+  confidence: number;
+  reasonCode: string;
+  summary: string;
+  evidenceCount: number;
+  pageCount: number;
+  paperCount: number;
+  channels: string[];
+  retrievalGrade?: "sufficient" | "insufficient";
+  answerSupportGrade?: "supported" | "unsupported" | "not_checked";
+  answerSupportConfidence?: number;
 }
 
 export interface ArxivResult {

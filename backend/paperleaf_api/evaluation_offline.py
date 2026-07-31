@@ -22,6 +22,12 @@ from .evaluation import (
 )
 from .evaluation_dataset import read_frozen_cases, read_manifest, validate_dataset
 from .rag.chunking import PageChunk, PageText, chunk_pages
+from .rag.citations import Evidence
+from .rag.retrieval_quality import (
+    EvidenceQuality,
+    assess_evidence,
+    deduplicate_evidence_by_page,
+)
 from .rag.rrf import RankedHit, reciprocal_rank_fusion
 
 _WORD_RE = re.compile(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*")
@@ -66,6 +72,14 @@ class ScoredChunk:
 class QueryRanking:
     hits: list[ScoredChunk]
     confidence: float
+    quality: EvidenceQuality | None = None
+
+
+@dataclass(frozen=True)
+class SearchWindow:
+    id: str
+    chunk: PageChunk
+    terms: tuple[str, ...]
 
 
 def _tokens(text: str) -> list[str]:
@@ -127,6 +141,24 @@ class OfflineRetrievalIndex:
         self.by_id = {chunk.id: chunk for chunk in chunks}
         for chunk in chunks:
             self.by_paper[chunk.paper_id].append(chunk)
+
+        self.windows_by_paper: dict[str, list[SearchWindow]] = defaultdict(list)
+        for chunk in chunks:
+            terms = _tokens(chunk.text)
+            step = 72
+            for window_index, start in enumerate(range(0, len(terms), step)):
+                window_terms = tuple(terms[start : start + 96])
+                if not window_terms:
+                    break
+                self.windows_by_paper[chunk.paper_id].append(
+                    SearchWindow(
+                        id=f"{chunk.id}:w{window_index}",
+                        chunk=chunk,
+                        terms=window_terms,
+                    )
+                )
+                if start + 96 >= len(terms):
+                    break
 
         raw_by_id = {chunk.id: _raw_features(chunk.text, dimensions=dimensions) for chunk in chunks}
         document_frequency: Counter[int] = Counter()
@@ -225,6 +257,45 @@ class OfflineRetrievalIndex:
         confidence = self._lexical_confidence(query_terms, hits)
         return QueryRanking(hits, confidence)
 
+    def window_bm25(self, query: str, paper_ids: list[str], *, limit: int) -> QueryRanking:
+        windows = [
+            window for paper_id in paper_ids for window in self.windows_by_paper.get(paper_id, [])
+        ]
+        query_terms = Counter(_tokens(query))
+        document_frequency: Counter[str] = Counter()
+        for window in windows:
+            document_frequency.update(set(window.terms))
+        average_length = (
+            sum(len(window.terms) for window in windows) / len(windows) if windows else 0
+        )
+        k1, b = 1.5, 0.75
+        best_by_page: dict[tuple[str, int], ScoredChunk] = {}
+        for window in windows:
+            frequencies = Counter(window.terms)
+            score = 0.0
+            for term, query_frequency in query_terms.items():
+                frequency = frequencies[term]
+                if not frequency:
+                    continue
+                idf = math.log(
+                    1
+                    + (len(windows) - document_frequency[term] + 0.5)
+                    / (document_frequency[term] + 0.5)
+                )
+                denominator = frequency + k1 * (
+                    1 - b + b * len(window.terms) / max(average_length, 1)
+                )
+                score += query_frequency * idf * frequency * (k1 + 1) / denominator
+            if score <= 0:
+                continue
+            key = (window.chunk.paper_id, window.chunk.physical_page)
+            current = best_by_page.get(key)
+            if current is None or score > current.score:
+                best_by_page[key] = ScoredChunk(window.chunk, score)
+        hits = sorted(best_by_page.values(), key=lambda hit: (-hit.score, hit.chunk.id))[:limit]
+        confidence = self._lexical_confidence(query_terms, hits)
+        return QueryRanking(hits, confidence)
+
     @staticmethod
     def _lexical_confidence(query_terms: Counter[str], hits: list[ScoredChunk]) -> float:
         if not hits or not query_terms:
@@ -242,14 +313,21 @@ class OfflineRetrievalIndex:
         page_dedup: bool = False,
         neighbor_weight: float = 0.0,
         scope_diversity: bool = False,
+        window_channel: bool = False,
     ) -> QueryRanking:
         channel_limit = max(limit * 8, 40)
         vector = self.hashing_vector(query, paper_ids, limit=channel_limit)
         keyword = self.bm25(query, paper_ids, limit=channel_limit)
+        window = (
+            self.window_bm25(query, paper_ids, limit=channel_limit)
+            if window_channel
+            else QueryRanking([], 0.0)
+        )
         vector_hits = [RankedHit(hit.chunk.id, hit.score, hit.chunk) for hit in vector.hits]
         keyword_hits = [RankedHit(hit.chunk.id, hit.score, hit.chunk) for hit in keyword.hits]
+        window_hits = [RankedHit(hit.chunk.id, hit.score, hit.chunk) for hit in window.hits]
         fused = reciprocal_rank_fusion(
-            [channel for channel in (vector_hits, keyword_hits) if channel],
+            [channel for channel in (vector_hits, keyword_hits, window_hits) if channel],
             limit=channel_limit,
         )
         hits = [
@@ -257,19 +335,63 @@ class OfflineRetrievalIndex:
             for hit in fused
             if isinstance(hit.payload, PageChunk)
         ]
-        if page_dedup:
+        vector_score = {hit.chunk.id: hit.score for hit in vector.hits}
+        keyword_score = {hit.chunk.id: hit.score for hit in keyword.hits}
+        window_score = {hit.chunk.id: hit.score for hit in window.hits}
+
+        def evidence_for(hit: ScoredChunk) -> Evidence:
+            channels = tuple(
+                name
+                for name, scores in (
+                    ("keyword", keyword_score),
+                    ("vector", vector_score),
+                    ("window", window_score),
+                )
+                if hit.chunk.id in scores
+            )
+            scores = tuple(
+                (name, values[hit.chunk.id])
+                for name, values in (
+                    ("keyword", keyword_score),
+                    ("vector", vector_score),
+                    ("window", window_score),
+                )
+                if hit.chunk.id in values
+            )
+            return Evidence(
+                chunk_id=hit.chunk.id,
+                paper_id=hit.chunk.paper_id,
+                paper_title=hit.chunk.paper_id,
+                physical_page=hit.chunk.physical_page,
+                text=hit.chunk.text,
+                retrieval_score=hit.score,
+                retrieval_channels=channels,
+                channel_scores=scores,
+            )
+
+        quality_evidence: list[Evidence]
+        if page_dedup and not neighbor_weight:
+            quality_evidence = deduplicate_evidence_by_page(
+                [evidence_for(hit) for hit in hits], limit=channel_limit
+            )
+            hits = [
+                ScoredChunk(self.by_id[item.chunk_id], item.retrieval_score)
+                for item in quality_evidence
+            ]
+        elif page_dedup:
             hits = self._rank_pages(hits, neighbor_weight=neighbor_weight)
+            quality_evidence = [evidence_for(hit) for hit in hits]
+        else:
+            quality_evidence = [evidence_for(hit) for hit in hits]
         if scope_diversity and len(paper_ids) > 1:
             hits = self._diversify_scope(hits, paper_ids=paper_ids, limit=limit)
         hits = hits[:limit]
-        vector_score = {hit.chunk.id: hit.score for hit in vector.hits}
-        if hits:
-            vector_confidence = vector_score.get(hits[0].chunk.id, 0.0)
-            lexical_confidence = self._lexical_confidence(Counter(_tokens(query)), [hits[0]])
-            confidence = 0.7 * vector_confidence + 0.3 * lexical_confidence
-        else:
-            confidence = 0.0
-        return QueryRanking(hits, confidence)
+        quality_by_chunk = {item.chunk_id: item for item in quality_evidence}
+        final_evidence = [
+            quality_by_chunk[hit.chunk.id] for hit in hits if hit.chunk.id in quality_by_chunk
+        ]
+        quality = assess_evidence(query, final_evidence)
+        return QueryRanking(hits, quality.confidence, quality)
 
     @staticmethod
     def _rank_pages(hits: list[ScoredChunk], *, neighbor_weight: float) -> list[ScoredChunk]:
@@ -358,8 +480,11 @@ def _prediction(
     *,
     latency_ms: int,
     threshold: float | None,
+    quality_gate: bool = False,
 ) -> EvaluationPrediction:
-    abstained = threshold is not None and ranking.confidence < threshold
+    abstained = (threshold is not None and ranking.confidence < threshold) or (
+        quality_gate and (ranking.quality is None or ranking.quality.grade == "insufficient")
+    )
     evidence = [
         RetrievedEvidencePrediction(
             chunk_id=hit.chunk.id,
@@ -415,6 +540,14 @@ def run_variants(
             page_dedup=True,
             scope_diversity=True,
         ),
+        "window_bm25": lambda case: index.window_bm25(case.query, case.paper_ids, limit=k),
+        "rrf_page_window": lambda case: index.fused(
+            case.query,
+            case.paper_ids,
+            limit=k,
+            page_dedup=True,
+            window_channel=True,
+        ),
     }
     for name, retrieve in variants.items():
         for case in cases:
@@ -444,6 +577,16 @@ def run_variants(
             rankings["rrf_page"][case.id],
             latency_ms=latencies["rrf_page"][case.id],
             threshold=threshold,
+        )
+        for case in cases
+    ]
+    predictions["rrf_page_quality_gate"] = [
+        _prediction(
+            case,
+            rankings["rrf_page"][case.id],
+            latency_ms=latencies["rrf_page"][case.id],
+            threshold=None,
+            quality_gate=True,
         )
         for case in cases
     ]
@@ -494,6 +637,8 @@ def render_report(result: dict) -> str:
     neighbor_recall = _test_metric(result, "rrf_page_neighbor", "retrieval_recall_at_k")
     refusal_wrong = _test_metric(result, "rrf_page_refusal", "unanswerable_wrong_answer_rate")
     refusal_coverage = _test_metric(result, "rrf_page_refusal", "citation_coverage")
+    quality_wrong = _test_metric(result, "rrf_page_quality_gate", "unanswerable_wrong_answer_rate")
+    quality_coverage = _test_metric(result, "rrf_page_quality_gate", "citation_coverage")
     return "\n".join(
         (
             "# PaperLeaf RAG v1 离线基线",
@@ -516,6 +661,8 @@ def render_report(result: dict) -> str:
             "因此不作为默认方案。",
             f"- 严格拒答：test 不可回答错误作答率为 `{refusal_wrong * 100:.1f}%`，"
             f"引用覆盖率为 `{refusal_coverage * 100:.1f}%`；安全性提升伴随覆盖损失。",
+            f"- 线上同源质量门禁：test 不可回答错误作答率为 `{quality_wrong * 100:.1f}%`，"
+            f"引用覆盖率为 `{quality_coverage * 100:.1f}%`。",
             "",
             "## 拒答阈值",
             "",

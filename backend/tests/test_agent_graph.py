@@ -3,11 +3,28 @@ import asyncio
 from paperleaf_api.agent.graph import build_agent_graph
 from paperleaf_api.agent.tools import ArxivSearchInput, LibrarySearchInput, ToolResult
 from paperleaf_api.rag.citations import CitationClaim, Evidence
+from paperleaf_api.rag.retrieval_quality import AnswerSupport
 
 
 class EvidenceRetriever:
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
-        return [Evidence("c1", "p1", "测试论文", 4, "模型通过检索证据回答。")]
+        return [
+            Evidence(
+                "c1",
+                "p1",
+                "测试论文",
+                4,
+                "论文结论是模型通过检索证据回答。",
+                retrieval_score=0.03,
+                retrieval_channels=("keyword",),
+                channel_scores=(("keyword", 0.4),),
+            )
+        ]
+
+
+class IrrelevantRetriever:
+    async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
+        return [Evidence("c2", "p1", "测试论文", 9, "附录列出了实验硬件。")]
 
 
 class EmptyRetriever:
@@ -34,6 +51,10 @@ async def forged_answerer(query: str, evidence: list[Evidence]):
     return "伪造回答", [CitationClaim("forged", "p1", 99, "")]
 
 
+async def unsupported_grader(query: str, evidence: list[Evidence]) -> AnswerSupport:
+    return AnswerSupport(False, 0.94, "answer_not_supported")
+
+
 def _run(graph):
     return asyncio.run(
         graph.ainvoke(
@@ -49,6 +70,7 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     assert result["status"] == "completed"
     assert result["answer"] == "有依据的回答"
     assert result["citations"][0].physical_page == 4
+    assert result["evidence_quality"]["grade"] == "sufficient"
 
 
 def test_graph_abstains_when_no_evidence_exists() -> None:
@@ -56,7 +78,16 @@ def test_graph_abstains_when_no_evidence_exists() -> None:
 
     assert result["status"] == "completed"
     assert result["citations"] == []
-    assert "没有足够证据" in result["answer"]
+    assert "没有找到可核验的证据页" in result["answer"]
+
+
+def test_graph_abstains_when_retrieval_is_nonempty_but_irrelevant() -> None:
+    result = _run(build_agent_graph(IrrelevantRetriever(), answerer))
+
+    assert result["status"] == "completed"
+    assert result["citations"] == []
+    assert result["evidence_quality"]["reason_code"] == "weak_match"
+    assert "匹配度不足" in result["answer"]
 
 
 def test_graph_suppresses_answer_with_forged_citation() -> None:
@@ -65,6 +96,21 @@ def test_graph_suppresses_answer_with_forged_citation() -> None:
     assert result["status"] == "completed"
     assert result["citations"] == []
     assert "未通过服务端校验" in result["answer"]
+
+
+def test_graph_abstains_when_evidence_is_relevant_but_does_not_support_answer() -> None:
+    result = _run(
+        build_agent_graph(
+            EvidenceRetriever(),
+            answerer,
+            support_grader=unsupported_grader,
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["citations"] == []
+    assert result["evidence_quality"]["retrieval_grade"] == "sufficient"
+    assert result["evidence_quality"]["answer_support_grade"] == "unsupported"
 
 
 def test_graph_interrupts_before_arxiv_import() -> None:

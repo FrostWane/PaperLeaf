@@ -1,6 +1,6 @@
 import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
-import type { AdminJob, AgentAnswer, ArxivResult, BulkPaperActionInput, CollectionInput, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTag, PaperUpdateInput, SessionUser, TagInput, UserRecord } from "./types";
+import type { AdminJob, AgentAnswer, AgentEvidenceQuality, ArxivResult, BulkPaperActionInput, CollectionInput, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTag, PaperUpdateInput, SessionUser, TagInput, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -63,6 +63,22 @@ function mapTag(item: Record<string, unknown>): PaperTag {
     name: String(item.name),
     color: item.color ? String(item.color) : undefined,
     paperIds: (item.paper_ids as unknown[] ?? []).map(String),
+  };
+}
+
+function mapEvidenceQuality(item: Record<string, unknown>): AgentEvidenceQuality {
+  return {
+    grade: item.grade === "sufficient" ? "sufficient" : "insufficient",
+    confidence: Number(item.confidence ?? 0),
+    reasonCode: String(item.reason_code ?? "unknown"),
+    summary: String(item.summary ?? "检索质量未知"),
+    evidenceCount: Number(item.evidence_count ?? 0),
+    pageCount: Number(item.page_count ?? 0),
+    paperCount: Number(item.paper_count ?? 0),
+    channels: Array.isArray(item.channels) ? item.channels.map(String) : [],
+    retrievalGrade: item.retrieval_grade === "sufficient" ? "sufficient" : "insufficient",
+    answerSupportGrade: item.answer_support_grade === "supported" ? "supported" : item.answer_support_grade === "unsupported" ? "unsupported" : "not_checked",
+    answerSupportConfidence: item.answer_support_confidence === null || item.answer_support_confidence === undefined ? undefined : Number(item.answer_support_confidence),
   };
 }
 
@@ -275,13 +291,14 @@ export const realDataSource: PaperLeafDataSource = {
   async ask(question, paperIds = []) {
     const r = await fetch(`${API_BASE_URL}/chat/sessions/default/messages`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ content: question, scope: paperIds.length === 1 ? "paper" : paperIds.length > 1 ? "selection" : "library", selected_paper_ids: paperIds, web_enabled: false }) });
     if (!r.ok) throw new Error("提问失败");
-    let answer = ""; const citations: AgentAnswer["citations"] = [];
+    let answer = ""; const citations: AgentAnswer["citations"] = []; let evidenceQuality: AgentEvidenceQuality | undefined;
     for await (const event of readAgentStream(r)) {
       if (event.type === "message_delta" && typeof event.data === "object" && event.data && "delta" in event.data) answer += String((event.data as { delta: unknown }).delta);
-      if (event.type === "citation" && typeof event.data === "object" && event.data) { const item = event.data as Record<string, unknown>; const page = Number(item.physical_page ?? item.page ?? 1); citations.push({ id: String(item.chunk_id ?? `c${citations.length + 1}`), chunkId: String(item.chunk_id ?? ""), paperId: String(item.paper_id ?? ""), paperTitle: String(item.paper_title ?? "文献"), page, quote: String(item.quote ?? item.text ?? ""), href: `${API_BASE_URL}/papers/${encodeURIComponent(String(item.paper_id ?? ""))}/file#page=${page}` }); }
+      if (event.type === "tool_finished" && typeof event.data === "object" && event.data && "evidence_quality" in event.data) { const quality = (event.data as { evidence_quality?: unknown }).evidence_quality; if (typeof quality === "object" && quality) evidenceQuality = mapEvidenceQuality(quality as Record<string, unknown>); }
+      if (event.type === "citation" && typeof event.data === "object" && event.data) { const item = event.data as Record<string, unknown>; const page = Number(item.physical_page ?? item.page ?? 1); citations.push({ id: String(item.chunk_id ?? `c${citations.length + 1}`), chunkId: String(item.chunk_id ?? ""), paperId: String(item.paper_id ?? ""), paperTitle: String(item.paper_title ?? "文献"), page, quote: String(item.excerpt ?? item.quote ?? item.text ?? ""), href: `${API_BASE_URL}/papers/${encodeURIComponent(String(item.paper_id ?? ""))}/file#page=${page}` }); }
       if (event.type === "error") throw new Error("Agent 运行失败");
     }
-    return { question, answer, citations };
+    return { question, answer, citations, evidenceQuality };
   },
   async upload(file, onProgress) { const body = new FormData(); body.set("file", file); onProgress(10); const r = await fetch(`${API_BASE_URL}/papers`, { method: "POST", credentials: "include", headers: mutationHeaders(), body }); if (!r.ok) throw new Error("上传失败"); onProgress(100); return mapPaper(await r.json() as Record<string, unknown>); },
   async updatePaper(paperId, input) {

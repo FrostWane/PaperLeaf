@@ -104,6 +104,10 @@ data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 
 前端只展示工具活动摘要，不展示或推断隐藏推理过程。
 
+`tool_finished.data.evidence_quality` 给出页级证据数量、检索通道、检索置信度、
+`retrieval_grade` 与可选的 `answer_support_grade`。这些字段是服务端质量门禁的公开摘要，
+不包含模型思维链。即使检索结果非空，只要相关度不足或证据没有直接支持所问事实，图仍会进入拒答节点。
+
 服务端不会直接使用前端 `session_id` 作为 LangGraph Checkpoint 键。内部 `thread_id` 同时绑定
 `user_id + session_id + run_id`；Agent Run 的所有者、内部键、状态、待确认动作、回答摘要和
 引用持久化在业务数据库中。API 重启后的查询、恢复和取消都会先按当前用户查找 Run，其他
