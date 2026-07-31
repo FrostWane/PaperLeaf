@@ -64,11 +64,22 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m compileall paperleaf_api tests alembic/versions ../scripts/smoke_compose.py
       - run: ruff check paperleaf_api tests alembic/versions ../scripts/smoke_compose.py
-      - name: 校验冻结 RAG 数据集
+      - name: 校验自建冻结 RAG 数据集
         run: >-
           python -m paperleaf_api.evaluation_dataset
           --manifest evaluation/datasets/paperleaf-rag-v1/manifest.json
           --cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl
+      - name: 校验 QASPER 校准集
+        run: >-
+          python -m paperleaf_api.evaluation_dataset
+          --manifest evaluation/datasets/paperleaf-qasper-calibration-v1/manifest.json
+          --cases evaluation/datasets/paperleaf-qasper-calibration-v1/cases.jsonl
+      - name: 校验 QASPER holdout 公开输入与锁
+        run: >-
+          python -m paperleaf_api.evaluation_holdout verify-public
+          --lock evaluation/datasets/paperleaf-qasper-holdout-v1/lock.json
+          --manifest evaluation/datasets/paperleaf-qasper-holdout-v1/manifest.json
+          --questions evaluation/datasets/paperleaf-qasper-holdout-v1/questions.jsonl
       - run: pytest
       - name: 验证全新安装与旧库升级迁移
         run: |

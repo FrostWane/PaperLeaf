@@ -41,7 +41,7 @@ class EvaluationDatasetManifest(BaseModel):
     dataset_id: str = Field(min_length=1)
     version: str = Field(min_length=1)
     created_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    annotation_license: Literal["Apache-2.0"] = "Apache-2.0"
+    annotation_license: Literal["Apache-2.0", "CC-BY-4.0"] = "Apache-2.0"
     pdf_distribution: Literal["external-links-only"] = "external-links-only"
     paper_count: int = Field(ge=1)
     case_count: int = Field(ge=1)
@@ -71,22 +71,43 @@ class ExpectedEvidence(BaseModel):
     anchor: str = Field(min_length=12)
 
 
+class ExpectedEvidenceGroup(BaseModel):
+    """一组可共同回答问题的证据页；多个组之间是可接受的替代标注。"""
+
+    items: list[ExpectedEvidence] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_pages(self) -> ExpectedEvidenceGroup:
+        pairs = [(item.paper_id, item.physical_page) for item in self.items]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("同一证据组不能重复论文与物理页")
+        return self
+
+
 class FrozenEvaluationCase(BaseModel):
     id: str = Field(min_length=1)
     query: str = Field(min_length=1)
     paper_ids: list[str] = Field(min_length=1)
     answerable: bool
     expected_evidence: list[ExpectedEvidence] = Field(default_factory=list)
+    acceptable_evidence_groups: list[ExpectedEvidenceGroup] = Field(default_factory=list)
     expected_answer_keywords: list[str] = Field(default_factory=list)
+    acceptable_answer_keyword_groups: list[list[str]] = Field(default_factory=list)
     category: str = Field(min_length=1)
-    split: Literal["dev", "test"]
+    split: Literal["dev", "test", "holdout"]
 
     @model_validator(mode="after")
     def validate_answerability(self) -> FrozenEvaluationCase:
-        if self.answerable and not self.expected_evidence:
-            raise ValueError("可回答问题必须提供 expected_evidence")
-        if not self.answerable and self.expected_evidence:
-            raise ValueError("不可回答问题不能包含 expected_evidence")
+        if self.answerable and not (
+            self.expected_evidence or self.acceptable_evidence_groups
+        ):
+            raise ValueError("可回答问题必须提供证据或可接受证据组")
+        if not self.answerable and (
+            self.expected_evidence or self.acceptable_evidence_groups
+        ):
+            raise ValueError("不可回答问题不能包含证据")
+        if any(not group for group in self.acceptable_answer_keyword_groups):
+            raise ValueError("答案关键词组不能为空")
         if len(set(self.paper_ids)) != len(self.paper_ids):
             raise ValueError("paper_ids 不能重复")
         return self
@@ -98,8 +119,31 @@ class DatasetValidationError(ValueError):
         super().__init__("\n".join(errors))
 
 
+def case_evidence_items(case: FrozenEvaluationCase) -> list[ExpectedEvidence]:
+    """返回旧式标注与替代证据组的去重并集，用于完整性校验。"""
+
+    items = [*case.expected_evidence]
+    items.extend(
+        item for group in case.acceptable_evidence_groups for item in group.items
+    )
+    unique: dict[tuple[str, int, str], ExpectedEvidence] = {}
+    for item in items:
+        unique[(item.paper_id, item.physical_page, _normalized(item.anchor))] = item
+    return list(unique.values())
+
+
 def _normalized(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().casefold()
+    text = text.replace("-\n", "").replace("\u00ad", "")
+    text = re.sub(r"[^\w]+", " ", text.casefold(), flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalized_ascii(text: str) -> str:
+    """与 QASPER 页匹配器一致的 ASCII 退化形式，用于处理 PDF 数学修饰符。"""
+
+    text = text.replace("-\n", "").replace("\u00ad", "")
+    text = re.sub(r"[^a-z0-9]+", " ", text.casefold())
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _sha256(path: Path) -> str:
@@ -163,7 +207,7 @@ def validate_dataset(
             errors.append(f"{case.id} 引用了未知论文：{unknown_scope}")
         for paper_id in case.paper_ids:
             paper_case_counts[paper_id] += 1
-        for evidence in case.expected_evidence:
+        for evidence in case_evidence_items(case):
             paper = paper_by_id.get(evidence.paper_id)
             if not paper:
                 errors.append(f"{case.id} 的证据论文不存在：{evidence.paper_id}")
@@ -177,6 +221,7 @@ def validate_dataset(
                 )
 
     page_texts: dict[tuple[str, int], str] = {}
+    ascii_page_texts: dict[tuple[str, int], str] = {}
     if pdf_dir is not None:
         try:
             import fitz
@@ -199,16 +244,24 @@ def validate_dataset(
                             f"{paper.id} 页数声明 {paper.page_count}，实际 {document.page_count}"
                         )
                     for page_number in range(document.page_count):
-                        page_texts[(paper.id, page_number + 1)] = _normalized(
-                            document.load_page(page_number).get_text("text")
-                        )
+                        raw_text = document.load_page(page_number).get_text("text")
+                        key = (paper.id, page_number + 1)
+                        page_texts[key] = _normalized(raw_text)
+                        ascii_page_texts[key] = _normalized_ascii(raw_text)
             except Exception as exc:
                 errors.append(f"{paper.id} 无法解析：{type(exc).__name__}")
 
         for case in cases:
-            for evidence in case.expected_evidence:
+            for evidence in case_evidence_items(case):
                 page_text = page_texts.get((evidence.paper_id, evidence.physical_page), "")
-                if _normalized(evidence.anchor) not in page_text:
+                ascii_page_text = ascii_page_texts.get(
+                    (evidence.paper_id, evidence.physical_page), ""
+                )
+                normalized_anchor = _normalized(evidence.anchor)
+                ascii_anchor = _normalized_ascii(evidence.anchor)
+                if normalized_anchor not in page_text and (
+                    not ascii_anchor or ascii_anchor not in ascii_page_text
+                ):
                     errors.append(
                         f"{case.id} 的证据锚点未出现在 "
                         f"{evidence.paper_id} p.{evidence.physical_page}"
@@ -228,7 +281,9 @@ def validate_dataset(
         "paper_case_counts": dict(sorted(paper_case_counts.items())),
         "pdf_files_verified": len(manifest.papers) if pdf_dir is not None else 0,
         "evidence_anchors_verified": (
-            sum(len(case.expected_evidence) for case in cases) if pdf_dir is not None else 0
+            sum(len(case_evidence_items(case)) for case in cases)
+            if pdf_dir is not None
+            else 0
         ),
     }
 

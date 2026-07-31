@@ -74,6 +74,31 @@ FastEmbed。FastEmbed 官方说明见其[支持模型列表](https://qdrant.gith
 v1 的 test 已经被用于诊断，后续实验必须明确标记 `diagnostic_not_blind`，不能把它重新称为
 盲测 holdout。0.4.0 的诊断结果与未采用方案见[诊断报告](results/paperleaf-rag-v1/DIAGNOSTIC-0.4.md)。
 
+仓库还包含两个来自 QASPER 人工标注的外部评测子集：
+
+- `paperleaf-qasper-calibration-v1`：QASPER validation 的 29 篇论文、60 个公开问题与页级标签，
+  只用于开发和候选选择；
+- `paperleaf-qasper-holdout-v1`：QASPER test 的 55 篇论文、120 个公开问题，答案与 183 个页级
+  锚点保存在仓库外；`lock.json` 固定公开输入、私有 oracle、候选和检索实现哈希。
+
+QASPER 衍生标注使用 CC BY 4.0，详情见 [QASPER 数据归属](QASPER-ATTRIBUTION.md)。
+
+## 隐藏集协议
+
+CI 不需要私有答案即可确认公开问题和锁没有漂移：
+
+```bash
+python -m paperleaf_api.evaluation_holdout verify-public \
+  --lock evaluation/datasets/paperleaf-qasper-holdout-v1/lock.json \
+  --manifest evaluation/datasets/paperleaf-qasper-holdout-v1/manifest.json \
+  --questions evaluation/datasets/paperleaf-qasper-holdout-v1/questions.jsonl
+```
+
+拥有私有 oracle 与 PDF 的维护者可执行完整 `verify`。`run --mode blind-first-run` 在结果或
+回执已存在时会拒绝重复揭盲；后续只允许显式标记 `diagnostic-after-reveal`。首次结果表明
+校准集上的自适应 MRR 增益没有在 holdout 泛化，详见
+[首次盲测报告](results/paperleaf-qasper-holdout-v1/REPORT.md)。因此该候选没有进入生产默认链路。
+
 ## 指标边界
 
 聚合指标保留分子、分母和比率，包括页级 Recall@K、MRR@K、首个引用物理页准确率、

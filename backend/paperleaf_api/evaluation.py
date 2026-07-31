@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .evaluation_dataset import ExpectedEvidence
+from .evaluation_dataset import ExpectedEvidence, ExpectedEvidenceGroup
 
 
 class EvaluationCase(BaseModel):
@@ -24,7 +24,9 @@ class EvaluationCase(BaseModel):
     expected_pages: list[int] = Field(default_factory=list)
     expected_chunk_ids: list[str] = Field(default_factory=list)
     expected_evidence: list[ExpectedEvidence] = Field(default_factory=list)
+    acceptable_evidence_groups: list[ExpectedEvidenceGroup] = Field(default_factory=list)
     expected_answer_keywords: list[str] = Field(default_factory=list)
+    acceptable_answer_keyword_groups: list[list[str]] = Field(default_factory=list)
     category: str
     split: str = "all"
 
@@ -68,7 +70,24 @@ def _prediction_chunk_ids(prediction: EvaluationPrediction) -> list[str]:
 
 
 def _expected_pairs(case: EvaluationCase) -> set[tuple[str, int]]:
-    return {(item.paper_id, item.physical_page) for item in case.expected_evidence}
+    pairs = {(item.paper_id, item.physical_page) for item in case.expected_evidence}
+    pairs.update(
+        (item.paper_id, item.physical_page)
+        for group in case.acceptable_evidence_groups
+        for item in group.items
+    )
+    return pairs
+
+
+def _expected_groups(case: EvaluationCase) -> list[set[tuple[str, int]]]:
+    groups = [
+        {(item.paper_id, item.physical_page) for item in group.items}
+        for group in case.acceptable_evidence_groups
+    ]
+    if groups:
+        return groups
+    legacy = {(item.paper_id, item.physical_page) for item in case.expected_evidence}
+    return [legacy] if legacy else []
 
 
 def _retrieved_pairs(prediction: EvaluationPrediction, *, k: int) -> list[tuple[str, int]]:
@@ -85,12 +104,15 @@ def _evaluate_core(
     wrong_unanswerable = unanswerable_count = 0
     keyword_correct = keyword_cases = 0
     illegal_citations = 0
+    fully_retrieved_groups = group_cases = 0
+    best_group_page_recall = 0.0
     latencies: list[int] = []
 
     for case in cases:
         prediction = by_id[case.id]
         chunk_ids = _prediction_chunk_ids(prediction)
         expected_pairs = _expected_pairs(case)
+        expected_groups = _expected_groups(case)
         if expected_pairs and prediction.retrieved_evidence:
             ranked_pairs = _retrieved_pairs(prediction, k=k)
             top_k_pairs = set(ranked_pairs)
@@ -105,6 +127,13 @@ def _evaluate_core(
                 ),
                 0,
             )
+            group_cases += 1
+            group_recalls = [
+                len(top_k_pairs & group) / len(group) for group in expected_groups if group
+            ]
+            best_recall = max(group_recalls, default=0.0)
+            best_group_page_recall += best_recall
+            fully_retrieved_groups += int(best_recall == 1.0)
         else:
             top_k_chunks = set(chunk_ids[:k])
             expected_chunks = set(case.expected_chunk_ids)
@@ -147,13 +176,16 @@ def _evaluate_core(
             correct_citation_pages += correct_pages
             total_citations += len(prediction.citations)
             covered_answers += int(correct_pages > 0)
-            if case.expected_answer_keywords:
+            keyword_groups = case.acceptable_answer_keyword_groups or (
+                [case.expected_answer_keywords] if case.expected_answer_keywords else []
+            )
+            if keyword_groups:
                 keyword_cases += 1
                 normalized = prediction.answer.casefold()
                 keyword_correct += int(
-                    all(
-                        keyword.casefold() in normalized
-                        for keyword in case.expected_answer_keywords
+                    any(
+                        all(keyword.casefold() in normalized for keyword in group)
+                        for group in keyword_groups
                     )
                 )
         else:
@@ -170,6 +202,14 @@ def _evaluate_core(
         "retrieval_mrr_at_k": {
             "k": k,
             **_metric(reciprocal_rank_sum, reciprocal_rank_cases),
+        },
+        "evidence_group_recall_at_k": {
+            "k": k,
+            **_metric(fully_retrieved_groups, group_cases),
+        },
+        "evidence_page_recall_at_k": {
+            "k": k,
+            **_metric(best_group_page_recall, group_cases),
         },
         "citation_page_accuracy": _metric(correct_citation_pages, total_citations),
         "citation_coverage": _metric(covered_answers, answerable_count),

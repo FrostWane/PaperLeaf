@@ -1,6 +1,7 @@
 from paperleaf_api.evaluation import EvaluationCase
 from paperleaf_api.evaluation_offline import (
     OfflineRetrievalIndex,
+    QueryRanking,
     ScoredChunk,
     calibrate_abstention,
 )
@@ -58,6 +59,63 @@ def test_window_bm25_promotes_short_fact_inside_long_chunk() -> None:
     result = index.window_bm25("Which compiler version uses GCC eleven?", ["p1"], limit=2)
 
     assert result.hits[0].chunk.physical_page == 1
+
+
+def test_multigranular_rrf_fuses_channels_by_physical_page() -> None:
+    chunks = [
+        _chunk("p1-1-a", "p1", 1, "identity shortcut residual learning"),
+        PageChunk(
+            id="p1-1-b",
+            paper_id="p1",
+            physical_page=1,
+            chunk_index=1,
+            text="residual networks use identity mappings",
+            token_count=5,
+        ),
+        _chunk("p1-2", "p1", 2, "unrelated training images"),
+    ]
+    index = OfflineRetrievalIndex(chunks, dimensions=256)
+
+    result = index.multigranular_fused("identity residual", ["p1"], limit=2)
+
+    assert result.hits[0].chunk.physical_page == 1
+    assert len({hit.chunk.physical_page for hit in result.hits}) == len(result.hits)
+
+
+def test_adaptive_fusion_only_boosts_vector_when_lexical_coverage_is_low(
+    monkeypatch,
+) -> None:
+    chunk = _chunk("p1-1", "p1", 1, "identity shortcut residual learning")
+    index = OfflineRetrievalIndex([chunk], dimensions=256)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        index,
+        "bm25",
+        lambda *_args, **_kwargs: QueryRanking([ScoredChunk(chunk, 1.0)], 0.25),
+    )
+    monkeypatch.setattr(
+        index,
+        "multigranular_fused",
+        lambda *_args, **_kwargs: calls.append("vector3") or QueryRanking([], 0.0),
+    )
+    monkeypatch.setattr(
+        index,
+        "fused",
+        lambda *_args, **_kwargs: calls.append("baseline") or QueryRanking([], 0.0),
+    )
+
+    index.adaptive_fused("identity shortcut", ["p1"], limit=5)
+    assert calls == ["vector3"]
+
+    calls.clear()
+    monkeypatch.setattr(
+        index,
+        "bm25",
+        lambda *_args, **_kwargs: QueryRanking([ScoredChunk(chunk, 1.0)], 0.26),
+    )
+    index.adaptive_fused("identity shortcut", ["p1"], limit=5)
+    assert calls == ["baseline"]
 
 
 def test_abstention_calibration_prioritizes_zero_dev_false_answers() -> None:

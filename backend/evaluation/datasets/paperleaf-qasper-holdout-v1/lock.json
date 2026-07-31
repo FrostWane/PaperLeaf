@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-qasper-holdout-v1",
+  "manifest_sha256": "a54db5e95606e15ec3c333049f65f13d361103d978be01a56153582902a5046a",
+  "questions_sha256": "9aba9d9402609390dd6ebe9a587962543db67e4922361638a4bb76b1886f3d7a",
+  "oracle_sha256": "46c07e1e5db586a92d82958bafe169fb57c249a7231175a967d7bea94638f18d",
+  "candidate_variants": [
+    "rrf_page",
+    "rrf_page_adaptive"
+  ],
+  "protocol": {
+    "retrieval_implementation_sha256": "8d7d470fe31059bf05bba364f70f324f2c4a7167059f2e29faf6f8f0a31b6241",
+    "k": 5,
+    "primary_metrics": [
+      "retrieval_recall_at_5",
+      "evidence_group_recall_at_5",
+      "retrieval_mrr_at_5"
+    ],
+    "scope": "retrieval_only",
+    "hash_dimensions": 8192,
+    "no_holdout_calibration": true,
+    "reported_split": "holdout",
+    "candidate_definitions": {
+      "rrf_page": {
+        "postprocess": "physical_page_dedup",
+        "fusion": "equal_weight_chunk_rrf"
+      },
+      "rrf_page_adaptive": {
+        "gate": "bm25_top_query_term_coverage_lte_0.25",
+        "low_coverage_fusion": "page_rrf_keyword_1_vector_3",
+        "fallback": "rrf_page"
+      }
+    },
+    "chunk_overlap_tokens": 100,
+    "chunk_target_tokens": 700
+  },
+  "locked_at": "2026-07-31T08:00:54.447270+00:00"
+}

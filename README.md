@@ -158,9 +158,10 @@ ruff check paperleaf_api tests
 pytest
 ```
 
-仓库另带一个不重新分发论文 PDF 的页级 RAG 冻结集，以及无需模型密钥即可复现的
-哈希向量、BM25、RRF、页去重和拒答基线；可选依赖还可运行本地 ONNX dense 与 Cross-Encoder
-诊断。数据来源、运行命令、真实分子/分母、负向结果与指标边界见
+仓库另带自建冻结集与基于 QASPER 人工问题的“公开校准集 + 私有答案 holdout”，以及无需
+模型密钥即可复现的哈希向量、BM25、RRF、页去重和拒答基线；可选依赖还可运行本地 ONNX
+dense 与 Cross-Encoder 诊断。PDF 不随仓库重新分发。数据来源、许可、预注册锁、真实
+分子/分母、未泛化的负向结果与指标边界见
 [RAG 离线评测说明](backend/evaluation/README.md)。
 
 容器配置：

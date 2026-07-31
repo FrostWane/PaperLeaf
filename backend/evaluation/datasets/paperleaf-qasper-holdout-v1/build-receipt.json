@@ -1,0 +1,24 @@
+{
+  "dataset_id": "paperleaf-qasper-holdout-v1",
+  "source_dataset": "allenai/qasper",
+  "source_split": "test",
+  "selection_seed": "paperleaf-qasper-holdout-v1-2026-07-31",
+  "mode": "holdout",
+  "paper_count": 55,
+  "case_count": 120,
+  "answerable_count": 96,
+  "unanswerable_count": 24,
+  "category_counts": {
+    "extractive": 52,
+    "free_form": 2,
+    "multi_page": 29,
+    "unanswerable": 24,
+    "yes_no": 13
+  },
+  "conversion_failures": {
+    "ambiguous_or_unmapped": 60
+  },
+  "minimum_match_score": 0.67,
+  "version_policy": "v1",
+  "prefetch": {}
+}
