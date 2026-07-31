@@ -28,6 +28,11 @@ export const groundedAnswer: AgentAnswer = {
     retrievalGrade: "sufficient",
     answerSupportGrade: "supported",
     answerSupportConfidence: 0.91,
+    claimCount: 3,
+    citedClaimCount: 3,
+    supportedClaimCount: 3,
+    claimCitationCoverage: 1,
+    claimSupportCoverage: 1,
   },
 };
 

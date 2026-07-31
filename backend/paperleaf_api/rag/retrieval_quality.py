@@ -81,6 +81,11 @@ class EvidenceQuality:
     retrieval_grade: Literal["sufficient", "insufficient"]
     answer_support_grade: Literal["supported", "unsupported", "not_checked"]
     answer_support_confidence: float | None
+    claim_count: int = 0
+    cited_claim_count: int = 0
+    supported_claim_count: int = 0
+    claim_citation_coverage: float = 0.0
+    claim_support_coverage: float = 0.0
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -91,6 +96,11 @@ class AnswerSupport:
     supported: bool | None
     confidence: float | None
     reason_code: str
+    claim_count: int = 0
+    cited_claim_count: int = 0
+    supported_claim_count: int = 0
+    citation_coverage: float = 0.0
+    support_coverage: float = 0.0
 
 
 def _clamp(value: float) -> float:
@@ -248,6 +258,13 @@ def assess_evidence(
 
 
 def apply_answer_support(quality: EvidenceQuality, support: AnswerSupport) -> EvidenceQuality:
+    metrics = {
+        "claim_count": support.claim_count,
+        "cited_claim_count": support.cited_claim_count,
+        "supported_claim_count": support.supported_claim_count,
+        "claim_citation_coverage": round(_clamp(support.citation_coverage), 6),
+        "claim_support_coverage": round(_clamp(support.support_coverage), 6),
+    }
     if quality.retrieval_grade == "insufficient" or support.supported is None:
         return quality
     confidence = None if support.confidence is None else round(_clamp(support.confidence), 6)
@@ -258,7 +275,10 @@ def apply_answer_support(quality: EvidenceQuality, support: AnswerSupport) -> Ev
             answer_support_grade="supported",
             answer_support_confidence=confidence,
             reason_code=support.reason_code,
-            summary=f"{quality.summary}，答案支持检查通过",
+            summary=(
+                f"{quality.summary}；回答的 {support.claim_count} 条主张均有可回读证据"
+            ),
+            **metrics,
         )
     return replace(
         quality,
@@ -267,8 +287,9 @@ def apply_answer_support(quality: EvidenceQuality, support: AnswerSupport) -> Ev
         answer_support_confidence=confidence,
         reason_code=support.reason_code,
         summary=(
-            f"已定位 {quality.page_count} 个相关证据页，但其中没有直接支持该问题的内容"
+            f"已定位 {quality.page_count} 个相关证据页，但最终回答没有通过逐条证据核验"
             if support.reason_code != "grader_unavailable"
             else "证据支持检查暂时不可用"
         ),
+        **metrics,
     )

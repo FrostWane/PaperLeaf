@@ -136,6 +136,11 @@ export interface AgentEvidenceQuality {
   retrievalGrade?: "sufficient" | "insufficient";
   answerSupportGrade?: "supported" | "unsupported" | "not_checked";
   answerSupportConfidence?: number;
+  claimCount?: number;
+  citedClaimCount?: number;
+  supportedClaimCount?: number;
+  claimCitationCoverage?: number;
+  claimSupportCoverage?: number;
 }
 
 export interface ArxivResult {

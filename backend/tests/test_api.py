@@ -29,6 +29,9 @@ def test_app_services_rebuild_keeps_quality_policy_and_checkpointer(tmp_path, mo
         evidence_min_confidence=0.61,
         evidence_min_vector_score=0.47,
         evidence_min_lexical_coverage=0.29,
+        answer_min_citation_coverage=0.92,
+        answer_min_claim_lexical_support=0.21,
+        answer_min_support_confidence=0.73,
     )
     captured: list[dict] = []
 
@@ -50,6 +53,9 @@ def test_app_services_rebuild_keeps_quality_policy_and_checkpointer(tmp_path, mo
     assert rebuilt["quality_policy"].min_confidence == 0.61
     assert rebuilt["quality_policy"].min_vector_score == 0.47
     assert rebuilt["quality_policy"].min_lexical_coverage == 0.29
+    assert rebuilt["answer_quality_policy"].min_citation_coverage == 0.92
+    assert rebuilt["answer_quality_policy"].min_claim_lexical_support == 0.21
+    assert rebuilt["answer_quality_policy"].min_model_support_confidence == 0.73
     assert callable(rebuilt["answerer"])
     assert callable(rebuilt["support_grader"])
 
@@ -263,6 +269,8 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
             "grade_evidence",
             "generate_answer",
             "validate_citations",
+            "grade_answer_support",
+            "finalize",
         ]
         assert owner_run.duration_ms is not None
         assert owner_run.duration_ms >= 0

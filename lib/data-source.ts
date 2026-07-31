@@ -79,6 +79,11 @@ function mapEvidenceQuality(item: Record<string, unknown>): AgentEvidenceQuality
     retrievalGrade: item.retrieval_grade === "sufficient" ? "sufficient" : "insufficient",
     answerSupportGrade: item.answer_support_grade === "supported" ? "supported" : item.answer_support_grade === "unsupported" ? "unsupported" : "not_checked",
     answerSupportConfidence: item.answer_support_confidence === null || item.answer_support_confidence === undefined ? undefined : Number(item.answer_support_confidence),
+    claimCount: Number(item.claim_count ?? 0),
+    citedClaimCount: Number(item.cited_claim_count ?? 0),
+    supportedClaimCount: Number(item.supported_claim_count ?? 0),
+    claimCitationCoverage: Number(item.claim_citation_coverage ?? 0),
+    claimSupportCoverage: Number(item.claim_support_coverage ?? 0),
   };
 }
 
@@ -210,8 +215,10 @@ const nodeLabels: Record<string, string> = {
   build_structure_graph: "构建证据结构",
   generate_answer: "组织证据回答",
   validate_citations: "校验页码引用",
+  grade_answer_support: "逐条核验回答",
+  suppress_unsupported_answer: "拦截无依据回答",
+  finalize: "完成证据回答",
   abstain: "说明证据不足",
-  finalize: "完成回答",
 };
 
 function mapAgentActivity(data: unknown, status: AgentActivity["status"]): AgentActivity | null {
@@ -386,7 +393,8 @@ export const realDataSource: PaperLeafDataSource = {
       if (event.type === "citation" && typeof event.data === "object" && event.data) { const item = event.data as Record<string, unknown>; const page = Number(item.physical_page ?? item.page ?? 1); citations.push({ id: String(item.chunk_id ?? `c${citations.length + 1}`), chunkId: String(item.chunk_id ?? ""), paperId: String(item.paper_id ?? ""), paperTitle: String(item.paper_title ?? "文献"), page, quote: String(item.excerpt ?? item.quote ?? item.text ?? ""), href: `${API_BASE_URL}/papers/${encodeURIComponent(String(item.paper_id ?? ""))}/file#page=${page}` }); }
       if (event.type === "error") throw new Error("Agent 运行失败");
     }
-    return { question, answer, citations, evidenceQuality, activities };
+    const visibleAnswer = answer.replace(/\s*\[chunk:[^\]]+\]/g, "").trim();
+    return { question, answer: visibleAnswer, citations, evidenceQuality, activities };
   },
   async upload(file, onProgress) { const body = new FormData(); body.set("file", file); onProgress(10); const r = await fetch(`${API_BASE_URL}/papers`, { method: "POST", credentials: "include", headers: mutationHeaders(), body }); if (!r.ok) throw new Error("上传失败"); onProgress(100); return mapPaper(await r.json() as Record<string, unknown>); },
   async updatePaper(paperId, input) {

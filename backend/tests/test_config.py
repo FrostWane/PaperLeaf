@@ -40,6 +40,11 @@ def test_evidence_quality_thresholds_must_be_probabilities() -> None:
         replace(settings, evidence_min_confidence=1.1).validate_production()
 
 
+def test_answer_quality_thresholds_must_be_probabilities() -> None:
+    with pytest.raises(RuntimeError, match="证据质量阈值"):
+        replace(settings, answer_min_citation_coverage=-0.1).validate_production()
+
+
 @pytest.mark.parametrize(
     ("changes", "message"),
     [

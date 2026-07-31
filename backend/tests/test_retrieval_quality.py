@@ -147,4 +147,4 @@ def test_answer_support_is_separate_from_retrieval_relevance() -> None:
     assert retrieval_quality.retrieval_grade == "sufficient"
     assert final_quality.grade == "insufficient"
     assert final_quality.answer_support_grade == "unsupported"
-    assert "没有直接支持" in final_quality.summary
+    assert "没有通过逐条证据核验" in final_quality.summary

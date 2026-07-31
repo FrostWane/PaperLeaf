@@ -25,6 +25,7 @@ class AgentState(TypedDict, total=False):
     tool_steps: int
     pending_action: dict[str, Any] | None
     citations: list[CitationClaim]
+    citation_validation_passed: bool
     answer: str
     error: str | None
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]

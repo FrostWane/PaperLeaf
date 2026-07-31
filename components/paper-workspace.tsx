@@ -12,6 +12,7 @@ import { groundedAnswer, papers } from "@/lib/fixtures";
 import { useWorkspaceStore, type MobilePane } from "@/lib/store";
 import type { AgentActivity, AgentAnswer, Paper, PaperStructureGraph, PaperSummary, PaperUpdateInput } from "@/lib/types";
 import { AgentRunProgress } from "./agent-run-progress";
+import { EvidenceQualityStrip } from "./evidence-quality-strip";
 import { PaperDetailsDialog } from "./paper-details-dialog";
 import { StructureDiagram } from "./structure-diagram";
 
@@ -211,7 +212,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
 
   const askContent = <div className="conversation">
     <AgentRunProgress activities={activities} />
-    {answer ? <><div className={`run-note ${answer.evidenceQuality?.grade === "insufficient" ? "quality-insufficient" : ""}`} role="status">{answer.evidenceQuality?.summary ?? `已保留 ${answer.citations.length} 条可验证证据`}</div><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">{answer.evidenceQuality?.grade === "insufficient" ? "证据状态" : "基于原文回答"}</span><p className="answer-text">{answer.answer} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`查看第 ${citation.page} 页引用`}>[{index + 1}]</button>)}</p>{answer.citations.length > 0 && <div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div>}</> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
+    {answer ? <><div className={`run-note ${answer.evidenceQuality?.grade === "insufficient" ? "quality-insufficient" : ""}`} role="status">{answer.evidenceQuality?.summary ?? `已保留 ${answer.citations.length} 条可验证证据`}</div><EvidenceQualityStrip quality={answer.evidenceQuality} /><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">{answer.evidenceQuality?.grade === "insufficient" ? "证据状态" : "基于原文回答"}</span><p className="answer-text">{answer.answer} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`查看第 ${citation.page} 页引用`}>[{index + 1}]</button>)}</p>{answer.citations.length > 0 && <div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div>}</> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
     {askMessage && <p className="field-error" role="alert">{askMessage}</p>}
   </div>;
 

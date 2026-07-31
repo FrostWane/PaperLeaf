@@ -37,6 +37,7 @@ from .arxiv_service import fetch_arxiv_pdf, search_arxiv
 from .config import Settings, settings
 from .model_runtime import build_model_router, collect_model_attempts
 from .models import PaperStatus, UserRole
+from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import MemoryRepository, PaperRecord, SQLAlchemyRepository, UserRecord
@@ -76,6 +77,9 @@ _PUBLIC_AGENT_NODES = {
     "grade_evidence",
     "generate_answer",
     "validate_citations",
+    "grade_answer_support",
+    "suppress_unsupported_answer",
+    "finalize",
     "abstain",
     "search_arxiv",
     "propose_import",
@@ -117,6 +121,11 @@ class AppServices:
                 min_confidence=self.config.evidence_min_confidence,
                 min_vector_score=self.config.evidence_min_vector_score,
                 min_lexical_coverage=self.config.evidence_min_lexical_coverage,
+            ),
+            answer_quality_policy=AnswerQualityPolicy(
+                min_citation_coverage=self.config.answer_min_citation_coverage,
+                min_claim_lexical_support=self.config.answer_min_claim_lexical_support,
+                min_model_support_confidence=self.config.answer_min_support_confidence,
             ),
             support_grader=build_configured_evidence_support_grader(
                 self.config, self.model_router
@@ -212,7 +221,7 @@ def create_app(
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.6.0",
+        version="0.7.0",
         description="个人科研文献库、页级 RAG 与受控研究 Agent",
         lifespan=lifespan,
     )
@@ -968,6 +977,17 @@ def create_app(
                                     run_id=run_id,
                                     data={
                                         "tool": "search_library",
+                                        "evidence_quality": dict(
+                                            result.get("evidence_quality", {})
+                                        ),
+                                    },
+                                ).encode()
+                            elif raw_node == "grade_answer_support":
+                                yield SSEEvent(
+                                    event="tool_finished",
+                                    run_id=run_id,
+                                    data={
+                                        "tool": "validate_answer",
                                         "evidence_quality": dict(
                                             result.get("evidence_quality", {})
                                         ),

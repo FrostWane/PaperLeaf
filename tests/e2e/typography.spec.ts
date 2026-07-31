@@ -12,6 +12,7 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
     );
 
   expect(await sizeOf(".answer-text")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".evidence-quality-strip")).toBeGreaterThanOrEqual(11);
   expect(await sizeOf(".citation-row q")).toBeGreaterThanOrEqual(11);
   expect(await sizeOf(".composer-box textarea")).toBeGreaterThanOrEqual(13);
   expect(await sizeOf(".paper-summary p")).toBeGreaterThanOrEqual(11);

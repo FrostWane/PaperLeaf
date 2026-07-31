@@ -42,7 +42,7 @@ class FakeArxivSearch:
 
 async def answerer(query: str, evidence: list[Evidence]):
     source = evidence[0]
-    return "有依据的回答", [
+    return f"{source.text} [chunk:{source.chunk_id}]", [
         CitationClaim(source.chunk_id, source.paper_id, source.physical_page, source.text)
     ]
 
@@ -51,8 +51,19 @@ async def forged_answerer(query: str, evidence: list[Evidence]):
     return "伪造回答", [CitationClaim("forged", "p1", 99, "")]
 
 
-async def unsupported_grader(query: str, evidence: list[Evidence]) -> AnswerSupport:
+async def unsupported_grader(
+    query: str, answer: str, evidence: list[Evidence]
+) -> AnswerSupport:
+    assert "论文结论" in answer
     return AnswerSupport(False, 0.94, "answer_not_supported")
+
+
+async def partially_cited_answerer(query: str, evidence: list[Evidence]):
+    source = evidence[0]
+    return (
+        f"{source.text} [chunk:{source.chunk_id}] 另一个结论没有引用。",
+        [CitationClaim(source.chunk_id, source.paper_id, source.physical_page, source.text)],
+    )
 
 
 def _run(graph):
@@ -68,9 +79,11 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     result = _run(build_agent_graph(EvidenceRetriever(), answerer))
 
     assert result["status"] == "completed"
-    assert result["answer"] == "有依据的回答"
+    assert result["answer"].startswith("论文结论")
     assert result["citations"][0].physical_page == 4
     assert result["evidence_quality"]["grade"] == "sufficient"
+    assert result["evidence_quality"]["claim_citation_coverage"] == 1.0
+    assert result["evidence_quality"]["answer_support_grade"] == "supported"
 
 
 def test_graph_abstains_when_no_evidence_exists() -> None:
@@ -111,6 +124,16 @@ def test_graph_abstains_when_evidence_is_relevant_but_does_not_support_answer() 
     assert result["citations"] == []
     assert result["evidence_quality"]["retrieval_grade"] == "sufficient"
     assert result["evidence_quality"]["answer_support_grade"] == "unsupported"
+
+
+def test_graph_suppresses_answer_when_one_claim_has_no_citation() -> None:
+    result = _run(build_agent_graph(EvidenceRetriever(), partially_cited_answerer))
+
+    assert result["status"] == "completed"
+    assert result["citations"] == []
+    assert result["evidence_quality"]["reason_code"] == "missing_claim_citations"
+    assert result["evidence_quality"]["claim_citation_coverage"] == 0.5
+    assert "已覆盖 1/2 条主张" in result["answer"]
 
 
 def test_graph_interrupts_before_arxiv_import() -> None:

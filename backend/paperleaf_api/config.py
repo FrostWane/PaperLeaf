@@ -82,6 +82,15 @@ class Settings:
     evidence_min_lexical_coverage: float = float(
         os.getenv("PAPERLEAF_EVIDENCE_MIN_LEXICAL_COVERAGE", "0.18")
     )
+    answer_min_citation_coverage: float = float(
+        os.getenv("PAPERLEAF_ANSWER_MIN_CITATION_COVERAGE", "1.0")
+    )
+    answer_min_claim_lexical_support: float = float(
+        os.getenv("PAPERLEAF_ANSWER_MIN_CLAIM_LEXICAL_SUPPORT", "0.12")
+    )
+    answer_min_support_confidence: float = float(
+        os.getenv("PAPERLEAF_ANSWER_MIN_SUPPORT_CONFIDENCE", "0.6")
+    )
 
     @property
     def is_demo(self) -> bool:
@@ -99,6 +108,9 @@ class Settings:
             self.evidence_min_confidence,
             self.evidence_min_vector_score,
             self.evidence_min_lexical_coverage,
+            self.answer_min_citation_coverage,
+            self.answer_min_claim_lexical_support,
+            self.answer_min_support_confidence,
         )
         if any(value < 0 or value > 1 for value in quality_values):
             raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
