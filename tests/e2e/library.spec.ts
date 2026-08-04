@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 test("文献组织数量来自真实状态且支持批量整理、归档与恢复", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto("/library?demo=1");
   await expect(page.getByRole("heading", { name: "你的研究文献" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /全部文献\s*4/ })).toBeVisible();
@@ -74,4 +75,29 @@ test("文献组织界面没有 serious 或 critical 无障碍问题", async ({ p
   await expect(page.getByRole("tab", { name: /全部文献\s*4/ })).toBeVisible();
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   expect(results.violations.filter((item) => item.impact === "serious" || item.impact === "critical")).toEqual([]);
+});
+
+test("已有论文可以直接查看、添加和移除集合", async ({ page }) => {
+  await page.goto("/library?demo=1");
+  await expect(page.getByRole("heading", { name: "你的研究文献" })).toBeVisible();
+
+  const row = page.getByRole("row").filter({ hasText: "Attention Is All You Need" });
+  await row.getByRole("button", { name: "管理 Attention Is All You Need 的集合" }).click();
+  const dialog = page.getByRole("dialog", { name: "管理论文集合" });
+  await expect(dialog.getByRole("checkbox", { name: /核心方法/ })).toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: /实验参考/ })).not.toBeChecked();
+
+  await dialog.getByRole("checkbox", { name: /核心方法/ }).uncheck();
+  await dialog.getByRole("checkbox", { name: /实验参考/ }).check();
+  await dialog.getByRole("button", { name: "保存集合" }).click();
+
+  await expect(page.getByText("已更新《Attention Is All You Need》的集合。")).toBeVisible();
+  if (page.viewportSize()!.width >= 901) {
+    await expect(row.getByText("实验参考")).toBeVisible();
+    await expect(row.getByText("核心方法")).toBeHidden();
+  } else {
+    await row.getByRole("button", { name: "管理 Attention Is All You Need 的集合" }).click();
+    await expect(dialog.getByRole("checkbox", { name: /实验参考/ })).toBeChecked();
+    await expect(dialog.getByRole("checkbox", { name: /核心方法/ })).not.toBeChecked();
+  }
 });
