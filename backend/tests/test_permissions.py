@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 
-from paperleaf_api.models import PaperStatus, UserRole
+from paperleaf_api.models import JobStatus, PaperStatus, UserRole
 from paperleaf_api.repository import MemoryRepository, PaperRecord
 
 
@@ -122,5 +122,44 @@ def test_delete_job_is_queued_once() -> None:
         delete_jobs = [job for job in repository.jobs.values() if job.type == "delete_paper"]
         assert len(delete_jobs) == 1
         assert paper.status == PaperStatus.deleting
+
+    asyncio.run(scenario())
+
+
+def test_reprocessing_ready_paper_creates_one_new_parse_job() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("test-secret")
+        user = await repository.create_user(
+            "reader@example.com", "reader-password-123", UserRole.user
+        )
+        paper = PaperRecord(
+            id=str(uuid.uuid4()),
+            owner_id=user.id,
+            title="待重新识别",
+            authors=[],
+            year=None,
+            abstract=None,
+            doi=None,
+            arxiv_id=None,
+            filename="paper.pdf",
+            storage_key="reader/paper.pdf",
+            mime_type="application/pdf",
+            size_bytes=100,
+            sha256="d" * 64,
+            page_count=1,
+            status=PaperStatus.ready,
+        )
+        await repository.create_paper(paper)
+        for job in repository.jobs.values():
+            job.status = JobStatus.completed
+        initial_job_count = len(repository.jobs)
+
+        updated = await repository.requeue_owned_paper(paper.id, user.id)
+        duplicate = await repository.requeue_owned_paper(paper.id, user.id)
+
+        assert updated is paper
+        assert paper.status == PaperStatus.queued
+        assert len(repository.jobs) == initial_job_count + 1
+        assert duplicate is None
 
     asyncio.run(scenario())

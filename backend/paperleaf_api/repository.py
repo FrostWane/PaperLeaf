@@ -139,6 +139,9 @@ class Repository(Protocol):
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
     ) -> PaperRecord | None: ...
+    async def requeue_owned_paper(
+        self, paper_id: str, owner_id: str
+    ) -> PaperRecord | None: ...
     async def delete_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def touch_paper_opened(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def set_papers_archived(
@@ -268,6 +271,30 @@ class MemoryRepository:
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None:
         paper = self.papers.get(paper_id)
         return paper if paper and paper.owner_id == owner_id else None
+
+    async def requeue_owned_paper(
+        self, paper_id: str, owner_id: str
+    ) -> PaperRecord | None:
+        paper = await self.get_owned_paper(paper_id, owner_id)
+        if not paper or paper.status in {
+            PaperStatus.queued,
+            PaperStatus.extracting,
+            PaperStatus.deleting,
+        }:
+            return None
+        active = any(
+            job.paper_id == paper.id
+            and job.type == "parse_pdf"
+            and job.status in {JobStatus.queued, JobStatus.running}
+            for job in self.jobs.values()
+        )
+        if active:
+            return None
+        paper.status = PaperStatus.queued
+        paper.updated_at = now()
+        job = JobRecord(id=str(uuid.uuid4()), paper_id=paper.id, type="parse_pdf")
+        self.jobs[job.id] = job
+        return paper
 
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
@@ -680,6 +707,37 @@ class SQLAlchemyRepository:
                 if key in changes and changes[key] is not None:
                     setattr(paper, key, changes[key])
             paper.updated_at = now()
+            await session.commit()
+            await session.refresh(paper)
+            return paper
+
+    async def requeue_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
+        """原子地创建新的解析任务；可用于失败重试和已完成论文的重新识别。"""
+
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper)
+                .where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                .with_for_update()
+            )
+            if not paper or paper.status in {
+                PaperStatus.queued,
+                PaperStatus.extracting,
+                PaperStatus.deleting,
+            }:
+                return None
+            active_job = await session.scalar(
+                select(Job.id).where(
+                    Job.paper_id == paper.id,
+                    Job.type == "parse_pdf",
+                    Job.status.in_([JobStatus.queued, JobStatus.running]),
+                )
+            )
+            if active_job:
+                return None
+            paper.status = PaperStatus.queued
+            paper.updated_at = now()
+            session.add(Job(paper_id=paper.id, type="parse_pdf", status=JobStatus.queued))
             await session.commit()
             await session.refresh(paper)
             return paper

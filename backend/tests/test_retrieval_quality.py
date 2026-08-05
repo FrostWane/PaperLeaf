@@ -95,6 +95,49 @@ def test_quality_allows_strong_cross_language_vector_without_term_overlap() -> N
     assert quality.reason_code == "semantic_support"
 
 
+def test_quality_accepts_owner_scoped_overview_evidence_without_term_overlap() -> None:
+    evidence = [
+        Evidence(
+            chunk_id="c1",
+            paper_id="paper-1",
+            paper_title="DeepDTA",
+            physical_page=1,
+            text="Deep drug-target binding affinity prediction from sequences.",
+            retrieval_score=1.0,
+            retrieval_channels=("scoped_overview",),
+            channel_scores=(("scoped_overview", 1.0),),
+        )
+    ]
+
+    quality = assess_evidence("这篇文章讲了什么内容", evidence)
+
+    assert quality.grade == "sufficient"
+    assert quality.reason_code == "scoped_overview_support"
+    assert quality.page_count == 1
+
+
+def test_quality_audits_rewritten_query_against_original_evidence() -> None:
+    evidence = [
+        Evidence(
+            chunk_id="c1",
+            paper_id="paper-1",
+            paper_title="AttentionDTA",
+            physical_page=2,
+            text="AttentionDTA uses an attention mechanism to learn drug target affinity.",
+            retrieval_score=0.03,
+            retrieval_channels=("keyword_rewrite",),
+            channel_scores=(("keyword_rewrite", 0.3),),
+            retrieval_query="attention mechanism drug target affinity",
+        )
+    ]
+
+    quality = assess_evidence("这篇论文提出了什么主要方法？", evidence)
+
+    assert quality.grade == "sufficient"
+    assert quality.reason_code == "query_rewrite_support"
+    assert quality.lexical_coverage > 0.5
+
+
 def test_quality_rejects_nonempty_but_irrelevant_evidence() -> None:
     evidence = [_evidence("c1", 7, "The appendix lists hardware configurations.")]
 

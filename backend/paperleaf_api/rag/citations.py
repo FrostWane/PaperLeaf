@@ -15,6 +15,9 @@ class Evidence:
     retrieval_score: float = 0.0
     retrieval_channels: tuple[str, ...] = ()
     channel_scores: tuple[tuple[str, float], ...] = ()
+    # 实际用于命中该证据的检索表达式。中文问题经过受控英文关键词改写时，
+    # 质量门禁据此复核“改写词是否真的出现在原文”，而不是盲信模型改写。
+    retrieval_query: str = ""
 
 
 @dataclass(frozen=True)

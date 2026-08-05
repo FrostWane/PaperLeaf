@@ -32,7 +32,12 @@ from .agent.graph import (
     build_configured_evidence_support_grader,
 )
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
-from .artifacts import load_paper_evidence, structure_graph, summarize_evidence
+from .artifacts import (
+    cited_chunk_ids,
+    load_paper_evidence,
+    structure_graph,
+    summarize_evidence,
+)
 from .arxiv_service import fetch_arxiv_pdf, search_arxiv
 from .config import Settings, settings
 from .model_runtime import build_model_router, collect_model_attempts
@@ -755,13 +760,11 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> PaperRead:
-        paper = await owned_paper(paper_id, user)
-        if paper.status not in {PaperStatus.failed, PaperStatus.partial}:
-            raise HTTPException(status.HTTP_409_CONFLICT, "当前状态不允许重试")
-        updated = await services.repository.update_owned_paper(
-            paper_id, user.id, status=PaperStatus.queued
-        )
-        return _paper_read(updated)  # type: ignore[arg-type]
+        await owned_paper(paper_id, user)
+        updated = await services.repository.requeue_owned_paper(paper_id, user.id)
+        if not updated:
+            raise HTTPException(status.HTTP_409_CONFLICT, "文献正在处理或当前状态不能重新处理")
+        return _paper_read(updated)
 
     @app.get("/api/v1/discover/arxiv/search", response_model=list[ArxivSearchResponse])
     async def discover_arxiv(
@@ -831,18 +834,27 @@ def create_app(
         await owned_paper(paper_id, user)
         if config.is_demo:
             raise HTTPException(status.HTTP_409_CONFLICT, "演示模式不处理真实 PDF")
-        evidence = await load_paper_evidence(user.id, paper_id)
+        evidence = await load_paper_evidence(
+            user.id,
+            paper_id,
+            limit=config.max_pdf_pages,
+            first_chunk_per_page=True,
+        )
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
         content, mode = await summarize_evidence(
             evidence, model_router=services.model_router, config=config
         )
+        evidence_by_chunk = {item.chunk_id: item for item in evidence}
         return SummaryResponse(
             paper_id=paper_id,
             content=content,
             citations=[
-                ArtifactCitation(chunk_id=item.chunk_id, physical_page=item.physical_page)
-                for item in evidence[:12]
+                ArtifactCitation(
+                    chunk_id=chunk_id,
+                    physical_page=evidence_by_chunk[chunk_id].physical_page,
+                )
+                for chunk_id in cited_chunk_ids(content, evidence)
             ],
             mode=mode,
         )
@@ -1051,7 +1063,9 @@ def create_app(
                     error_code=result.get("error"),
                 )
                 answer = str(result.get("answer", ""))
-                for piece in re.findall(r".{1,48}", answer, flags=re.S):
+                # 最终答案先通过引用与证据门禁，再拆成较小 SSE 片段供界面渐进展示。
+                # 这避免把尚未核验的模型草稿提前暴露，同时让短回答也能看到流式效果。
+                for piece in re.findall(r".{1,16}", answer, flags=re.S):
                     yield SSEEvent(
                         event="message_delta", run_id=run_id, data={"delta": piece}
                     ).encode()
@@ -1115,7 +1129,14 @@ def create_app(
                 if current_task:
                     await services.unregister_agent_task(run_id, current_task)
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/api/v1/agent/runs/{run_id}", response_model=AgentRunRead)
     async def get_agent_run(

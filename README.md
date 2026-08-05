@@ -84,12 +84,14 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_OPENAI_API_KEY` | 服务端 API Key；不要以 `NEXT_PUBLIC_` 开头 |
 | `PAPERLEAF_OPENAI_BASE_URL` | 兼容接口根地址 |
 | `PAPERLEAF_CHAT_MODEL` | 问答与总结模型 |
+| `PAPERLEAF_EMBEDDING_ENABLED` | 当前服务是否提供 Embeddings；聊天服务不支持时必须关闭 |
 | `PAPERLEAF_EMBEDDING_MODEL` | 向量模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 向量维度，必须与模型输出一致 |
 | `PAPERLEAF_VISION_MODEL` | 可选；低文本页 OCR 使用的视觉模型 |
 | `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用服务 Key；不配置则只使用主服务 |
 | `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用 OpenAI-compatible 根地址 |
 | `PAPERLEAF_FALLBACK_CHAT_MODEL` | 备用问答与总结模型 |
+| `PAPERLEAF_FALLBACK_EMBEDDING_ENABLED` | 备用服务是否提供 Embeddings |
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
 | `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务最多尝试次数，范围 1~3 |
@@ -97,6 +99,12 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断后的冷却时间 |
 
 修改嵌入模型或维度后，需要对既有文献重新建立索引。未配置 API Key 时，生产环境不会把文献发送给任何模型：系统保留全文检索、引用校验和提取式产物，但不会生成向量、调用模型回答或执行视觉 OCR。
+
+使用 DeepSeek 做论文问答时，可将 `PAPERLEAF_OPENAI_BASE_URL` 设为
+`https://api.deepseek.com`、将 `PAPERLEAF_CHAT_MODEL` 设为当前可用的 DeepSeek
+聊天模型，并设置 `PAPERLEAF_EMBEDDING_ENABLED=false`。聊天生成与向量检索是两项独立
+能力：关闭向量调用后仍可通过 PostgreSQL 全文检索获得证据并交给 DeepSeek 回答；如需
+语义向量检索，应另外配置支持 Embeddings 的服务并重建既有文献索引。
 
 完整环境变量和生产部署注意事项参见[部署指南](docs/deployment.md)。
 

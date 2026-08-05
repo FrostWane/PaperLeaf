@@ -16,6 +16,13 @@ from .config import settings
 from .db import get_session_factory
 from .model_runtime import ModelProvider, ModelRouter, ModelRuntimeError, build_model_router
 from .models import Job, JobStatus, Paper, PaperChunk, PaperPage, PaperStatus
+from .pdf_metadata import (
+    PdfMetadata,
+    backfill_pdf_metadata,
+    extract_first_page_authors,
+    extract_first_page_year,
+    extract_pdf_metadata,
+)
 from .rag.chunking import PageText, chunk_pages
 from .storage import create_storage
 
@@ -137,6 +144,7 @@ async def process_parse_job(job_id: str) -> None:
         storage_key = paper.storage_key
 
     content = await storage.read(storage_key)
+    pdf_metadata = PdfMetadata()
     try:
         import fitz
 
@@ -144,6 +152,7 @@ async def process_parse_job(job_id: str) -> None:
         with fitz.open(stream=content, filetype="pdf") as document:
             if document.page_count > settings.max_pdf_pages:
                 raise ValueError("PDF 超过页数限制")
+            pdf_metadata = extract_pdf_metadata(document.metadata)
             pages = []
             for index in range(document.page_count):
                 page = document.load_page(index)
@@ -159,6 +168,22 @@ async def process_parse_job(job_id: str) -> None:
                 physical_page = index + 1
                 methods[physical_page] = method
                 pages.append(PageText(paper.id, physical_page, text))
+            if pages and not pdf_metadata.authors:
+                first_page_authors = extract_first_page_authors(
+                    pages[0].text, pdf_metadata.title or paper.title
+                )
+                if first_page_authors:
+                    pdf_metadata = PdfMetadata(
+                        title=pdf_metadata.title,
+                        authors=first_page_authors,
+                        year=pdf_metadata.year,
+                    )
+            if pages and (first_page_year := extract_first_page_year(pages[0].text)):
+                pdf_metadata = PdfMetadata(
+                    title=pdf_metadata.title,
+                    authors=pdf_metadata.authors,
+                    year=first_page_year,
+                )
     except Exception as exc:
         raise RuntimeError("PDF_PARSE_FAILED") from exc
 
@@ -204,6 +229,8 @@ async def process_parse_job(job_id: str) -> None:
                     )
                 )
         paper.page_count = len(pages)
+        # 使用最终事务内重新加载的最新字段做条件回填，避免覆盖解析期间的用户编辑。
+        backfill_pdf_metadata(paper, pdf_metadata)
         paper.status = PaperStatus.partial if empty_pages else PaperStatus.ready
         paper.updated_at = utcnow()
         job.progress = 100

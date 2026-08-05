@@ -212,16 +212,45 @@ def assess_evidence(
             **base,
         )
 
-    coverage = max(lexical_coverage(query, item.text) for item in evidence[:5])
+    if "scoped_overview" in channels:
+        return EvidenceQuality(
+            grade="sufficient",
+            confidence=1.0,
+            reason_code="scoped_overview_support",
+            summary=f"已从当前论文的 {page_count} 个代表性页面提取可核验证据",
+            lexical_coverage=1.0,
+            vector_score=0.0,
+            retrieval_grade="sufficient",
+            answer_support_grade="not_checked",
+            answer_support_confidence=None,
+            **base,
+        )
+
+    coverage = max(
+        max(
+            lexical_coverage(query, item.text),
+            lexical_coverage(item.retrieval_query, item.text)
+            if item.retrieval_query
+            else 0.0,
+        )
+        for item in evidence[:5]
+    )
     channel_scores = [pair for item in evidence for pair in item.channel_scores]
     vector_score = max((score for name, score in channel_scores if name == "vector"), default=0.0)
-    keyword_raw = max((score for name, score in channel_scores if name == "keyword"), default=0.0)
+    keyword_raw = max(
+        (
+            score
+            for name, score in channel_scores
+            if name in {"keyword", "keyword_rewrite"}
+        ),
+        default=0.0,
+    )
     keyword_score = max(coverage, 1 - math.exp(-4 * max(0.0, keyword_raw)))
     agreed = any({"keyword", "vector"}.issubset(item.retrieval_channels) for item in evidence)
 
     if vector_score > 0:
         confidence = 0.7 * _clamp(vector_score) + 0.2 * coverage + 0.1 * float(agreed)
-    elif "keyword" in channels:
+    elif {"keyword", "keyword_rewrite"} & set(channels):
         confidence = 0.65 * _clamp(keyword_score) + 0.35 * coverage
     else:
         # 自定义检索器必须至少提供可复核的文本重合，不能因“列表非空”直接放行。
@@ -237,6 +266,9 @@ def assess_evidence(
     elif sufficient and vector_supported:
         reason = "semantic_support"
         summary = f"已定位 {page_count} 个证据页，语义匹配通过质量门禁"
+    elif sufficient and "keyword_rewrite" in channels:
+        reason = "query_rewrite_support"
+        summary = f"已定位 {page_count} 个证据页，查询改写后的术语与原文匹配"
     elif sufficient:
         reason = "lexical_support"
         summary = f"已定位 {page_count} 个证据页，原文术语与问题匹配"

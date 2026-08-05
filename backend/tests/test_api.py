@@ -254,6 +254,8 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
             json={"content": "什么是 RAG？", "scope": "library", "web_enabled": False},
         )
         assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers["x-accel-buffering"] == "no"
         assert "event: node_started" in response.text
         assert "event: node_finished" in response.text
         assert "event: tool_finished" in response.text

@@ -15,7 +15,14 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Generic, Literal, TypeVar
 
-ModelPurpose = Literal["answer", "evidence_support", "summary", "embedding", "vision"]
+ModelPurpose = Literal[
+    "answer",
+    "query_rewrite",
+    "evidence_support",
+    "summary",
+    "embedding",
+    "vision",
+]
 AttemptStatus = Literal[
     "succeeded",
     "failed",
@@ -313,6 +320,7 @@ class ModelRouter(Generic[T]):
     def health(self) -> list[dict[str, Any]]:
         purposes: tuple[ModelPurpose, ...] = (
             "answer",
+            "query_rewrite",
             "evidence_support",
             "summary",
             "embedding",
@@ -340,7 +348,9 @@ def build_model_router(config: Any) -> ModelRouter[Any]:
                 api_key=config.openai_api_key,
                 base_url=config.openai_base_url,
                 chat_model=config.chat_model,
-                embedding_model=config.embedding_model,
+                # 聊天与向量接口并不是所有 OpenAI-compatible 服务都会同时提供。
+                # 例如 DeepSeek 可承担问答和总结，但目前不提供 Embeddings API。
+                embedding_model=config.embedding_model if config.embedding_enabled else "",
                 vision_model=config.vision_model,
             )
         )
@@ -352,7 +362,11 @@ def build_model_router(config: Any) -> ModelRouter[Any]:
                 api_key=fallback_key,
                 base_url=config.fallback_openai_base_url,
                 chat_model=config.fallback_chat_model,
-                embedding_model=config.fallback_embedding_model,
+                embedding_model=(
+                    config.fallback_embedding_model
+                    if config.fallback_embedding_enabled
+                    else ""
+                ),
                 vision_model=config.fallback_vision_model,
             )
         )

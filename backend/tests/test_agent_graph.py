@@ -1,7 +1,13 @@
 import asyncio
 
-from paperleaf_api.agent.graph import build_agent_graph
+from paperleaf_api.agent.graph import (
+    _evidence_for_support_check,
+    build_agent_graph,
+    build_configured_answerer,
+)
 from paperleaf_api.agent.tools import ArxivSearchInput, LibrarySearchInput, ToolResult
+from paperleaf_api.model_runtime import ModelRouter
+from paperleaf_api.rag.answer_quality import extract_answer_claims
 from paperleaf_api.rag.citations import CitationClaim, Evidence
 from paperleaf_api.rag.retrieval_quality import AnswerSupport
 
@@ -27,9 +33,40 @@ class IrrelevantRetriever:
         return [Evidence("c2", "p1", "测试论文", 9, "附录列出了实验硬件。")]
 
 
+class MultiSentenceEvidenceRetriever:
+    async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
+        return [
+            Evidence(
+                "c-multi",
+                "p1",
+                "多句测试论文",
+                6,
+                (
+                    "论文结论是模型通过检索证据回答。"
+                    "实验结论显示引用提高了可核验性。"
+                    "作者结论要求每条主张附带来源。"
+                ),
+                retrieval_score=0.03,
+                retrieval_channels=("keyword",),
+                channel_scores=(("keyword", 0.4),),
+            )
+        ]
+
+
 class EmptyRetriever:
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
         return []
+
+
+def test_support_check_uses_cited_evidence_instead_of_first_retrieval_items() -> None:
+    evidence = [
+        Evidence(f"c{index}", "p1", "测试论文", index, f"第 {index} 页证据")
+        for index in range(1, 9)
+    ]
+
+    selected = _evidence_for_support_check("结论来自后文 [chunk:c8]。", evidence)
+
+    assert [item.chunk_id for item in selected] == ["c8"]
 
 
 class FakeArxivSearch:
@@ -83,6 +120,21 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     assert result["citations"][0].physical_page == 4
     assert result["evidence_quality"]["grade"] == "sufficient"
     assert result["evidence_quality"]["claim_citation_coverage"] == 1.0
+    assert result["evidence_quality"]["answer_support_grade"] == "supported"
+
+
+def test_graph_no_model_fallback_cites_every_extractive_claim() -> None:
+    no_model_answerer = build_configured_answerer(model_router=ModelRouter([]))
+    result = _run(build_agent_graph(MultiSentenceEvidenceRetriever(), no_model_answerer))
+
+    claims = extract_answer_claims(result["answer"])
+    assert result["status"] == "completed"
+    assert result["answer"].startswith("原文摘录：")
+    assert len(claims) == 3
+    assert all(claim.citation_ids == ("c-multi",) for claim in claims)
+    assert result["citations"][0].chunk_id == "c-multi"
+    assert result["evidence_quality"]["claim_citation_coverage"] == 1.0
+    assert result["evidence_quality"]["claim_support_coverage"] == 1.0
     assert result["evidence_quality"]["answer_support_grade"] == "supported"
 
 

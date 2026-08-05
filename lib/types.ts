@@ -124,6 +124,15 @@ export interface AgentActivity {
   durationMs?: number;
 }
 
+export interface AgentAskStreamHandlers {
+  onActivity?: (activity: AgentActivity) => void;
+  /** 每个 message_delta 到达后，返回累计且已隐藏内部 Chunk 标记的可见回答。 */
+  onAnswerUpdate?: (answer: string) => void;
+  /** 每个 citation 事件到达后，返回截至当前的完整引用列表。 */
+  onCitationsUpdate?: (citations: Citation[]) => void;
+  onEvidenceQualityUpdate?: (quality: AgentEvidenceQuality) => void;
+}
+
 export interface AgentEvidenceQuality {
   grade: "sufficient" | "insufficient";
   confidence: number;

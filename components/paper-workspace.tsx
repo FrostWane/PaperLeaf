@@ -1,10 +1,8 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import { AlignLeft, ArrowLeft, ChevronLeft, ChevronRight, FileText, Info, MessageSquare, Network, PencilLine, Quote, Search, Send } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { useForm } from "react-hook-form";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { z } from "zod";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
@@ -15,13 +13,16 @@ import { AgentRunProgress } from "./agent-run-progress";
 import { EvidenceQualityStrip } from "./evidence-quality-strip";
 import { PaperDetailsDialog } from "./paper-details-dialog";
 import { StructureDiagram } from "./structure-diagram";
+import { SummaryContent } from "./summary-content";
 
 const RealPdfDocument = dynamic(
   () => import("./real-pdf-document").then((module) => module.RealPdfDocument),
   { ssr: false, loading: () => <p role="status">正在准备 PDF 阅读器…</p> },
 );
 
-const questionSchema = z.object({ question: z.string().trim().min(3, "问题至少需要 3 个字符").max(500) });
+const questionSchema = z.object({
+  question: z.string().trim().min(3, "问题至少需要 3 个字符").max(500, "问题不能超过 500 个字符"),
+});
 type QuestionInput = z.infer<typeof questionSchema>;
 type AssistantView = "ask" | "summary" | "structure";
 
@@ -64,12 +65,13 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const [busy, setBusy] = useState<"ask" | "summary" | "structure" | null>(null);
   const [loadMessage, setLoadMessage] = useState("");
   const [askMessage, setAskMessage] = useState("");
+  const [questionDraft, setQuestionDraft] = useState("");
+  const [questionError, setQuestionError] = useState("");
   const [artifactMessage, setArtifactMessage] = useState("");
   const [manageMessage, setManageMessage] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const setSelectedPaperId = useWorkspaceStore((state) => state.setSelectedPaperId);
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<QuestionInput>({ resolver: zodResolver(questionSchema), defaultValues: { question: "" } });
   const libraryHref = demo ? "/library?demo=1" : "/library";
 
   useEffect(() => {
@@ -121,19 +123,42 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   }
 
   async function submit(values: QuestionInput) {
+    const question = values.question;
     setBusy("ask");
     setAskMessage("");
     setActivities([]);
+    setAnswer({ question, answer: "", citations: [], activities: [] });
     try {
-      const next = await dataSource.ask(values.question, [paperId], (activity) => {
-        setActivities((items) => items.some((item) => item.key === activity.key) ? items.map((item) => item.key === activity.key ? activity : item) : [...items, activity]);
+      const next = await dataSource.ask(question, [paperId], {
+        onActivity: (activity) => {
+          setActivities((items) => items.some((item) => item.key === activity.key) ? items.map((item) => item.key === activity.key ? activity : item) : [...items, activity]);
+        },
+        onAnswerUpdate: (nextAnswer) => {
+          setAnswer((current) => current?.question === question ? { ...current, answer: nextAnswer } : current);
+        },
+        onCitationsUpdate: (citations) => {
+          setAnswer((current) => current?.question === question ? { ...current, citations } : current);
+        },
+        onEvidenceQualityUpdate: (evidenceQuality) => {
+          setAnswer((current) => current?.question === question ? { ...current, evidenceQuality } : current);
+        },
       });
       setAnswer(next);
       setActivities(next.activities ?? []);
-      reset();
+      setQuestionDraft("");
     }
     catch (error) { setAskMessage(error instanceof Error ? error.message : "提问失败"); }
     finally { setBusy(null); }
+  }
+
+  async function validateAndSubmitQuestion() {
+    const parsed = questionSchema.safeParse({ question: questionDraft });
+    if (!parsed.success) {
+      setQuestionError(parsed.error.issues[0]?.message ?? "请输入有效问题");
+      return;
+    }
+    setQuestionError("");
+    await submit(parsed.data);
   }
 
   async function generateSummary() {
@@ -202,14 +227,14 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
 
   const askContent = <div className="conversation">
     <AgentRunProgress activities={activities} />
-    {answer ? <><div className={`run-note ${answer.evidenceQuality?.grade === "insufficient" ? "quality-insufficient" : ""}`} role="status">{answer.evidenceQuality?.summary ?? `已保留 ${answer.citations.length} 条可验证证据`}</div><EvidenceQualityStrip quality={answer.evidenceQuality} /><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">{answer.evidenceQuality?.grade === "insufficient" ? "证据状态" : "基于原文回答"}</span><p className="answer-text">{answer.answer} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`引用 [${index + 1}]，查看 PDF 第 ${citation.page} 页`}>[{index + 1}]</button>)}</p>{answer.citations.length > 0 && <div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div>}</> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
+    {answer ? <><div className={`run-note ${answer.evidenceQuality?.grade === "insufficient" ? "quality-insufficient" : ""}`} role="status">{answer.evidenceQuality?.summary ?? (busy === "ask" ? "问题已提交，正在检索并等待回答事件" : `已保留 ${answer.citations.length} 条可验证证据`)}</div><EvidenceQualityStrip quality={answer.evidenceQuality} /><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">{busy === "ask" && !answer.answer ? "回答状态" : answer.evidenceQuality?.grade === "insufficient" ? "证据状态" : "基于原文回答"}</span><p className="answer-text">{answer.answer || (busy === "ask" ? "正在准备基于文献证据的回答…" : "本次运行未返回回答。")} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`引用 [${index + 1}]，查看 PDF 第 ${citation.page} 页`}>[{index + 1}]</button>)}</p>{answer.citations.length > 0 && <div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div>}</> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
     {askMessage && <p className="field-error" role="alert">{askMessage}</p>}
   </div>;
 
   const summaryContent = <div className="artifact-panel">
     <div className="artifact-heading"><div><span className="eyebrow">Grounded overview</span><h3>证据化论文概览</h3><p>围绕研究问题、方法、结果与限制整理；不会补写证据中不存在的内容。</p></div><button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateSummary()}>{busy === "summary" ? "正在生成" : summary ? "重新生成" : "生成概览"}</button></div>
     {!summary && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "生成后，点击页码可以回到对应 PDF 证据。" : "PDF 仍可阅读；总结功能会在索引就绪后开放。"}</p></div>}
-    {summary && <article className="summary-artifact"><div className="artifact-mode"><span>{summary.mode === "model" ? "模型归纳" : "提取式降级"}</span><em>{summary.citations.length} 个证据页</em></div><p>{summary.content}</p><div className="artifact-citations">{summary.citations.map((citation, index) => <button key={citation.chunkId} onClick={() => openCitation(citation.physicalPage)}><span>{String(index + 1).padStart(2, "0")}</span>PDF {citation.physicalPage}<small className="mono">{citation.chunkId}</small></button>)}</div></article>}
+    {summary && <article className="summary-artifact"><div className="artifact-mode"><span>{summary.mode === "model" ? "模型归纳" : "原文保底摘录"}</span><em>{summary.citations.length} 个证据页</em></div>{summary.mode === "extractive" && <p className="artifact-fallback-note">AI 归纳本次未成功；当前展示的是从论文不同页面抽取的可回读原文，不是最终概览。你可以点击“重新生成”再试一次。</p>}<SummaryContent content={summary.content} citations={summary.citations} onOpenPage={openCitation} /><div className="artifact-citations">{summary.citations.map((citation, index) => <button key={citation.chunkId} onClick={() => openCitation(citation.physicalPage)}><span>{String(index + 1).padStart(2, "0")}</span>PDF {citation.physicalPage}<small className="mono">{citation.chunkId}</small></button>)}</div></article>}
     {artifactMessage && <p className="field-error" role="alert">{artifactMessage}</p>}
   </div>;
 
@@ -223,7 +248,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const askPane = <aside className={`workspace-assistant pane-view ${mobilePane === "ask" ? "mobile-active" : ""}`} aria-label="论文助手">
     <div className="assistant-head"><span className="assistant-title"><Quote size={14} />论文助手</span><nav className="assistant-tabs" aria-label="论文助手视图">{assistantTabs.map(({ id, label, icon: Icon }) => <button key={id} className={assistantView === id ? "active" : ""} aria-current={assistantView === id ? "page" : undefined} onClick={() => { setAssistantView(id); setArtifactMessage(""); }}><Icon size={13} />{label}</button>)}</nav></div>
     {assistantView === "ask" ? askContent : assistantView === "summary" ? summaryContent : structureContent}
-    {assistantView === "ask" && <form className="composer" onSubmit={handleSubmit(submit)}><label className="composer-box"><span className="sr-only">向论文提问</span><textarea {...register("question")} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void handleSubmit(submit)(); } }} placeholder="继续追问这篇论文…" rows={2} /><button className="send-button" disabled={busy === "ask" || !readyForArtifacts} aria-label="发送问题"><Send size={15} /></button></label>{errors.question && <span className="field-error">{errors.question.message}</span>}<div className="composer-meta"><span>{readyForArtifacts ? "仅依据当前论文回答" : "等待索引完成后可提问"}</span><span>{busy === "ask" ? "正在检索…" : "Ctrl + Enter"}</span></div></form>}
+    {assistantView === "ask" && <form className="composer" onSubmit={(event) => { event.preventDefault(); void validateAndSubmitQuestion(); }}><label className="composer-box"><span className="sr-only">向论文提问</span><textarea name="question" value={questionDraft} onChange={(event) => { setQuestionDraft(event.target.value); if (questionError) setQuestionError(""); }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void validateAndSubmitQuestion(); } }} placeholder="继续追问这篇论文…" rows={2} /><button className="send-button" disabled={busy === "ask" || !readyForArtifacts} aria-label="发送问题"><Send size={15} /></button></label>{questionError && <span className="field-error">{questionError}</span>}<div className="composer-meta"><span>{readyForArtifacts ? "仅依据当前论文回答" : "等待索引完成后可提问"}</span><span>{busy === "ask" ? "正在检索…" : "Ctrl + Enter"}</span></div></form>}
   </aside>;
 
   return (

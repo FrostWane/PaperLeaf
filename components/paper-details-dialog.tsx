@@ -14,7 +14,14 @@ interface PaperDetailsDialogProps {
   onRetry: () => Promise<void>;
 }
 
-export function PaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete, onRetry }: PaperDetailsDialogProps) {
+export function PaperDetailsDialog(props: PaperDetailsDialogProps) {
+  // 关闭后卸载表单状态；再次打开时始终以 Worker/服务端最新回填值初始化。
+  // 编辑期间组件保持挂载，不会因后台状态刷新覆盖用户尚未保存的输入。
+  if (!props.open) return null;
+  return <OpenPaperDetailsDialog {...props} />;
+}
+
+function OpenPaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete, onRetry }: PaperDetailsDialogProps) {
   const [title, setTitle] = useState(paper.title);
   const [authors, setAuthors] = useState(paper.authors);
   const [year, setYear] = useState(paper.year > 0 ? String(paper.year) : "");
@@ -88,8 +95,8 @@ export function PaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete
           </div>
           {message && <p className="form-note" role="status">{message}</p>}
           <div className="paper-management">
-            <div><strong>处理与删除</strong><p>重试会保留 PDF 原件；删除会进入后台幂等清理队列。</p></div>
-            {(paper.status === "failed" || paper.status === "partial") && <button className="secondary-button" disabled={Boolean(busy)} onClick={retry}><RotateCcw size={14} />{busy === "retry" ? "正在加入" : "重新处理"}</button>}
+            <div><strong>处理与删除</strong><p>重新识别会保留 PDF 原件，并重建文本索引和缺失的内置元数据；删除会进入后台幂等清理队列。</p></div>
+            {paper.status !== "indexing" && paper.status !== "deleting" && <button className="secondary-button" disabled={Boolean(busy)} onClick={retry}><RotateCcw size={14} />{busy === "retry" ? "正在加入" : "重新识别并索引"}</button>}
             <button className={confirmDelete ? "danger-button confirmed" : "danger-button"} disabled={Boolean(busy)} onClick={remove}>{confirmDelete ? <AlertTriangle size={14} /> : <Trash2 size={14} />}{busy === "delete" ? "正在删除" : confirmDelete ? "确认删除" : "删除文献"}</button>
           </div>
           {confirmDelete && <p className="delete-warning" role="alert">再次点击“确认删除”后，论文、索引、引用和 Agent 产物将进入清理流程。</p>}

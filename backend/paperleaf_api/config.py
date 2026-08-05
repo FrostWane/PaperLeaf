@@ -48,6 +48,7 @@ class Settings:
     openai_base_url: str = os.getenv("PAPERLEAF_OPENAI_BASE_URL", "https://api.openai.com/v1")
     chat_model: str = os.getenv("PAPERLEAF_CHAT_MODEL", "gpt-4.1-mini")
     vision_model: str | None = os.getenv("PAPERLEAF_VISION_MODEL")
+    embedding_enabled: bool = _bool("PAPERLEAF_EMBEDDING_ENABLED", True)
     embedding_model: str = os.getenv("PAPERLEAF_EMBEDDING_MODEL", "text-embedding-3-small")
     embedding_dimensions: int | None = (
         int(os.environ["PAPERLEAF_EMBEDDING_DIMENSIONS"])
@@ -62,6 +63,7 @@ class Settings:
         "PAPERLEAF_FALLBACK_CHAT_MODEL", "gpt-4.1-mini"
     )
     fallback_vision_model: str | None = os.getenv("PAPERLEAF_FALLBACK_VISION_MODEL")
+    fallback_embedding_enabled: bool = _bool("PAPERLEAF_FALLBACK_EMBEDDING_ENABLED", True)
     fallback_embedding_model: str = os.getenv(
         "PAPERLEAF_FALLBACK_EMBEDDING_MODEL", "text-embedding-3-small"
     )

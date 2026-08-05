@@ -1,12 +1,15 @@
 import asyncio
+from dataclasses import replace
 
 import pytest
 
+from paperleaf_api.config import settings
 from paperleaf_api.model_runtime import (
     ModelCircuitBreaker,
     ModelProvider,
     ModelRouter,
     ModelRuntimeError,
+    build_model_router,
     collect_model_attempts,
 )
 
@@ -158,3 +161,20 @@ def test_cancellation_propagates_without_counting_as_provider_failure() -> None:
         "consecutive_failures": 0,
         "retry_after_ms": 0,
     }
+
+
+def test_chat_provider_can_disable_unsupported_embedding_endpoint() -> None:
+    router = build_model_router(
+        replace(
+            settings,
+            openai_api_key="deepseek-key",
+            openai_base_url="https://api.deepseek.com",
+            chat_model="deepseek-v4-flash",
+            embedding_enabled=False,
+        )
+    )
+
+    assert router.has_provider("answer") is True
+    assert router.has_provider("query_rewrite") is True
+    assert router.has_provider("summary") is True
+    assert router.has_provider("embedding") is False
