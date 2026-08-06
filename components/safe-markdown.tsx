@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Citation } from "@/lib/types";
@@ -60,7 +61,7 @@ function safeHref(href: string | undefined): { href?: string; external: boolean;
   return { external: false, blocked: true };
 }
 
-export function SafeMarkdown({ content, citations = [], onOpenCitation, className }: {
+export const SafeMarkdown = memo(function SafeMarkdown({ content, citations = [], onOpenCitation, className }: {
   content: string;
   citations?: Citation[];
   onOpenCitation?: (citation: Citation) => void;
@@ -92,4 +93,4 @@ export function SafeMarkdown({ content, citations = [], onOpenCitation, classNam
       </ReactMarkdown>
     </div>
   );
-}
+});

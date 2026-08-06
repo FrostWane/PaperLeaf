@@ -30,25 +30,77 @@ function getChatNarrow(): boolean {
   return typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 720px)").matches);
 }
 
+export function progressiveChunkSize(remainingCharacters: number): number {
+  if (remainingCharacters > 1200) return 12;
+  if (remainingCharacters > 600) return 9;
+  if (remainingCharacters > 240) return 6;
+  if (remainingCharacters > 100) return 4;
+  if (remainingCharacters > 36) return 2;
+  return 1;
+}
+
 function useProgressiveAnswer(target: string, resetKey: string): string {
   const [progress, setProgress] = useState({ key: resetKey, text: "" });
+  const progressRef = useRef(progress);
+  const targetRef = useRef(target);
+  const startRef = useRef<() => void>(() => undefined);
   const visible = progress.key === resetKey && target.startsWith(progress.text) ? progress.text : "";
 
   useEffect(() => {
-    if (!target || visible === target) return;
+    targetRef.current = target;
+    startRef.current();
+  }, [target]);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: number | undefined;
     const reduceMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const timer = window.setTimeout(() => {
-      setProgress((current) => {
-        const currentText = current.key === resetKey && target.startsWith(current.text) ? current.text : "";
-        if (reduceMotion) return { key: resetKey, text: target };
-        const nextCharacter = Array.from(target.slice(currentText.length))[0];
-        return { key: resetKey, text: nextCharacter ? currentText + nextCharacter : target };
-      });
-    }, reduceMotion ? 0 : 14);
-    return () => window.clearTimeout(timer);
-  }, [resetKey, target, visible]);
+
+    function revealNextChunk() {
+      if (stopped) return;
+      timer = undefined;
+      const nextTarget = targetRef.current;
+      const current = progressRef.current;
+      const currentText = current.key === resetKey && nextTarget.startsWith(current.text) ? current.text : "";
+      if (!nextTarget) {
+        if (current.key !== resetKey || current.text) {
+          progressRef.current = { key: resetKey, text: "" };
+          setProgress(progressRef.current);
+        }
+        return;
+      }
+      if (currentText === nextTarget) return;
+      const remaining = Array.from(nextTarget.slice(currentText.length));
+      const chunkSize = reduceMotion ? remaining.length : progressiveChunkSize(remaining.length);
+      progressRef.current = { key: resetKey, text: currentText + remaining.slice(0, chunkSize).join("") };
+      setProgress(progressRef.current);
+      if (progressRef.current.text !== nextTarget) timer = window.setTimeout(revealNextChunk, 22);
+    }
+
+    function start() {
+      if (!stopped && timer === undefined) timer = window.setTimeout(revealNextChunk, 0);
+    }
+
+    startRef.current = start;
+    start();
+    return () => {
+      stopped = true;
+      startRef.current = () => undefined;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [resetKey]);
 
   return visible;
+}
+
+function ChatCitations({ citations, onOpenCitation }: { citations: Citation[]; onOpenCitation?: (citation: Citation) => void }) {
+  if (citations.length === 0) return null;
+  return <div className="chat-citations" aria-label={`引用来源，共 ${citations.length} 条`}>
+    <p className="chat-citations-title">引用来源 · {citations.length}</p>
+    {citations.map((citation, index) => <button type="button" key={`${citation.id}-${index}`} title={`打开《${citation.paperTitle}》PDF 第 ${citation.page} 页`} onClick={() => onOpenCitation?.(citation)}>
+      <span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em>
+    </button>)}
+  </div>;
 }
 
 function inputFromBinding(binding: ChatBinding, title = "新对话"): ChatSessionInput {
@@ -465,12 +517,12 @@ export function ChatWorkspace({
         <section className="chat-thread" aria-label="对话消息" aria-busy={active}>
           {loading && <div className="chat-empty" role="status"><LoaderCircle className="spinner-icon" size={20} />正在恢复对话…</div>}
           {!loading && visibleMessages.length === 0 && !liveAnswer && <div className="chat-empty"><strong>从可核对的证据开始</strong><p>回答会在完整事实段落通过引用核验后显示。离开页面不会取消后台运行。</p><div className="chat-prompts"><span>可以这样问</span>{exampleQuestions.map((prompt) => <button type="button" key={prompt} onClick={() => fillPrompt(prompt)}>{prompt}<ChevronRight size={14} /></button>)}</div></div>}
-          {visibleMessages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}>
-            <span>{message.role === "user" ? "你" : "PaperLeaf"}{message.role === "assistant" && message.status !== "completed" ? ` · ${message.status === "failed" ? "回答失败，已保留核验段落" : message.status === "cancelled" ? "已取消，已保留核验段落" : "正在写入"}` : ""}</span>
+          {visibleMessages.map((message) => <article key={message.id} className={`chat-message ${message.role}`} aria-label={message.role === "user" ? "你的消息" : "PaperLeaf 回复"}>
+            <span className="chat-message-author">{message.role === "user" ? "你" : "PaperLeaf"}{message.role === "assistant" && message.status !== "completed" ? ` · ${message.status === "failed" ? "回答失败，已保留核验段落" : message.status === "cancelled" ? "已取消，已保留核验段落" : "正在写入"}` : ""}</span>
             {message.role === "assistant" ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p>{message.content}</p>}
-            {message.role === "assistant" && message.citations.length > 0 && <div className="chat-citations" aria-label="回答引用">{message.citations.map((citation, index) => <button type="button" key={`${message.id}-${citation.chunkId}-${index}`} onClick={() => onOpenCitation?.(citation)}><span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em></button>)}</div>}
+            {message.role === "assistant" && <ChatCitations citations={message.citations} onOpenCitation={onOpenCitation} />}
           </article>)}
-          {currentRun && liveAnswer && <article className="chat-message assistant live" aria-label="PaperLeaf 正在逐字生成已核验回答"><span>PaperLeaf · 已核验内容正在生成</span><div className={progressiveAnswer === liveAnswer ? "progressive-answer" : "progressive-answer typing"}><SafeMarkdown content={progressiveAnswer} citations={liveCitations} onOpenCitation={onOpenCitation} /></div>{liveCitations.length > 0 && <div className="chat-citations">{liveCitations.map((citation, index) => <button type="button" key={`${citation.chunkId}-${index}`} onClick={() => onOpenCitation?.(citation)}><span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em></button>)}</div>}</article>}
+          {currentRun && liveAnswer && <article className="chat-message assistant live" aria-label="PaperLeaf 正在逐字生成已核验回答"><span className="chat-message-author">PaperLeaf · 已核验内容正在生成</span><div className={progressiveAnswer === liveAnswer ? "progressive-answer" : "progressive-answer typing"}><SafeMarkdown content={progressiveAnswer} citations={liveCitations} onOpenCitation={onOpenCitation} /></div><ChatCitations citations={liveCitations} onOpenCitation={onOpenCitation} /></article>}
           {currentRun && <div className={`chat-run-state ${currentRun.status}`} role="status">
             <div><span>{runStatusText(currentRun, connection)}</span>{isActiveRun(currentRun) && <button type="button" className="secondary-button" disabled={currentRun.cancelRequested} onClick={() => void cancelRun()}><Square size={13} />{currentRun.cancelRequested ? "正在取消" : "取消运行"}</button>}</div>
             {currentRun.pendingAction && <div className="chat-pending-action"><strong>需要你的确认</strong><p>{currentRun.pendingAction.riskMessage}</p>{currentRun.pendingAction.candidates.slice(0, 3).map((candidate) => <span key={candidate.arxivId ?? candidate.title}>{candidate.title ?? candidate.arxivId}</span>)}<div>{currentRun.pendingAction.allowedDecisions.includes("approve") && <button type="button" className="primary-button" onClick={() => void resumeRun("approve")}>确认导入并继续</button>}{currentRun.pendingAction.allowedDecisions.includes("reject") && <button type="button" className="secondary-button" onClick={() => void resumeRun("reject")}>不导入，继续回答</button>}</div></div>}

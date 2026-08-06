@@ -1,13 +1,16 @@
 import asyncio
 
+import pytest
+
 from paperleaf_api.agent.graph import (
+    _build_citation_aliases,
     _evidence_for_support_check,
+    _normalize_answer_citations,
     build_agent_graph,
     build_configured_answerer,
 )
 from paperleaf_api.agent.tools import ArxivSearchInput, LibrarySearchInput, ToolResult
-from paperleaf_api.model_runtime import ModelRouter
-from paperleaf_api.rag.answer_quality import extract_answer_claims
+from paperleaf_api.model_runtime import ModelRouter, ModelRuntimeError
 from paperleaf_api.rag.citations import CitationClaim, Evidence
 from paperleaf_api.rag.retrieval_quality import AnswerSupport
 
@@ -69,6 +72,31 @@ def test_support_check_uses_cited_evidence_instead_of_first_retrieval_items() ->
     assert [item.chunk_id for item in selected] == ["c8"]
 
 
+def test_citation_aliases_restore_full_chunk_ids_without_cross_paper_guessing() -> None:
+    evidence = [
+        Evidence("paper-a:p1:c0", "paper-a", "论文 A", 1, "证据 A"),
+        Evidence("paper-b:p1:c0", "paper-b", "论文 B", 1, "证据 B"),
+        Evidence("paper-a:p2:c0", "paper-a", "论文 A", 2, "证据 C"),
+    ]
+    aliases = _build_citation_aliases(evidence)
+
+    normalized = _normalize_answer_citations(
+        "别名 [chunk:E1]；无歧义短 ID [chunk:p2:c0]；"
+        "跨论文歧义短 ID [chunk:p1:c0]。",
+        evidence,
+        aliases,
+    )
+
+    assert aliases == {
+        "E1": "paper-a:p1:c0",
+        "E2": "paper-b:p1:c0",
+        "E3": "paper-a:p2:c0",
+    }
+    assert "[chunk:paper-a:p1:c0]" in normalized
+    assert "[chunk:paper-a:p2:c0]" in normalized
+    assert "[chunk:p1:c0]" in normalized
+
+
 class FakeArxivSearch:
     async def __call__(self, request: ArxivSearchInput) -> ToolResult:
         return ToolResult(
@@ -86,6 +114,15 @@ async def answerer(query: str, evidence: list[Evidence]):
 
 async def forged_answerer(query: str, evidence: list[Evidence]):
     return "伪造回答", [CitationClaim("forged", "p1", 99, "")]
+
+
+async def no_evidence_answerer(query: str, evidence: list[Evidence]):
+    assert evidence == []
+    return (
+        "我目前没有检索到能够对应这篇论文的正文片段，因此不能可靠概括它的具体方法和结论。"
+        "你可以等待索引完成，或把问题限定到某个章节后再试。当前文献证据不足。",
+        [],
+    )
 
 
 async def unsupported_grader(
@@ -119,40 +156,33 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     assert result["answer"].startswith("论文结论")
     assert result["citations"][0].physical_page == 4
     assert result["evidence_quality"]["grade"] == "sufficient"
-    assert result["evidence_quality"]["claim_citation_coverage"] == 1.0
-    assert result["evidence_quality"]["answer_support_grade"] == "supported"
+    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
 
 
-def test_graph_no_model_fallback_cites_every_extractive_claim() -> None:
+def test_graph_does_not_disguise_raw_extract_as_ai_answer_without_model() -> None:
     no_model_answerer = build_configured_answerer(model_router=ModelRouter([]))
-    result = _run(build_agent_graph(MultiSentenceEvidenceRetriever(), no_model_answerer))
+    with pytest.raises(ModelRuntimeError) as captured:
+        _run(build_agent_graph(MultiSentenceEvidenceRetriever(), no_model_answerer))
 
-    claims = extract_answer_claims(result["answer"])
-    assert result["status"] == "completed"
-    assert result["answer"].startswith("原文摘录：")
-    assert len(claims) == 3
-    assert all(claim.citation_ids == ("c-multi",) for claim in claims)
-    assert result["citations"][0].chunk_id == "c-multi"
-    assert result["evidence_quality"]["claim_citation_coverage"] == 1.0
-    assert result["evidence_quality"]["claim_support_coverage"] == 1.0
-    assert result["evidence_quality"]["answer_support_grade"] == "supported"
+    assert captured.value.error_code == "MODEL_NOT_CONFIGURED"
 
 
 def test_graph_abstains_when_no_evidence_exists() -> None:
-    result = _run(build_agent_graph(EmptyRetriever(), answerer))
+    result = _run(build_agent_graph(EmptyRetriever(), no_evidence_answerer))
 
     assert result["status"] == "completed"
     assert result["citations"] == []
-    assert "没有找到可核验的证据页" in result["answer"]
+    assert "当前文献证据不足" in result["answer"]
 
 
 def test_graph_abstains_when_retrieval_is_nonempty_but_irrelevant() -> None:
     result = _run(build_agent_graph(IrrelevantRetriever(), answerer))
 
     assert result["status"] == "completed"
-    assert result["citations"] == []
-    assert result["evidence_quality"]["reason_code"] == "weak_match"
-    assert "匹配度不足" in result["answer"]
+    assert result["citations"][0].chunk_id == "c2"
+    assert result["evidence_quality"]["retrieval_grade"] == "insufficient"
+    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
+    assert "附录列出了实验硬件" in result["answer"]
 
 
 def test_graph_suppresses_answer_with_forged_citation() -> None:
@@ -163,7 +193,7 @@ def test_graph_suppresses_answer_with_forged_citation() -> None:
     assert "未通过服务端校验" in result["answer"]
 
 
-def test_graph_abstains_when_evidence_is_relevant_but_does_not_support_answer() -> None:
+def test_secondary_support_grader_cannot_replace_a_valid_cited_answer() -> None:
     result = _run(
         build_agent_graph(
             EvidenceRetriever(),
@@ -173,19 +203,17 @@ def test_graph_abstains_when_evidence_is_relevant_but_does_not_support_answer() 
     )
 
     assert result["status"] == "completed"
-    assert result["citations"] == []
+    assert result["citations"][0].chunk_id == "c1"
     assert result["evidence_quality"]["retrieval_grade"] == "sufficient"
-    assert result["evidence_quality"]["answer_support_grade"] == "unsupported"
+    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
 
 
-def test_graph_suppresses_answer_when_one_claim_has_no_citation() -> None:
+def test_graph_keeps_natural_paragraph_after_citation_ids_are_validated() -> None:
     result = _run(build_agent_graph(EvidenceRetriever(), partially_cited_answerer))
 
     assert result["status"] == "completed"
-    assert result["citations"] == []
-    assert result["evidence_quality"]["reason_code"] == "missing_claim_citations"
-    assert result["evidence_quality"]["claim_citation_coverage"] == 0.5
-    assert "已覆盖 1/2 条主张" in result["answer"]
+    assert result["citations"][0].chunk_id == "c1"
+    assert "另一个结论" in result["answer"]
 
 
 def test_graph_interrupts_before_arxiv_import() -> None:

@@ -297,7 +297,7 @@ def apply_answer_support(quality: EvidenceQuality, support: AnswerSupport) -> Ev
         "claim_citation_coverage": round(_clamp(support.citation_coverage), 6),
         "claim_support_coverage": round(_clamp(support.support_coverage), 6),
     }
-    if quality.retrieval_grade == "insufficient" or support.supported is None:
+    if support.supported is None:
         return quality
     confidence = None if support.confidence is None else round(_clamp(support.confidence), 6)
     if support.supported:
@@ -309,6 +309,11 @@ def apply_answer_support(quality: EvidenceQuality, support: AnswerSupport) -> Ev
             reason_code=support.reason_code,
             summary=(
                 f"{quality.summary}；回答的 {support.claim_count} 条主张均有可回读证据"
+                if quality.retrieval_grade == "sufficient"
+                else (
+                    f"{quality.summary}；虽召回匹配度偏低，但回答中的 "
+                    f"{support.claim_count} 条主张均通过引用核验"
+                )
             ),
             **metrics,
         )

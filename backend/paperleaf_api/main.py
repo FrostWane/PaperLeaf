@@ -293,6 +293,11 @@ def _agent_run_read(record: Any) -> AgentRunRead:
         "AGENT_RUN_CANCELLED": "问答运行已取消",
         "MODEL_NOT_CONFIGURED": "尚未配置可用的回答模型",
         "MODEL_TIMEOUT": "回答模型响应超时，请稍后重试",
+        "MODEL_RATE_LIMITED": "回答模型请求过于频繁，请稍后重试",
+        "MODEL_UNREACHABLE": "暂时无法连接回答模型，请检查模型服务配置",
+        "MODEL_AUTHENTICATION_FAILED": "回答模型鉴权失败，请检查 API 配置",
+        "MODEL_PROVIDER_ERROR": "回答模型暂时不可用，请稍后重试",
+        "MODEL_CIRCUIT_OPEN": "回答模型连续失败，正在短暂恢复，请稍后重试",
     }
     error_message = safe_errors.get(error_code, "问答运行失败，请稍后重试") if error_code else None
     raw_action = getattr(record, "pending_action", None)

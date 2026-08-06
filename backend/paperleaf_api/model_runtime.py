@@ -183,7 +183,7 @@ class ModelRuntimeError(RuntimeError):
 
 
 def _error_code(error: BaseException) -> str:
-    if isinstance(error, TimeoutError):
+    if isinstance(error, (TimeoutError, asyncio.TimeoutError)):  # noqa: UP038
         return "MODEL_TIMEOUT"
     status_code = getattr(error, "status_code", None)
     name = error.__class__.__name__.casefold()
@@ -229,8 +229,22 @@ class ModelRouter(Generic[T]):
         return any(provider.supports(purpose) for provider in self.providers)
 
     async def execute(
-        self, purpose: ModelPurpose, operation: Callable[[ModelProvider], Awaitable[T]]
+        self,
+        purpose: ModelPurpose,
+        operation: Callable[[ModelProvider], Awaitable[T]],
+        *,
+        timeout_seconds: float | None = None,
     ) -> T:
+        """执行一次受控模型调用。
+
+        个别用途可以使用更短或更长的总时限。例如查询改写不应阻塞首字响应，
+        而回答生成需要允许模型完成一个经过约束的长回答。断路器和尝试记录仍然
+        统一由这里维护。
+        """
+
+        effective_timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        if effective_timeout <= 0 or effective_timeout > 120:
+            raise ValueError("模型调用超时必须位于 0 到 120 秒之间")
         attempts: list[ModelAttempt] = []
         candidates = [provider for provider in self.providers if provider.supports(purpose)]
         if not candidates:
@@ -258,7 +272,7 @@ class ModelRouter(Generic[T]):
                 started = time.perf_counter()
                 try:
                     value = await asyncio.wait_for(
-                        operation(provider), timeout=self.timeout_seconds
+                        operation(provider), timeout=effective_timeout
                     )
                 except asyncio.CancelledError:
                     duration_ms = round((time.perf_counter() - started) * 1000)

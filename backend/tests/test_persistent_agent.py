@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 
 import pytest
 
 from paperleaf_api.agent_execution import execute_agent_run
+from paperleaf_api.model_runtime import ModelRuntimeError
 from paperleaf_api.rag.answer_quality import AnswerQualityPolicy
 from paperleaf_api.rag.citations import CitationClaim, Evidence
 from paperleaf_api.repository import (
@@ -44,6 +47,11 @@ class ResultGraph:
 
     async def ainvoke(self, _initial: dict, _config: dict) -> dict:
         return self.result
+
+
+class TimedOutGraph:
+    async def ainvoke(self, _initial: dict, _config: dict) -> dict:
+        raise ModelRuntimeError("MODEL_TIMEOUT", [])
 
 
 async def _submitted_run(repository: MemoryRepository, user_id: str = "u1"):
@@ -171,7 +179,62 @@ def test_verified_markdown_blocks_replay_to_exact_persisted_message() -> None:
     asyncio.run(scenario())
 
 
-def test_one_invalid_paragraph_prevents_every_draft_write() -> None:
+def test_model_timeout_is_reported_instead_of_publishing_raw_extract() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        _chat_session, submission, claim_token = await _submitted_run(repository)
+
+        await execute_agent_run(
+            repository,
+            TimedOutGraph(),
+            submission.run.id,
+            claim_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "failed"
+        assert run.error_code == "MODEL_TIMEOUT"
+        assert run.result_summary["answer"] == ""
+        messages = await repository.list_chat_messages(run.session_id, run.user_id)
+        assert messages is not None
+        assistant = next(item for item in messages if item.role == "assistant")
+        assert assistant.content == ""
+
+    asyncio.run(scenario())
+
+
+def test_verified_paragraph_allows_heading_and_paragraph_end_citation() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        _chat_session, submission, claim_token = await _submitted_run(repository)
+        result = _valid_result()
+        result["answer"] = (
+            "## 研究概览\n\n"
+            "该方法使用页级混合检索。它先召回候选页面，再组织回答 [chunk:c1]。\n\n"
+            "> 证据说明：当前检索片段与问题的匹配度有限，结论仅供初步参考。"
+        )
+        result["citations"] = [CitationClaim("c1", "p1", 2, "方法使用页级混合检索。")]
+
+        await execute_agent_run(
+            repository,
+            ResultGraph(result),
+            submission.run.id,
+            claim_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        messages = await repository.list_chat_messages(run.session_id, run.user_id)
+        assert messages is not None
+        assistant = next(item for item in messages if item.role == "assistant")
+        assert assistant.content == result["answer"]
+
+    asyncio.run(scenario())
+
+
+def test_invalid_paragraph_is_dropped_without_losing_verified_content() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")
         _chat_session, submission, claim_token = await _submitted_run(repository)
@@ -190,14 +253,15 @@ def test_one_invalid_paragraph_prevents_every_draft_write() -> None:
         )
 
         run = await repository.get_agent_run(submission.run.id)
-        assert run is not None and run.status == "failed"
+        assert run is not None and run.status == "completed"
+        assert run.result_summary["dropped_paragraph_count"] == 1
         messages = await repository.list_chat_messages(run.session_id, run.user_id)
         assert messages is not None
         assistant = next(item for item in messages if item.role == "assistant")
-        assert assistant.content == ""
+        assert assistant.content == "方法使用页级混合检索 [chunk:c1]。"
         events = await repository.list_owned_agent_run_events(run.id, run.user_id)
         assert events is not None
-        assert not [item for item in events if item.event == "message_delta"]
+        assert len([item for item in events if item.event == "message_delta"]) == 1
 
     asyncio.run(scenario())
 

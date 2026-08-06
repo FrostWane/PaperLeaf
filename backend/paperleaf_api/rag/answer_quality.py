@@ -11,6 +11,7 @@ from .retrieval_quality import AnswerSupport, lexical_coverage
 _CITATION_RE = re.compile(r"\[chunk:([^\]]+)\]")
 _SENTENCE_RE = re.compile(r"[^。！？!?；;\n]+(?:[。！？!?；;\n]+|$)")
 _LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)、])\s*")
+_CONTROLLED_NOTICE_RE = re.compile(r"^\s*>?\s*证据说明[：:]", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,8 @@ def extract_answer_claims(answer: str) -> list[AnswerClaim]:
     for match in _SENTENCE_RE.finditer(answer):
         fragment = match.group(0).strip()
         if not fragment:
+            continue
+        if _CONTROLLED_NOTICE_RE.match(fragment):
             continue
         citation_ids = tuple(dict.fromkeys(_CITATION_RE.findall(fragment)))
         visible = _LIST_PREFIX_RE.sub("", _CITATION_RE.sub("", fragment)).strip()

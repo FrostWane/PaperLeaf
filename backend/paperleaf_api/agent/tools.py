@@ -206,7 +206,12 @@ class SQLLibrarySearch:
             )
 
         try:
-            response = await self.model_router.execute("query_rewrite", invoke)
+            response = await self.model_router.execute(
+                "query_rewrite",
+                invoke,
+                # 查询改写只是召回增强，不能让用户为了一个辅助步骤等待二十多秒。
+                timeout_seconds=min(self.model_router.timeout_seconds, 6.0),
+            )
         except ModelRuntimeError:
             return None
         rewritten = _keyword_search_query(str(response.content), limit=8)

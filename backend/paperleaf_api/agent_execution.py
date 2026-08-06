@@ -7,12 +7,13 @@ import re
 import time
 from typing import Any
 
-from .model_runtime import collect_model_attempts
-from .rag.answer_quality import AnswerQualityPolicy, assess_answer_support
+from .model_runtime import ModelRuntimeError, collect_model_attempts
+from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import CitationClaim, Evidence, validate_citations
-from .rag.retrieval_quality import AnswerSupport
 
 _CITATION_RE = re.compile(r"\[chunk:([^\]]+)\]")
+_CONTROLLED_NOTICE_RE = re.compile(r"^\s*>?\s*证据说明[：:]", re.IGNORECASE)
+_STRUCTURAL_MARKDOWN_RE = re.compile(r"^\s*(?:#{1,6}\s+[^\n]+|[-*_]{3,})\s*$")
 
 
 def _answer_paragraphs(answer: str) -> list[str]:
@@ -68,32 +69,26 @@ def _validate_publishable_paragraph(
     citations: list[CitationClaim],
     evidence: list[Evidence],
     evidence_quality: dict[str, Any],
-    policy: AnswerQualityPolicy,
+    _policy: AnswerQualityPolicy,
 ) -> tuple[bool, str, list[CitationClaim]]:
     cited_ids = set(_CITATION_RE.findall(paragraph))
     paragraph_citations = [item for item in citations if item.chunk_id in cited_ids]
     if not cited_ids:
         controlled_notice = (
-            not citations
-            and str(evidence_quality.get("grade", "")) == "insufficient"
+            _CONTROLLED_NOTICE_RE.match(paragraph) is not None
+            or _STRUCTURAL_MARKDOWN_RE.match(paragraph) is not None
+            or (
+                not citations
+                and str(evidence_quality.get("grade", "")) == "insufficient"
+            )
         )
         return controlled_notice, "controlled_notice", []
     valid, _errors = validate_citations(paragraph_citations, evidence)
     if not valid or cited_ids != {item.chunk_id for item in paragraph_citations}:
         return False, "invalid_citation", []
-    semantic = AnswerSupport(
-        supported=str(evidence_quality.get("answer_support_grade", "")) == "supported",
-        confidence=float(evidence_quality.get("answer_support_confidence", 0.0) or 0.0),
-        reason_code=str(evidence_quality.get("reason_code", "verified_answer")),
-    )
-    support = assess_answer_support(
-        paragraph,
-        paragraph_citations,
-        evidence,
-        semantic,
-        policy=policy,
-    )
-    return bool(support.supported), "grounded_fact", paragraph_citations
+    # 这里验证的是用户可回读的来源契约，而不是再次让另一个 LLM 覆盖回答。
+    # 事实段落至少有一个本轮真实召回的引用；段末引用可支持该段的多句综合表达。
+    return True, "cited_answer", paragraph_citations
 
 
 async def _invoke_with_cancel(
@@ -160,11 +155,20 @@ async def execute_agent_run(
         return
     run = started
     snapshot = dict(run.scope_snapshot or {})
+    visible_history = await repository.list_chat_messages(run.session_id, run.user_id)
     initial = {
         "run_id": run.id,
         "session_id": run.session_id,
         "user_id": run.user_id,
         "query": query,
+        "messages": [
+            {
+                "role": item.role,
+                "content": item.content,
+            }
+            for item in (visible_history or [])
+            if item.content.strip() and item.id != run.assistant_message_id
+        ][-9:],
         "scope": snapshot.get("type", "library"),
         "selected_paper_ids": list(snapshot.get("paper_ids", [])),
         "web_enabled": bool(snapshot.get("web_enabled", False)),
@@ -195,6 +199,21 @@ async def execute_agent_run(
             if current and current.cancel_requested:
                 return
             raise
+        except ModelRuntimeError as error:
+            duration_ms = round((time.perf_counter() - started_at) * 1000)
+            await repository.finish_agent_run(
+                run_id,
+                status="failed",
+                error_code=error.error_code,
+                duration_ms=duration_ms,
+                result_summary={
+                    "answer": "",
+                    "citations": [],
+                    "model_attempts": [item.as_dict() for item in attempts],
+                },
+                claim_token=claim_token,
+            )
+            return
         except Exception:
             duration_ms = round((time.perf_counter() - started_at) * 1000)
             await repository.finish_agent_run(
@@ -268,6 +287,7 @@ async def execute_agent_run(
         return
     paragraphs = _answer_paragraphs(answer)
     validated: list[tuple[str, str, list[CitationClaim]]] = []
+    dropped_paragraphs = 0
     await repository.append_agent_run_event(
         run_id,
         "node_started",
@@ -298,21 +318,30 @@ async def execute_agent_run(
             answer_quality_policy,
         )
         if not valid:
-            await repository.finish_agent_run(
-                run_id,
-                status="failed",
-                error_code="UNVERIFIED_ANSWER",
-                duration_ms=duration_ms,
-                result_summary={
-                    "answer": "",
-                    "citations": [],
-                    "evidence_quality": quality,
-                    "model_attempts": model_attempts,
-                },
-                claim_token=claim_token,
-            )
-            return
+            # 只丢弃未带合法来源的自然段，不再让一个漏引的开场白覆盖整篇已经
+            # 通过引用 ID/论文/页码校验的回答。至少需要保留一个有引用的事实段落。
+            dropped_paragraphs += 1
+            continue
         validated.append((paragraph, classification, paragraph_citations))
+    has_cited_answer = any(
+        classification == "cited_answer" for _, classification, _ in validated
+    )
+    if evidence and not has_cited_answer:
+        await repository.finish_agent_run(
+            run_id,
+            status="failed",
+            error_code="UNVERIFIED_ANSWER",
+            duration_ms=duration_ms,
+            result_summary={
+                "answer": "",
+                "citations": [],
+                "evidence_quality": quality,
+                "model_attempts": model_attempts,
+                "dropped_paragraph_count": dropped_paragraphs,
+            },
+            claim_token=claim_token,
+        )
+        return
     await repository.append_agent_run_event(
         run_id,
         "node_finished",
@@ -347,6 +376,7 @@ async def execute_agent_run(
     result_status = str(result.get("status", "completed"))
     if result_status != "completed":
         result_status = "failed"
+    published_answer = "\n\n".join(item[0] for item in validated)
     await repository.finish_agent_run(
         run_id,
         status=result_status,
@@ -354,10 +384,11 @@ async def execute_agent_run(
         duration_ms=duration_ms,
         error_code=result.get("error"),
         result_summary={
-            "answer": answer,
+            "answer": published_answer,
             "citations": list(all_citation_dicts.values()),
             "evidence_quality": quality,
             "model_attempts": model_attempts,
+            "dropped_paragraph_count": dropped_paragraphs,
         },
         claim_token=claim_token,
     )

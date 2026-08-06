@@ -15,6 +15,16 @@ def test_claim_parser_attaches_trailing_citation_marker() -> None:
     assert claims[1].citation_ids == ("c2",)
 
 
+def test_claim_parser_ignores_controlled_evidence_notice() -> None:
+    claims = extract_answer_claims(
+        "论文使用页级检索 [chunk:c1]。\n\n"
+        "> 证据说明：当前检索片段与问题的匹配度有限，结论仅供初步参考。"
+    )
+
+    assert len(claims) == 1
+    assert claims[0].citation_ids == ("c1",)
+
+
 def test_deterministic_support_requires_every_claim_to_be_cited_and_grounded() -> None:
     evidence = [
         _evidence("c1", "模型使用检索证据回答问题。"),

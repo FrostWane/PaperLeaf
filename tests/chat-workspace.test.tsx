@@ -1,6 +1,6 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatWorkspace } from "@/components/chat-workspace";
+import { ChatWorkspace, progressiveChunkSize } from "@/components/chat-workspace";
 import { demoDataSource } from "@/lib/data-source";
 import type { AgentRunSnapshot, ChatMessage, ChatSession } from "@/lib/types";
 
@@ -58,6 +58,35 @@ describe("ChatWorkspace", () => {
       expect(partial.length).toBeLessThan(answer.length);
     });
     expect(await screen.findByText(answer)).toBeInTheDocument();
+  });
+
+  it("流式积压时只使用短字符块追赶，接近结尾后恢复逐字输出", () => {
+    expect(progressiveChunkSize(1600)).toBe(12);
+    expect(progressiveChunkSize(800)).toBe(9);
+    expect(progressiveChunkSize(300)).toBe(6);
+    expect(progressiveChunkSize(120)).toBe(4);
+    expect(progressiveChunkSize(50)).toBe(2);
+    expect(progressiveChunkSize(20)).toBe(1);
+  });
+
+  it("用户消息和 Agent 回复使用明确方向，并统一展示可回读引用", async () => {
+    const session: ChatSession = { id: "s-chat", title: "对齐测试", type: "library", createdAt, updatedAt: createdAt };
+    const citation = { id: "citation-1", paperId: "p1", paperTitle: "Attention Is All You Need", page: 4, chunkId: "p1:p4:c1", quote: "The encoder maps an input sequence to representations.", href: "/library/p1?page=4" };
+    const chatMessages: ChatMessage[] = [
+      { id: "m-user", sessionId: session.id, role: "user", sequence: 1, status: "completed", content: "核心方法是什么？", citations: [], createdAt, updatedAt: createdAt },
+      { id: "m-assistant", sessionId: session.id, role: "assistant", sequence: 2, status: "completed", content: "核心方法是自注意力。", citations: [citation], createdAt, updatedAt: createdAt },
+    ];
+    const source = { ...demoDataSource, listChatSessions: vi.fn().mockResolvedValue([session]), listChatMessages: vi.fn().mockResolvedValue(chatMessages) };
+
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+
+    const userMessage = await screen.findByLabelText("你的消息");
+    const assistantMessage = screen.getByLabelText("PaperLeaf 回复");
+    expect(userMessage).toHaveClass("user");
+    expect(assistantMessage).toHaveClass("assistant");
+    const citations = within(assistantMessage).getByLabelText("引用来源，共 1 条");
+    expect(within(citations).getByText("引用来源 · 1")).toBeInTheDocument();
+    expect(within(citations).getByRole("button", { name: /Attention Is All You Need/ })).toHaveAttribute("title", "打开《Attention Is All You Need》PDF 第 4 页");
   });
 
   it("活跃 Run 恢复时合并为一个权威回答，重挂载与补发不会重复段落", async () => {
