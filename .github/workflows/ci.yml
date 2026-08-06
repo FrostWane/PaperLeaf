@@ -39,18 +39,19 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: paperleaf
+          POSTGRES_DB: paperleaf_test
           POSTGRES_USER: paperleaf
           POSTGRES_PASSWORD: paperleaf-ci-only
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U paperleaf -d paperleaf"
+          --health-cmd "pg_isready -U paperleaf -d paperleaf_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
     env:
-      PAPERLEAF_DATABASE_URL: postgresql+asyncpg://paperleaf:paperleaf-ci-only@127.0.0.1:5432/paperleaf
+      PAPERLEAF_DATABASE_URL: postgresql+asyncpg://paperleaf:paperleaf-ci-only@127.0.0.1:5432/paperleaf_test
+      PAPERLEAF_TEST_DATABASE_URL: postgresql+asyncpg://paperleaf:paperleaf-ci-only@127.0.0.1:5432/paperleaf_test
     defaults:
       run:
         working-directory: backend
@@ -88,10 +89,11 @@ jobs:
           --manifest evaluation/datasets/paperleaf-qasper-selective-holdout-v2/manifest.json
           --questions evaluation/datasets/paperleaf-qasper-selective-holdout-v2/questions.jsonl
           --exclusion-manifest evaluation/datasets/paperleaf-qasper-calibration-v1/manifest.json
+      - name: 升级测试数据库
+        run: alembic upgrade head
       - run: pytest
       - name: 验证全新安装与旧库升级迁移
         run: |
-          alembic upgrade head
           alembic downgrade 20260722_0002
           alembic upgrade head
           alembic check

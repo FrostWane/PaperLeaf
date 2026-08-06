@@ -93,7 +93,7 @@ docker compose up -d web
 |---|---|
 | `PAPERLEAF_OPENAI_API_KEY` | OpenAI-compatible Key |
 | `PAPERLEAF_OPENAI_BASE_URL` | 接口根地址 |
-| `PAPERLEAF_CHAT_MODEL` | 问答与总结模型 |
+| `PAPERLEAF_CHAT_MODEL` | 问答、总结与全文翻译模型 |
 | `PAPERLEAF_EMBEDDING_MODEL` | 嵌入模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 嵌入向量维度 |
 | `PAPERLEAF_VISION_MODEL` | 可选 OCR 视觉模型 |
@@ -107,7 +107,9 @@ docker compose up -d web
 | `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败熔断阈值 |
 | `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断冷却秒数 |
 
-不配置 Key 时文献 CRUD、PDF 阅读、全文检索、引用校验和提取式产物仍可工作；向量、模型生成与视觉 OCR 会降级。主服务达到连续失败阈值后，相应用途会在冷却期内快速失败并切换备用服务；回答、证据核验、总结、嵌入与视觉 OCR 分别维护熔断状态，单项故障不会直接关闭全部模型能力。修改嵌入模型或维度后必须重新索引；主、备用嵌入模型也必须输出相同维度。
+不配置 Key 时文献 CRUD、PDF 阅读、全文检索、引用校验和提取式产物仍可工作；全文翻译、向量、模型生成与视觉 OCR 会明确降级。主服务达到连续失败阈值后，相应用途会在冷却期内快速失败并切换备用服务；回答、证据核验、总结、翻译、嵌入与视觉 OCR 分别维护熔断状态，单项故障不会直接关闭全部模型能力。修改嵌入模型或维度后必须重新索引；主、备用嵌入模型也必须输出相同维度。
+
+全文翻译会把已解析的单页文本发送给聊天模型，并把译文逐页保存在 PostgreSQL。它不会生成新的 PDF。生产部署应按最大 500 页文献估算数据库容量与模型费用，并确保 Worker 持续运行；API 重启或浏览器离开不会中止已创建的翻译作业。
 
 ## 反向代理
 

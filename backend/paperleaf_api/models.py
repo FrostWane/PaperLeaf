@@ -219,13 +219,78 @@ class PaperChunk(Base):
     page: Mapped[PaperPage] = relationship(back_populates="chunks")
 
 
+class PaperTranslation(Base):
+    __tablename__ = "paper_translations"
+    __table_args__ = (
+        UniqueConstraint(
+            "paper_id",
+            "target_language",
+            name="uq_paper_translation_language",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), index=True
+    )
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    target_language: Mapped[str] = mapped_column(String(32))
+    source_revision: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    completed_pages: Mapped[int] = mapped_column(Integer, default=0)
+    failed_pages: Mapped[int] = mapped_column(Integer, default=0)
+    priority_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PaperTranslationPage(Base):
+    __tablename__ = "paper_translation_pages"
+    __table_args__ = (
+        UniqueConstraint(
+            "translation_id",
+            "physical_page",
+            name="uq_translation_physical_page",
+        ),
+        Index("ix_translation_pages_work", "translation_id", "status", "priority"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    translation_id: Mapped[str] = mapped_column(
+        ForeignKey("paper_translations.id", ondelete="CASCADE"), index=True
+    )
+    physical_page: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    translated_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_text_hash: Mapped[str] = mapped_column(String(64))
+    priority: Mapped[int] = mapped_column(Integer, default=1000)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Job(Base):
     __tablename__ = "jobs"
-    __table_args__ = (Index("ix_jobs_claim", "status", "available_at", "created_at"),)
+    __table_args__ = (
+        Index("ix_jobs_claim", "status", "available_at", "created_at"),
+        Index("uq_jobs_translation_id", "translation_id", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     paper_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("papers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    translation_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("paper_translations.id", ondelete="SET NULL"), nullable=True
     )
     type: Mapped[str] = mapped_column(String(64))
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.queued)
@@ -235,6 +300,10 @@ class Job(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claim_token: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

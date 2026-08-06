@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -22,7 +23,10 @@ from .models import (
     Job,
     JobStatus,
     Paper,
+    PaperPage,
     PaperStatus,
+    PaperTranslation,
+    PaperTranslationPage,
     User,
     UserRole,
     UserSession,
@@ -88,10 +92,14 @@ class JobRecord:
     id: str
     paper_id: str | None
     type: str
+    translation_id: str | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     attempts: int = 0
     max_attempts: int = 3
+    available_at: datetime = field(default_factory=now)
+    claimed_at: datetime | None = None
+    claim_token: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     created_at: datetime = field(default_factory=now)
@@ -115,6 +123,45 @@ class AgentRunRecord:
     updated_at: datetime = field(default_factory=now)
 
 
+@dataclass
+class TranslationRecord:
+    id: str
+    paper_id: str
+    owner_id: str
+    target_language: str
+    source_revision: str
+    status: str
+    total_pages: int
+    completed_pages: int = 0
+    failed_pages: int = 0
+    priority_page: int | None = None
+    cancel_requested: bool = False
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class TranslationPageRecord:
+    id: str
+    translation_id: str
+    physical_page: int
+    status: str
+    source_text_hash: str
+    translated_text: str | None = None
+    priority: int = 1000
+    attempts: int = 0
+    max_attempts: int = 3
+    available_at: datetime = field(default_factory=now)
+    claimed_at: datetime | None = None
+    claim_token: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
 class ManagedUserNotFoundError(ValueError):
     """管理员准备修改的用户不存在。"""
 
@@ -125,6 +172,22 @@ class CurrentAdminProtectionError(ValueError):
 
 class LastAdminProtectionError(ValueError):
     """变更会移除最后一名活跃管理员。"""
+
+
+class TranslationSourceUnavailableError(ValueError):
+    """论文尚无可用于翻译的已解析页面。"""
+
+
+def source_text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def source_revision(pages: list[tuple[int, str]]) -> str:
+    digest = hashlib.sha256()
+    for physical_page, text in sorted(pages):
+        digest.update(f"{physical_page}:".encode())
+        digest.update(source_text_hash(text).encode())
+    return digest.hexdigest()
 
 
 MAX_COLLECTION_DEPTH = 5
@@ -229,6 +292,27 @@ class Repository(Protocol):
     async def resolve_collection_paper_ids(
         self, collection_id: str, owner_id: str, *, ready_only: bool = False
     ) -> list[str] | None: ...
+    async def create_or_resume_translation(
+        self,
+        paper_id: str,
+        owner_id: str,
+        target_language: str,
+        priority_page: int | None,
+        *,
+        model_available: bool,
+    ) -> TranslationRecord | PaperTranslation | None: ...
+    async def get_owned_translation(
+        self, paper_id: str, translation_id: str, owner_id: str
+    ) -> TranslationRecord | PaperTranslation | None: ...
+    async def list_translation_pages(
+        self, translation_id: str, owner_id: str
+    ) -> list[TranslationPageRecord | PaperTranslationPage]: ...
+    async def get_owned_translation_page(
+        self, paper_id: str, translation_id: str, physical_page: int, owner_id: str
+    ) -> TranslationPageRecord | PaperTranslationPage | None: ...
+    async def cancel_owned_translation(
+        self, paper_id: str, translation_id: str, owner_id: str
+    ) -> TranslationRecord | PaperTranslation | None: ...
 
 
 class MemoryRepository:
@@ -241,6 +325,9 @@ class MemoryRepository:
         self.collections: dict[str, CollectionRecord] = {}
         self.paper_collections: set[tuple[str, str]] = set()
         self.jobs: dict[str, JobRecord] = {}
+        self.paper_pages: dict[str, dict[int, str]] = {}
+        self.translations: dict[str, TranslationRecord] = {}
+        self.translation_pages: dict[str, TranslationPageRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
         self.session_secret = session_secret
         self._managed_user_lock = threading.Lock()
@@ -421,6 +508,28 @@ class MemoryRepository:
             return None
         paper.status = PaperStatus.queued
         paper.updated_at = now()
+        for translation in self.translations.values():
+            if translation.paper_id == paper_id:
+                translation.status = "failed"
+                translation.error_code = "SOURCE_CHANGED"
+                translation.error_message = "论文正在重新索引，既有译文已失效"
+                translation.updated_at = now()
+                for page in self.translation_pages.values():
+                    if page.translation_id == translation.id:
+                        page.status = "failed"
+                        page.translated_text = None
+                        page.error_code = "SOURCE_CHANGED"
+                        page.error_message = "来源页面正在重新索引"
+                        page.updated_at = now()
+                for translate_job in self.jobs.values():
+                    if (
+                        translate_job.translation_id == translation.id
+                        and translate_job.status in {JobStatus.queued, JobStatus.running}
+                    ):
+                        translate_job.status = JobStatus.completed
+                        translate_job.error_code = "SOURCE_CHANGED"
+                        translate_job.error_message = "论文重新索引已终止旧翻译作业"
+                        translate_job.updated_at = now()
         job = JobRecord(id=str(uuid.uuid4()), paper_id=paper.id, type="parse_pdf")
         self.jobs[job.id] = job
         return paper
@@ -451,6 +560,11 @@ class MemoryRepository:
             return None
         paper.status = PaperStatus.deleting
         paper.updated_at = now()
+        for translation in self.translations.values():
+            if translation.paper_id == paper_id and translation.status != "completed":
+                await self.cancel_owned_translation(
+                    paper_id, translation.id, owner_id
+                )
         has_delete_job = any(
             job.paper_id == paper.id
             and job.type == "delete_paper"
@@ -632,6 +746,273 @@ class MemoryRepository:
         self.paper_collections.add(pair) if assigned else self.paper_collections.discard(pair)
         return True
 
+    async def create_or_resume_translation(
+        self,
+        paper_id: str,
+        owner_id: str,
+        target_language: str,
+        priority_page: int | None,
+        *,
+        model_available: bool,
+    ) -> TranslationRecord | None:
+        paper = await self.get_owned_paper(paper_id, owner_id)
+        if not paper:
+            return None
+        if paper.status not in {PaperStatus.ready, PaperStatus.partial}:
+            raise TranslationSourceUnavailableError("文献尚未完成页面解析")
+        page_items = sorted(self.paper_pages.get(paper_id, {}).items())
+        if not page_items:
+            raise TranslationSourceUnavailableError("文献尚未完成页面解析")
+        page_numbers = {number for number, _ in page_items}
+        if priority_page is not None and priority_page not in page_numbers:
+            raise ValueError("优先翻译页不存在")
+        revision = source_revision(page_items)
+        translation = next(
+            (
+                item
+                for item in self.translations.values()
+                if item.paper_id == paper_id and item.target_language == target_language
+            ),
+            None,
+        )
+        if translation is None:
+            translation_created = True
+            restart_requested = False
+            source_changed = False
+            translation = TranslationRecord(
+                id=str(uuid.uuid4()),
+                paper_id=paper_id,
+                owner_id=owner_id,
+                target_language=target_language,
+                source_revision=revision,
+                status="queued",
+                total_pages=len(page_items),
+                priority_page=priority_page,
+            )
+            self.translations[translation.id] = translation
+        else:
+            translation_created = False
+            source_changed = (
+                translation.error_code == "SOURCE_CHANGED"
+                or translation.source_revision != revision
+            )
+            restart_requested = source_changed or translation.cancel_requested or (
+                translation.status in {"cancelled", "failed", "partial"}
+            )
+            translation.source_revision = revision
+            translation.priority_page = priority_page
+            if restart_requested:
+                translation.cancel_requested = False
+                translation.error_code = None
+                translation.error_message = None
+                translation.updated_at = now()
+
+        existing = {
+            item.physical_page: item
+            for item in self.translation_pages.values()
+            if item.translation_id == translation.id
+        }
+        for page_number, text in page_items:
+            text_hash = source_text_hash(text)
+            page = existing.pop(page_number, None)
+            initial_status = "queued" if text.strip() else "no_text"
+            if page is None:
+                page = TranslationPageRecord(
+                    id=str(uuid.uuid4()),
+                    translation_id=translation.id,
+                    physical_page=page_number,
+                    status=initial_status,
+                    source_text_hash=text_hash,
+                )
+                self.translation_pages[page.id] = page
+            elif source_changed or page.source_text_hash != text_hash:
+                page.source_text_hash = text_hash
+                page.status = initial_status
+                page.translated_text = None
+                page.attempts = 0
+                page.error_code = None
+                page.error_message = None
+            elif restart_requested and page.status not in {"completed", "no_text"}:
+                page.status = initial_status
+                page.translated_text = None
+                page.attempts = 0
+                page.error_code = None
+                page.error_message = None
+            page.priority = 0 if page_number == priority_page else 1000 + page_number
+            page.updated_at = now()
+        for stale in existing.values():
+            self.translation_pages.pop(stale.id, None)
+
+        pages = [
+            item
+            for item in self.translation_pages.values()
+            if item.translation_id == translation.id
+        ]
+        translation.total_pages = len(pages)
+        translation.completed_pages = sum(item.status == "completed" for item in pages)
+        translation.failed_pages = sum(item.status == "failed" for item in pages)
+        queued = [item for item in pages if item.status == "queued"]
+        running = [item for item in pages if item.status == "running"]
+        translation_job = next(
+            (
+                job
+                for job in self.jobs.values()
+                if job.translation_id == translation.id
+            ),
+            None,
+        )
+        if translation_job is None:
+            translation_job_created = True
+            translation_job = JobRecord(
+                id=str(uuid.uuid4()),
+                paper_id=paper_id,
+                translation_id=translation.id,
+                type="translate_paper",
+            )
+            self.jobs[translation_job.id] = translation_job
+        elif restart_requested:
+            translation_job_created = False
+            # 内存仓库没有 Worker token，但仍复用唯一 Job 并重置执行代次。
+            translation_job.status = JobStatus.queued
+            translation_job.progress = 0
+            translation_job.attempts = 0
+            translation_job.error_code = None
+            translation_job.error_message = None
+            translation_job.available_at = now()
+            translation_job.claimed_at = None
+            translation_job.claim_token = None
+        else:
+            translation_job_created = False
+        preserve_active_schedule = (
+            not translation_created
+            and not translation_job_created
+            and not restart_requested
+            and translation.status in {"queued", "running"}
+            and translation_job.status in {JobStatus.queued, JobStatus.running}
+        )
+        if preserve_active_schedule:
+            # 自动退避或正在执行只是幂等查询，不能借 POST 绕过 attempts/available_at。
+            return translation
+        if queued and not model_available:
+            for page in queued:
+                page.status = "failed"
+                page.error_code = "MODEL_NOT_CONFIGURED"
+                page.error_message = "尚未配置可用于全文翻译的模型"
+            translation.completed_pages = sum(
+                item.status == "completed" for item in pages
+            )
+            translation.failed_pages = sum(item.status == "failed" for item in pages)
+            translation.status = (
+                "partial" if translation.completed_pages else "failed"
+            )
+            translation.error_code = "MODEL_NOT_CONFIGURED"
+            translation.error_message = "尚未配置可用于全文翻译的模型"
+            translation_job.status = JobStatus.failed
+            translation_job.error_code = "MODEL_NOT_CONFIGURED"
+            translation_job.error_message = "尚未配置可用于全文翻译的模型"
+        elif queued:
+            translation.status = "running" if running else "queued"
+            if (
+                translation_job.status != JobStatus.running
+                and (translation_job_created or restart_requested)
+            ):
+                translation_job.status = JobStatus.queued
+                translation_job.progress = 0
+                translation_job.attempts = 0
+                translation_job.error_code = None
+                translation_job.error_message = None
+        elif running:
+            translation.status = "running"
+        elif all(item.status == "no_text" for item in pages):
+            translation.status = "completed"
+            translation.error_code = "NO_TRANSLATABLE_TEXT"
+            translation.error_message = "此文献暂无可翻译的页面文本"
+            translation_job.status = JobStatus.completed
+            translation_job.progress = 100
+            translation_job.error_code = "NO_TRANSLATABLE_TEXT"
+            translation_job.error_message = "此文献暂无可翻译的页面文本"
+        elif translation.failed_pages:
+            translation.status = "partial" if translation.completed_pages else "failed"
+            translation_job.status = JobStatus.failed
+        else:
+            translation.status = "completed"
+            translation_job.status = JobStatus.completed
+            translation_job.progress = 100
+            translation_job.error_code = None
+            translation_job.error_message = None
+        translation_job.updated_at = now()
+        return translation
+
+    async def get_owned_translation(
+        self, paper_id: str, translation_id: str, owner_id: str
+    ) -> TranslationRecord | None:
+        record = self.translations.get(translation_id)
+        return (
+            record
+            if record and record.paper_id == paper_id and record.owner_id == owner_id
+            else None
+        )
+
+    async def list_translation_pages(
+        self, translation_id: str, owner_id: str
+    ) -> list[TranslationPageRecord]:
+        translation = self.translations.get(translation_id)
+        if not translation or translation.owner_id != owner_id:
+            return []
+        return sorted(
+            (
+                page
+                for page in self.translation_pages.values()
+                if page.translation_id == translation_id
+            ),
+            key=lambda page: page.physical_page,
+        )
+
+    async def get_owned_translation_page(
+        self, paper_id: str, translation_id: str, physical_page: int, owner_id: str
+    ) -> TranslationPageRecord | None:
+        translation = await self.get_owned_translation(paper_id, translation_id, owner_id)
+        if not translation:
+            return None
+        return next(
+            (
+                page
+                for page in self.translation_pages.values()
+                if page.translation_id == translation_id
+                and page.physical_page == physical_page
+            ),
+            None,
+        )
+
+    async def cancel_owned_translation(
+        self, paper_id: str, translation_id: str, owner_id: str
+    ) -> TranslationRecord | None:
+        translation = await self.get_owned_translation(paper_id, translation_id, owner_id)
+        if not translation:
+            return None
+        if translation.status != "completed":
+            translation.cancel_requested = True
+            translation.status = "cancelled"
+            translation.error_code = "TRANSLATION_CANCELLED"
+            translation.error_message = "全文翻译已取消"
+            translation.updated_at = now()
+            for page in await self.list_translation_pages(translation_id, owner_id):
+                if page.status not in {"completed", "no_text"}:
+                    page.status = "cancelled"
+                    page.error_code = "TRANSLATION_CANCELLED"
+                    page.error_message = "全文翻译已取消"
+                    page.updated_at = now()
+            for job in self.jobs.values():
+                if (
+                    job.translation_id == translation_id
+                    and job.status in {JobStatus.queued, JobStatus.running}
+                ):
+                    job.status = JobStatus.completed
+                    job.error_code = "TRANSLATION_CANCELLED"
+                    job.error_message = "用户已取消全文翻译"
+                    job.updated_at = now()
+        return translation
+
     async def list_jobs(self) -> list[JobRecord]:
         return sorted(self.jobs.values(), key=lambda item: item.created_at, reverse=True)
 
@@ -639,11 +1020,49 @@ class MemoryRepository:
         job = self.jobs.get(job_id)
         if not job or job.status != JobStatus.failed:
             return None
+        translation: TranslationRecord | None = None
+        if job.type == "translate_paper" and job.translation_id:
+            translation = self.translations.get(job.translation_id)
+            paper = self.papers.get(job.paper_id or "")
+            page_items = sorted(self.paper_pages.get(job.paper_id or "", {}).items())
+            if (
+                not translation
+                or not paper
+                or paper.status not in {PaperStatus.ready, PaperStatus.partial}
+                or translation.cancel_requested
+                or translation.error_code == "SOURCE_CHANGED"
+                or not page_items
+                or source_revision(page_items) != translation.source_revision
+            ):
+                return None
         job.status = JobStatus.queued
         job.progress = 0
         job.attempts = 0
         job.error_code = None
+        job.error_message = None
         job.updated_at = now()
+        if job.type == "translate_paper" and job.translation_id:
+            if translation:
+                translation.status = "queued"
+                translation.error_code = None
+                translation.error_message = None
+                translation.updated_at = now()
+            for page in self.translation_pages.values():
+                if page.translation_id == job.translation_id and page.status in {
+                    "failed",
+                    "cancelled",
+                }:
+                    page.status = "queued"
+                    page.attempts = 0
+                    page.error_code = None
+                    page.error_message = None
+                    page.updated_at = now()
+            if translation:
+                translation.failed_pages = sum(
+                    page.status == "failed"
+                    for page in self.translation_pages.values()
+                    if page.translation_id == job.translation_id
+                )
         return job
 
     async def create_agent_run(
@@ -957,6 +1376,50 @@ class SQLAlchemyRepository:
                 return None
             paper.status = PaperStatus.queued
             paper.updated_at = now()
+            translation_ids = list(
+                await session.scalars(
+                    select(PaperTranslation.id).where(
+                        PaperTranslation.paper_id == paper.id
+                    )
+                )
+            )
+            if translation_ids:
+                await session.execute(
+                    update(PaperTranslation)
+                    .where(PaperTranslation.id.in_(translation_ids))
+                    .values(
+                        status="failed",
+                        error_code="SOURCE_CHANGED",
+                        error_message="论文正在重新索引，既有译文已失效",
+                        updated_at=now(),
+                    )
+                )
+                await session.execute(
+                    update(PaperTranslationPage)
+                    .where(PaperTranslationPage.translation_id.in_(translation_ids))
+                    .values(
+                        status="failed",
+                        translated_text=None,
+                        error_code="SOURCE_CHANGED",
+                        error_message="来源页面正在重新索引",
+                        updated_at=now(),
+                    )
+                )
+                await session.execute(
+                    update(Job)
+                    .where(
+                        Job.translation_id.in_(translation_ids),
+                        Job.status.in_([JobStatus.queued, JobStatus.running]),
+                    )
+                    .values(
+                        status=JobStatus.completed,
+                        error_code="SOURCE_CHANGED",
+                        error_message="论文重新索引已终止旧翻译作业",
+                        claimed_at=None,
+                        claim_token=None,
+                        updated_at=now(),
+                    )
+                )
             session.add(Job(paper_id=paper.id, type="parse_pdf", status=JobStatus.queued))
             await session.commit()
             await session.refresh(paper)
@@ -965,12 +1428,62 @@ class SQLAlchemyRepository:
     async def delete_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
         async with get_session_factory()() as session:
             paper = await session.scalar(
-                select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                select(Paper)
+                .where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                .with_for_update()
             )
             if not paper:
                 return None
             paper.status = PaperStatus.deleting
             paper.updated_at = now()
+            translation_ids = list(
+                await session.scalars(
+                    select(PaperTranslation.id).where(
+                        PaperTranslation.paper_id == paper.id,
+                        PaperTranslation.status != "completed",
+                    )
+                )
+            )
+            if translation_ids:
+                await session.execute(
+                    update(PaperTranslation)
+                    .where(PaperTranslation.id.in_(translation_ids))
+                    .values(
+                        status="cancelled",
+                        cancel_requested=True,
+                        error_code="PAPER_DELETING",
+                        error_message="文献正在删除，全文翻译已取消",
+                        updated_at=now(),
+                    )
+                )
+                await session.execute(
+                    update(PaperTranslationPage)
+                    .where(
+                        PaperTranslationPage.translation_id.in_(translation_ids),
+                        PaperTranslationPage.status.not_in(["completed", "no_text"]),
+                    )
+                    .values(
+                        status="cancelled",
+                        error_code="PAPER_DELETING",
+                        error_message="文献正在删除，全文翻译已取消",
+                        updated_at=now(),
+                    )
+                )
+                await session.execute(
+                    update(Job)
+                    .where(
+                        Job.translation_id.in_(translation_ids),
+                        Job.status.in_([JobStatus.queued, JobStatus.running]),
+                    )
+                    .values(
+                        status=JobStatus.completed,
+                        error_code="PAPER_DELETING",
+                        error_message="文献删除已取消全文翻译作业",
+                        claimed_at=None,
+                        claim_token=None,
+                        updated_at=now(),
+                    )
+                )
             active_delete = await session.scalar(
                 select(Job).where(
                     Job.paper_id == paper.id,
@@ -1251,6 +1764,353 @@ class SQLAlchemyRepository:
             await session.commit()
             return True
 
+    async def create_or_resume_translation(
+        self,
+        paper_id: str,
+        owner_id: str,
+        target_language: str,
+        priority_page: int | None,
+        *,
+        model_available: bool,
+    ) -> PaperTranslation | None:
+        async with get_session_factory()() as session:
+            # 锁论文即可串行化同一篇论文的“翻译 + 作业”创建，唯一约束作为第二道门禁。
+            paper = await session.scalar(
+                select(Paper)
+                .where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                .with_for_update()
+            )
+            if not paper:
+                return None
+            if paper.status not in {PaperStatus.ready, PaperStatus.partial}:
+                raise TranslationSourceUnavailableError("文献尚未完成页面解析")
+            source_pages = list(
+                await session.scalars(
+                    select(PaperPage)
+                    .where(PaperPage.paper_id == paper_id)
+                    .order_by(PaperPage.physical_page)
+                )
+            )
+            if not source_pages:
+                raise TranslationSourceUnavailableError("文献尚未完成页面解析")
+            page_numbers = {item.physical_page for item in source_pages}
+            if priority_page is not None and priority_page not in page_numbers:
+                raise ValueError("优先翻译页不存在")
+            revision = source_revision(
+                [(item.physical_page, item.text) for item in source_pages]
+            )
+            translation = await session.scalar(
+                select(PaperTranslation)
+                .where(
+                    PaperTranslation.paper_id == paper_id,
+                    PaperTranslation.target_language == target_language,
+                )
+                .with_for_update()
+            )
+            if translation is None:
+                translation_created = True
+                restart_requested = False
+                source_changed = False
+                translation = PaperTranslation(
+                    paper_id=paper_id,
+                    owner_id=owner_id,
+                    target_language=target_language,
+                    source_revision=revision,
+                    status="queued",
+                    total_pages=len(source_pages),
+                    priority_page=priority_page,
+                )
+                session.add(translation)
+                await session.flush()
+            else:
+                translation_created = False
+                source_changed = (
+                    translation.error_code == "SOURCE_CHANGED"
+                    or translation.source_revision != revision
+                )
+                restart_requested = source_changed or translation.cancel_requested or (
+                    translation.status in {"cancelled", "failed", "partial"}
+                )
+                translation.source_revision = revision
+                translation.priority_page = priority_page
+                if restart_requested:
+                    translation.cancel_requested = False
+                    translation.error_code = None
+                    translation.error_message = None
+                    translation.updated_at = now()
+
+            # 先取得唯一 Job 锁，再修改任何页状态。重启会清除旧 token，确保旧
+            # Worker 即使仍持有旧来源文本，也无法通过最终写入门禁。
+            translation_job = await session.scalar(
+                select(Job)
+                .where(Job.translation_id == translation.id)
+                .with_for_update()
+            )
+            if translation_job is None:
+                translation_job_created = True
+                translation_job = Job(
+                    paper_id=paper_id,
+                    translation_id=translation.id,
+                    type="translate_paper",
+                    status=JobStatus.queued,
+                )
+                session.add(translation_job)
+                await session.flush()
+            elif restart_requested:
+                translation_job_created = False
+                translation_job.status = JobStatus.queued
+                translation_job.progress = 0
+                translation_job.attempts = 0
+                translation_job.error_code = None
+                translation_job.error_message = None
+                translation_job.available_at = now()
+                translation_job.claimed_at = None
+                translation_job.claim_token = None
+            else:
+                translation_job_created = False
+
+            existing_pages = {
+                item.physical_page: item
+                for item in await session.scalars(
+                    select(PaperTranslationPage).where(
+                        PaperTranslationPage.translation_id == translation.id
+                    )
+                )
+            }
+            for source_page in source_pages:
+                text_hash = source_text_hash(source_page.text)
+                page = existing_pages.pop(source_page.physical_page, None)
+                initial_status = "queued" if source_page.text.strip() else "no_text"
+                if page is None:
+                    page = PaperTranslationPage(
+                        translation_id=translation.id,
+                        physical_page=source_page.physical_page,
+                        status=initial_status,
+                        source_text_hash=text_hash,
+                    )
+                    session.add(page)
+                elif source_changed or page.source_text_hash != text_hash:
+                    page.source_text_hash = text_hash
+                    page.status = initial_status
+                    page.translated_text = None
+                    page.attempts = 0
+                    page.error_code = None
+                    page.error_message = None
+                elif restart_requested and page.status not in {"completed", "no_text"}:
+                    page.status = initial_status
+                    page.translated_text = None
+                    page.attempts = 0
+                    page.error_code = None
+                    page.error_message = None
+                page.priority = (
+                    0
+                    if source_page.physical_page == priority_page
+                    else 1000 + source_page.physical_page
+                )
+                page.updated_at = now()
+            for stale_page in existing_pages.values():
+                await session.delete(stale_page)
+            await session.flush()
+
+            pages = list(
+                await session.scalars(
+                    select(PaperTranslationPage).where(
+                        PaperTranslationPage.translation_id == translation.id
+                    )
+                )
+            )
+            translation.total_pages = len(pages)
+            translation.completed_pages = sum(
+                item.status == "completed" for item in pages
+            )
+            translation.failed_pages = sum(item.status == "failed" for item in pages)
+            queued_pages = [item for item in pages if item.status == "queued"]
+            running_pages = [item for item in pages if item.status == "running"]
+            preserve_active_schedule = (
+                not translation_created
+                and not translation_job_created
+                and not restart_requested
+                and translation.status in {"queued", "running"}
+                and translation_job.status in {JobStatus.queued, JobStatus.running}
+            )
+            if preserve_active_schedule:
+                # 幂等 POST 不得刷新退避时间、尝试次数或 fencing token。
+                await session.commit()
+                await session.refresh(translation)
+                return translation
+            if queued_pages and not model_available:
+                for page in queued_pages:
+                    page.status = "failed"
+                    page.error_code = "MODEL_NOT_CONFIGURED"
+                    page.error_message = "尚未配置可用于全文翻译的模型"
+                translation.completed_pages = sum(
+                    item.status == "completed" for item in pages
+                )
+                translation.failed_pages = sum(
+                    item.status == "failed" for item in pages
+                )
+                translation.status = (
+                    "partial" if translation.completed_pages else "failed"
+                )
+                translation.error_code = "MODEL_NOT_CONFIGURED"
+                translation.error_message = "尚未配置可用于全文翻译的模型"
+                translation_job.status = JobStatus.failed
+                translation_job.error_code = "MODEL_NOT_CONFIGURED"
+                translation_job.error_message = "尚未配置可用于全文翻译的模型"
+            elif queued_pages:
+                translation.status = "running" if running_pages else "queued"
+                if (
+                    translation_job.status != JobStatus.running
+                    and (translation_job_created or restart_requested)
+                ):
+                    translation_job.status = JobStatus.queued
+                    translation_job.progress = 0
+                    translation_job.attempts = 0
+                    translation_job.error_code = None
+                    translation_job.error_message = None
+                    translation_job.available_at = now()
+                    translation_job.claimed_at = None
+                    translation_job.claim_token = None
+            elif running_pages:
+                translation.status = "running"
+            elif all(item.status == "no_text" for item in pages):
+                translation.status = "completed"
+                translation.error_code = "NO_TRANSLATABLE_TEXT"
+                translation.error_message = "此文献暂无可翻译的页面文本"
+                translation_job.status = JobStatus.completed
+                translation_job.progress = 100
+                translation_job.error_code = "NO_TRANSLATABLE_TEXT"
+                translation_job.error_message = "此文献暂无可翻译的页面文本"
+            elif translation.failed_pages:
+                translation.status = (
+                    "partial" if translation.completed_pages else "failed"
+                )
+                translation_job.status = JobStatus.failed
+            else:
+                translation.status = "completed"
+                translation_job.status = JobStatus.completed
+                translation_job.progress = 100
+                translation_job.error_code = None
+                translation_job.error_message = None
+            translation_job.updated_at = now()
+            translation.updated_at = now()
+            await session.commit()
+            await session.refresh(translation)
+            return translation
+
+    async def get_owned_translation(
+        self, paper_id: str, translation_id: str, owner_id: str
+    ) -> PaperTranslation | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(PaperTranslation)
+                .join(Paper, Paper.id == PaperTranslation.paper_id)
+                .where(
+                    PaperTranslation.id == translation_id,
+                    PaperTranslation.paper_id == paper_id,
+                    Paper.owner_id == owner_id,
+                )
+            )
+
+    async def list_translation_pages(
+        self, translation_id: str, owner_id: str
+    ) -> list[PaperTranslationPage]:
+        async with get_session_factory()() as session:
+            return list(
+                await session.scalars(
+                    select(PaperTranslationPage)
+                    .join(
+                        PaperTranslation,
+                        PaperTranslation.id == PaperTranslationPage.translation_id,
+                    )
+                    .join(Paper, Paper.id == PaperTranslation.paper_id)
+                    .where(
+                        PaperTranslationPage.translation_id == translation_id,
+                        Paper.owner_id == owner_id,
+                    )
+                    .order_by(PaperTranslationPage.physical_page)
+                )
+            )
+
+    async def get_owned_translation_page(
+        self, paper_id: str, translation_id: str, physical_page: int, owner_id: str
+    ) -> PaperTranslationPage | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(PaperTranslationPage)
+                .join(
+                    PaperTranslation,
+                    PaperTranslation.id == PaperTranslationPage.translation_id,
+                )
+                .join(Paper, Paper.id == PaperTranslation.paper_id)
+                .where(
+                    PaperTranslation.id == translation_id,
+                    PaperTranslation.paper_id == paper_id,
+                    Paper.owner_id == owner_id,
+                    PaperTranslationPage.physical_page == physical_page,
+                )
+            )
+
+    async def cancel_owned_translation(
+        self, paper_id: str, translation_id: str, owner_id: str
+    ) -> PaperTranslation | None:
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper)
+                .where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                .with_for_update()
+            )
+            if not paper:
+                return None
+            translation = await session.scalar(
+                select(PaperTranslation)
+                .where(
+                    PaperTranslation.id == translation_id,
+                    PaperTranslation.paper_id == paper_id,
+                )
+                .with_for_update()
+            )
+            if not translation:
+                return None
+            translation_job = await session.scalar(
+                select(Job)
+                .where(Job.translation_id == translation_id)
+                .with_for_update()
+            )
+            # 重复取消不会清空已成功页，也不会改变已完成翻译。
+            if translation.status != "completed":
+                translation.cancel_requested = True
+                translation.status = "cancelled"
+                translation.error_code = "TRANSLATION_CANCELLED"
+                translation.error_message = "全文翻译已取消"
+                translation.updated_at = now()
+                await session.execute(
+                    update(PaperTranslationPage)
+                    .where(
+                        PaperTranslationPage.translation_id == translation_id,
+                        PaperTranslationPage.status.not_in(["completed", "no_text"]),
+                    )
+                    .values(
+                        status="cancelled",
+                        error_code="TRANSLATION_CANCELLED",
+                        error_message="全文翻译已取消",
+                        updated_at=now(),
+                    )
+                )
+                if translation_job and translation_job.status in {
+                    JobStatus.queued,
+                    JobStatus.running,
+                }:
+                    translation_job.status = JobStatus.completed
+                    translation_job.error_code = "TRANSLATION_CANCELLED"
+                    translation_job.error_message = "用户已取消全文翻译"
+                    translation_job.claim_token = None
+                    translation_job.claimed_at = None
+                    translation_job.updated_at = now()
+            await session.commit()
+            await session.refresh(translation)
+            return translation
+
     async def list_jobs(self) -> list[Job]:
         async with get_session_factory()() as session:
             result = await session.scalars(select(Job).order_by(Job.created_at.desc()).limit(200))
@@ -1258,18 +2118,103 @@ class SQLAlchemyRepository:
 
     async def retry_job(self, job_id: str) -> Job | None:
         async with get_session_factory()() as session:
-            job = await session.scalar(
-                select(Job).where(Job.id == job_id, Job.status == JobStatus.failed)
-            )
-            if not job:
+            snapshot = await session.get(Job, job_id)
+            if not snapshot or snapshot.status != JobStatus.failed:
                 return None
+            translation: PaperTranslation | None = None
+            if snapshot.type == "translate_paper" and snapshot.translation_id:
+                translation_snapshot = await session.get(
+                    PaperTranslation, snapshot.translation_id
+                )
+                if not translation_snapshot:
+                    return None
+                paper = await session.scalar(
+                    select(Paper)
+                    .where(Paper.id == translation_snapshot.paper_id)
+                    .with_for_update()
+                )
+                translation = await session.scalar(
+                    select(PaperTranslation)
+                    .where(PaperTranslation.id == translation_snapshot.id)
+                    .with_for_update()
+                )
+                job = await session.scalar(
+                    select(Job)
+                    .where(
+                        Job.id == job_id,
+                        Job.translation_id == translation_snapshot.id,
+                        Job.status == JobStatus.failed,
+                    )
+                    .with_for_update()
+                )
+                if not paper or not translation or not job:
+                    return None
+                pages = list(
+                    await session.scalars(
+                        select(PaperPage)
+                        .where(PaperPage.paper_id == paper.id)
+                        .order_by(PaperPage.physical_page)
+                    )
+                )
+                current_revision = source_revision(
+                    [(page.physical_page, page.text) for page in pages]
+                ) if pages else None
+                if (
+                    paper.status not in {PaperStatus.ready, PaperStatus.partial}
+                    or translation.cancel_requested
+                    or translation.error_code == "SOURCE_CHANGED"
+                    or current_revision != translation.source_revision
+                ):
+                    return None
+            else:
+                job = await session.scalar(
+                    select(Job)
+                    .where(Job.id == job_id, Job.status == JobStatus.failed)
+                    .with_for_update()
+                )
+                if not job:
+                    return None
             job.status = JobStatus.queued
             job.progress = 0
             job.attempts = 0
             job.error_code = None
             job.error_message = None
             job.available_at = now()
+            job.claimed_at = None
+            job.claim_token = None
             job.updated_at = now()
+            if job.type == "translate_paper" and job.translation_id:
+                if translation:
+                    translation.status = "queued"
+                    translation.error_code = None
+                    translation.error_message = None
+                    translation.updated_at = now()
+                await session.execute(
+                    update(PaperTranslationPage)
+                    .where(
+                        PaperTranslationPage.translation_id == job.translation_id,
+                        PaperTranslationPage.status == "failed",
+                    )
+                    .values(
+                        status="queued",
+                        attempts=0,
+                        error_code=None,
+                        error_message=None,
+                        updated_at=now(),
+                    )
+                )
+                if translation:
+                    translation.failed_pages = int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(PaperTranslationPage)
+                            .where(
+                                PaperTranslationPage.translation_id == job.translation_id,
+                                PaperTranslationPage.status == "failed",
+                            )
+                        )
+                        or 0
+                    )
             await session.commit()
             await session.refresh(job)
             return job

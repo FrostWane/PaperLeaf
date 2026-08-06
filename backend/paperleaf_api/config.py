@@ -9,6 +9,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS = 120.0
+
 
 def _bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -118,6 +120,10 @@ class Settings:
             raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
         if self.model_timeout_seconds <= 0:
             raise RuntimeError("模型超时必须大于 0")
+        if self.model_timeout_seconds > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS:
+            raise RuntimeError(
+                "模型单次超时不能超过 120 秒，以确保明显短于 Worker 租约"
+            )
         if not 1 <= self.model_attempts_per_provider <= 3:
             raise RuntimeError("单端点模型尝试次数必须位于 1 到 3 之间")
         if self.model_circuit_failure_threshold < 1:

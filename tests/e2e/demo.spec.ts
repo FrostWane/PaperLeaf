@@ -16,7 +16,7 @@ test("公开演示可以提问并通过引用跳到论文页", async ({ page }) 
   await citation.click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
   const reader = mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader");
-  await expect(reader.getByText("06 / 15")).toBeVisible();
+  await expect(reader.getByText("6 / 15")).toBeVisible();
 });
 
 test("跨文献提问展示证据质量并跳到引用物理页", async ({ page }) => {
@@ -34,7 +34,7 @@ test("跨文献提问展示证据质量并跳到引用物理页", async ({ page 
   await expect(page).toHaveURL(/\/library\/attention\?page=2/);
   const mobile = page.viewportSize()!.width < 760;
   const reader = mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader");
-  await expect(reader.getByText("02 / 15")).toBeVisible();
+  await expect(reader.getByText("2 / 15")).toBeVisible();
 });
 
 test("首页没有严重无障碍问题", async ({ page }) => {
@@ -111,4 +111,66 @@ test("文献设置可以编辑元数据且删除需要二次确认", async ({ pa
   await expect(info.getByText(/演示模式已模拟删除/)).toBeVisible();
   await info.getByRole("button", { name: "编辑文献信息" }).click();
   await expect(page.getByRole("dialog", { name: "文献设置" })).toBeVisible();
+});
+
+test("PDF 工具栏支持缩放、专注阅读和可恢复的逐页双栏翻译", async ({ page }) => {
+  await page.goto("/demo");
+  await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
+  const mobile = page.viewportSize()!.width < 760;
+  const desktop = page.locator(".workspace-desktop");
+  const reader = mobile
+    ? page.locator(".workspace-mobile .workspace-reader.mobile-active")
+    : desktop.locator(".workspace-reader");
+  await expect(reader.getByRole("toolbar", { name: "PDF 阅读工具栏" })).toBeVisible();
+
+  const zoomOut = reader.getByRole("button", { name: "缩小 PDF" });
+  for (let index = 0; index < 5; index += 1) await zoomOut.click();
+  await expect(reader.getByText("50%", { exact: true })).toBeVisible();
+  await expect(zoomOut).toBeDisabled();
+  await reader.getByRole("button", { name: "适合宽度" }).click();
+  await expect(reader.getByRole("button", { name: "适合宽度" })).toHaveAttribute("aria-pressed", "true");
+
+  if (!mobile) {
+    await reader.getByText("阅读布局", { exact: true }).click();
+    await reader.getByRole("button", { name: "专注阅读" }).click();
+    await expect(desktop.locator(".workspace-info")).toHaveCount(0);
+    await expect(desktop.locator(".workspace-assistant")).toHaveCount(0);
+    await expect(reader.getByText("2 / 15")).toBeVisible();
+    await reader.getByRole("button", { name: "退出专注阅读" }).click();
+    await expect(desktop.locator(".workspace-info")).toBeVisible();
+    await expect(desktop.locator(".workspace-assistant")).toBeVisible();
+  }
+
+  await reader.getByRole("button", { name: "翻译全文" }).click();
+  const dialog = page.getByRole("dialog", { name: "翻译整篇论文" });
+  await expect(dialog).toContainText("15 页原文");
+  for (const button of await dialog.getByRole("button").all()) {
+    expect((await button.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+  await dialog.getByRole("button", { name: "确认并开始翻译" }).click();
+  const translatedPage = reader.getByLabel("简体中文译文，第 2 页");
+  await expect(translatedPage).toBeVisible();
+  await expect(reader.getByText(/本文提出 Transformer/)).toBeVisible();
+  const readerWidth = await reader.evaluate((element) => element.getBoundingClientRect().width);
+  if (readerWidth <= 720) await expect(reader.locator(".translation-original")).toBeHidden();
+  const geometry = await translatedPage.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const host = element.closest(".workspace-reader")!.getBoundingClientRect();
+    return { left: box.left, right: box.right, hostLeft: host.left, hostRight: host.right };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(geometry.hostLeft - 1);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.hostRight + 1);
+  const translatedAxe = await new AxeBuilder({ page }).include(".workspace-reader").withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(translatedAxe.violations.filter((item) => item.impact === "serious" || item.impact === "critical")).toEqual([]);
+  await reader.getByRole("button", { name: "下一页" }).click();
+  await expect(reader.getByLabel("简体中文译文，第 3 页")).toBeVisible();
+  await expect(reader.getByText("第 3 页译文已缓存。公式、引用编号与专有名词会尽量保持原样。")).toBeVisible();
+
+  const globalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(globalOverflow).toBeLessThanOrEqual(1);
+  if (mobile) {
+    const toolbar = reader.locator(".reader-toolbar");
+    const box = await toolbar.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+    expect(box.scroll).toBeGreaterThan(box.client);
+  }
 });

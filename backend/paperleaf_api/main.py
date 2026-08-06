@@ -52,6 +52,7 @@ from .repository import (
     MemoryRepository,
     PaperRecord,
     SQLAlchemyRepository,
+    TranslationSourceUnavailableError,
     UserRecord,
 )
 from .schemas import (
@@ -70,10 +71,13 @@ from .schemas import (
     PaperBulkActionRequest,
     PaperBulkActionResponse,
     PaperRead,
+    PaperTranslationRead,
     PaperUpdate,
     SSEEvent,
     StructureGraphResponse,
     SummaryResponse,
+    TranslationCreate,
+    TranslationPageRead,
     UserCreate,
     UserPreferences,
     UserPreferencesRead,
@@ -685,6 +689,9 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
         return paper
 
+    def translation_read(translation: Any) -> PaperTranslationRead:
+        return PaperTranslationRead.model_validate(translation)
+
     @app.get("/api/v1/papers/{paper_id}", response_model=PaperRead)
     async def get_paper(
         paper_id: str, user: Annotated[UserRecord, Depends(current_user)]
@@ -701,6 +708,87 @@ def create_app(
         if not paper:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
         return _paper_read(paper)
+
+    @app.post(
+        "/api/v1/papers/{paper_id}/translations",
+        response_model=PaperTranslationRead,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def create_paper_translation(
+        paper_id: str,
+        payload: TranslationCreate,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> PaperTranslationRead:
+        try:
+            translation = await services.repository.create_or_resume_translation(
+                paper_id,
+                user.id,
+                payload.target_language,
+                payload.priority_page,
+                model_available=services.model_router.has_provider("translation"),
+            )
+        except TranslationSourceUnavailableError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        if not translation:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+        return translation_read(translation)
+
+    @app.get(
+        "/api/v1/papers/{paper_id}/translations/{translation_id}",
+        response_model=PaperTranslationRead,
+    )
+    async def get_paper_translation(
+        paper_id: str,
+        translation_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+        response: Response,
+    ) -> PaperTranslationRead:
+        translation = await services.repository.get_owned_translation(
+            paper_id, translation_id, user.id
+        )
+        if not translation:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "全文翻译不存在")
+        response.headers["Cache-Control"] = "private, no-store"
+        return translation_read(translation)
+
+    @app.get(
+        "/api/v1/papers/{paper_id}/translations/{translation_id}/pages/{physical_page}",
+        response_model=TranslationPageRead,
+    )
+    async def get_paper_translation_page(
+        paper_id: str,
+        translation_id: str,
+        physical_page: int,
+        user: Annotated[UserRecord, Depends(current_user)],
+        response: Response,
+    ) -> TranslationPageRead:
+        page = await services.repository.get_owned_translation_page(
+            paper_id, translation_id, physical_page, user.id
+        )
+        if not page:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "页译文不存在")
+        response.headers["Cache-Control"] = "private, no-store"
+        return TranslationPageRead.model_validate(page)
+
+    @app.post(
+        "/api/v1/papers/{paper_id}/translations/{translation_id}/cancel",
+        response_model=PaperTranslationRead,
+    )
+    async def cancel_paper_translation(
+        paper_id: str,
+        translation_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> PaperTranslationRead:
+        translation = await services.repository.cancel_owned_translation(
+            paper_id, translation_id, user.id
+        )
+        if not translation:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "全文翻译不存在")
+        return translation_read(translation)
 
     @app.patch("/api/v1/papers/{paper_id}", response_model=PaperRead)
     async def update_paper(
@@ -735,14 +823,19 @@ def create_app(
     ) -> Response:
         paper = await owned_paper(paper_id, user)
         total = await services.storage.size(paper.storage_key)
-        headers = {"Accept-Ranges": "bytes", "Content-Disposition": "inline"}
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
         try:
             byte_range = parse_byte_range(range_header, total)
         except ValueError as exc:
             raise HTTPException(
                 status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
                 str(exc),
-                headers={"Content-Range": f"bytes */{total}"},
+                headers={**headers, "Content-Range": f"bytes */{total}"},
             ) from exc
         if byte_range:
             body = await services.storage.read(paper.storage_key, byte_range.start, byte_range.end)

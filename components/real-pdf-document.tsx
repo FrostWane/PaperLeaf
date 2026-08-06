@@ -24,7 +24,15 @@ function describePdfError(error: unknown): string {
   return DEFAULT_PDF_ERROR;
 }
 
-export function RealPdfDocument({ url, page, onPageCount }: { url: string; page: number; onPageCount: (count: number) => void }) {
+interface RealPdfDocumentProps {
+  url: string;
+  page: number;
+  fitWidth: boolean;
+  scalePercent: number;
+  onPageCount: (count: number) => void;
+}
+
+export function RealPdfDocument({ url, page, fitWidth, scalePercent, onPageCount }: RealPdfDocumentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(620);
   const [loadError, setLoadError] = useState<{ url: string; message: string } | null>(null);
@@ -57,7 +65,8 @@ export function RealPdfDocument({ url, page, onPageCount }: { url: string; page:
       >
         <Page
           pageNumber={page}
-          width={width}
+          width={fitWidth ? width : undefined}
+          scale={fitWidth ? undefined : scalePercent / 100}
           renderAnnotationLayer
           renderTextLayer
         />

@@ -1,7 +1,7 @@
 import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
-import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvidenceQuality, ArxivResult, BulkPaperActionInput, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperUpdateInput, SessionUser, UserRecord } from "./types";
+import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvidenceQuality, ArxivResult, BulkPaperActionInput, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -60,6 +60,38 @@ function mapCollection(item: Record<string, unknown>, nestedParentId: string | n
     paperIds,
     recursivePaperCount: Number(item.recursive_paper_count ?? item.paper_count ?? paperIds.length),
     children,
+  };
+}
+
+function mapPaperTranslation(item: Record<string, unknown>, paperId: string): PaperTranslation {
+  const status = String(item.status ?? "queued");
+  const mappedStatus: PaperTranslation["status"] = status === "running" || status === "partial" || status === "completed" || status === "failed" || status === "cancelled" ? status : "queued";
+  const totalPages = Number(item.total_pages ?? item.page_count ?? 0);
+  const completedPages = Number(item.completed_pages ?? 0);
+  const pageRatio = totalPages > 0 ? Math.round(completedPages / totalPages * 100) : 0;
+  const progress = mappedStatus === "completed" || mappedStatus === "partial" || mappedStatus === "failed"
+    ? 100
+    : Number(item.progress ?? pageRatio);
+  return {
+    id: String(item.id ?? item.translation_id ?? ""),
+    paperId: String(item.paper_id ?? paperId),
+    targetLanguage: String(item.target_language ?? "zh-CN"),
+    status: mappedStatus,
+    progress,
+    completedPages,
+    failedPages: Number(item.failed_pages ?? 0),
+    totalPages,
+    error: item.error_message ? String(item.error_message) : item.error ? String(item.error) : undefined,
+  };
+}
+
+function mapPaperTranslationPage(item: Record<string, unknown>, page: number): PaperTranslationPage {
+  const status = String(item.status ?? "queued");
+  return {
+    page: Number(item.page ?? item.physical_page ?? page),
+    status: status === "running" || status === "completed" || status === "no_text" || status === "failed" || status === "cancelled" ? status : "queued",
+    text: String(item.text ?? item.translated_text ?? ""),
+    error: item.error_message ? String(item.error_message) : item.error ? String(item.error) : undefined,
   };
 }
 
@@ -290,6 +322,10 @@ export interface PaperLeafDataSource {
   retryPaper(paperId: string): Promise<Paper>;
   summarizePaper(paperId: string): Promise<PaperSummary>;
   buildStructureGraph(paperId: string): Promise<PaperStructureGraph>;
+  createPaperTranslation(paperId: string, targetLanguage: string, priorityPage: number): Promise<PaperTranslation>;
+  getPaperTranslation(paperId: string, translationId: string): Promise<PaperTranslation>;
+  getPaperTranslationPage(paperId: string, translationId: string, page: number): Promise<PaperTranslationPage>;
+  cancelPaperTranslation(paperId: string, translationId: string): Promise<PaperTranslation>;
   listCollections(): Promise<PaperCollection[]>;
   createCollection(input: CollectionInput): Promise<PaperCollection>;
   updateCollection(collectionId: string, input: CollectionInput): Promise<PaperCollection>;
@@ -302,6 +338,7 @@ export interface PaperLeafDataSource {
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let demoPapers = papers.map((paper) => ({ ...paper }));
+const demoTranslations = new Map<string, PaperTranslation>();
 let demoCollections: PaperCollection[] = [
   { id: "core-methods", name: "核心方法", description: "反复查阅的基础方法论文", parentId: null, paperIds: ["attention"], recursivePaperCount: 3, children: [
     { id: "transformers", name: "Transformer", description: "架构与预训练", parentId: "core-methods", paperIds: ["bert"], recursivePaperCount: 1, children: [] },
@@ -376,6 +413,43 @@ export const demoDataSource: PaperLeafDataSource = {
   },
   async summarizePaper(paperId) { await wait(420); return { ...paperSummary, paperId }; },
   async buildStructureGraph(paperId) { await wait(520); return { ...paperStructureGraph, paperId }; },
+  async createPaperTranslation(paperId, targetLanguage, priorityPage) {
+    await wait(180);
+    void priorityPage;
+    const current = [...demoTranslations.values()].find((item) => item.paperId === paperId && item.targetLanguage === targetLanguage && item.status !== "cancelled");
+    if (current) return { ...current };
+    const paper = demoPapers.find((item) => item.id === paperId) ?? demoPapers[0];
+    const translation: PaperTranslation = { id: demoId("translation"), paperId, targetLanguage, status: "running", progress: 36, completedPages: Math.min(5, paper.pages), failedPages: 0, totalPages: paper.pages };
+    demoTranslations.set(translation.id, translation);
+    return { ...translation };
+  },
+  async getPaperTranslation(paperId, translationId) {
+    await wait(80);
+    const translation = demoTranslations.get(translationId);
+    if (!translation || translation.paperId !== paperId) throw new Error("翻译任务不存在或已失效");
+    return { ...translation };
+  },
+  async getPaperTranslationPage(paperId, translationId, page) {
+    await wait(90);
+    const translation = demoTranslations.get(translationId);
+    if (!translation || translation.paperId !== paperId) throw new Error("翻译任务不存在或已失效");
+    if (page === 7) return { page, status: "no_text", text: "" };
+    return {
+      page,
+      status: "completed",
+      text: page === 2
+        ? "本文提出 Transformer：一种完全基于注意力机制的网络架构，不再依赖循环与卷积。\n\n自注意力能够以固定数量的顺序操作连接所有位置，从而提高训练阶段的并行能力。\n\nAttention(Q, K, V) = softmax(QKᵀ / √dₖ)V"
+        : `第 ${page} 页译文已缓存。公式、引用编号与专有名词会尽量保持原样。`,
+    };
+  },
+  async cancelPaperTranslation(paperId, translationId) {
+    await wait(100);
+    const current = demoTranslations.get(translationId);
+    if (!current || current.paperId !== paperId) throw new Error("翻译任务不存在或已失效");
+    const cancelled: PaperTranslation = { ...current, status: "cancelled" };
+    demoTranslations.set(translationId, cancelled);
+    return { ...cancelled };
+  },
   async listCollections() { await wait(100); return collectionForest(demoCollections); },
   async createCollection(input) {
     await wait(180);
@@ -538,6 +612,26 @@ export const realDataSource: PaperLeafDataSource = {
     const r = await fetch(`${API_BASE_URL}/collections`, { credentials: "include" });
     if (!r.ok) throw new Error("集合读取失败");
     return collectionForest((await r.json() as Array<Record<string, unknown>>).map((item) => mapCollection(item)));
+  },
+  async createPaperTranslation(paperId, targetLanguage, priorityPage) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/translations`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ target_language: targetLanguage, priority_page: priorityPage }) });
+    if (!r.ok) throw await apiError(r, "全文翻译任务创建失败");
+    return mapPaperTranslation(await r.json() as Record<string, unknown>, paperId);
+  },
+  async getPaperTranslation(paperId, translationId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/translations/${encodeURIComponent(translationId)}`, { credentials: "include" });
+    if (!r.ok) throw await apiError(r, "翻译进度读取失败");
+    return mapPaperTranslation(await r.json() as Record<string, unknown>, paperId);
+  },
+  async getPaperTranslationPage(paperId, translationId, page) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/translations/${encodeURIComponent(translationId)}/pages/${page}`, { credentials: "include" });
+    if (!r.ok) throw await apiError(r, r.status === 404 ? "当前页译文仍在处理中" : "当前页译文读取失败");
+    return mapPaperTranslationPage(await r.json() as Record<string, unknown>, page);
+  },
+  async cancelPaperTranslation(paperId, translationId) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/translations/${encodeURIComponent(translationId)}/cancel`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw await apiError(r, "翻译任务取消失败");
+    return mapPaperTranslation(await r.json() as Record<string, unknown>, paperId);
   },
   async createCollection(input) {
     const r = await fetch(`${API_BASE_URL}/collections`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ name: input.name, description: input.description, parent_id: input.parentId ?? null }) });

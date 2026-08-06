@@ -14,7 +14,7 @@ const demoHealth: ModelRuntimeHealth = {
   configured: true,
   providers: [{
     provider: "primary",
-    purposes: Object.fromEntries(["answer", "evidence_support", "summary", "embedding"].map((purpose) => [purpose, { configured: true, status: "closed", consecutiveFailures: 0, retryAfterMs: 0 }])),
+    purposes: Object.fromEntries(["answer", "evidence_support", "summary", "translation", "embedding"].map((purpose) => [purpose, { configured: true, status: "closed", consecutiveFailures: 0, retryAfterMs: 0 }])),
   }],
   policy: { timeoutSeconds: 30, attemptsPerProvider: 2, failureThreshold: 3, cooldownSeconds: 60 },
 };
@@ -23,10 +23,11 @@ const purposeCopy: Record<string, { label: string; description: string }> = {
   answer: { label: "回答生成", description: "根据检索到的论文证据组织回答" },
   evidence_support: { label: "证据核验", description: "检查回答中的结论是否有原文支持" },
   summary: { label: "论文总结", description: "提炼研究问题、方法、结果与局限" },
+  translation: { label: "全文翻译", description: "按物理页翻译已解析的论文文本" },
   embedding: { label: "向量检索", description: "按语义查找与问题相关的论文段落" },
   vision: { label: "视觉 OCR", description: "识别扫描版 PDF 页面中的文字" },
 };
-const visiblePurposeNames = ["answer", "evidence_support", "summary", "embedding", "vision"] as const;
+const visiblePurposeNames = ["answer", "evidence_support", "summary", "translation", "embedding", "vision"] as const;
 
 const jobTypeLabels: Record<string, string> = {
   parse_pdf: "解析 PDF",

@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .models import JobStatus, PaperStatus, UserRole
 
+TranslationLanguage = Literal["zh-CN", "zh-TW", "en", "ja", "ko"]
+
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
@@ -36,7 +38,7 @@ class UserPreferences(BaseModel):
     pdf_zoom: int = Field(default=100, ge=50, le=200)
     left_panel_open: bool = True
     assistant_panel_open: bool = True
-    translation_language: str = Field(default="zh-CN", min_length=2, max_length=32)
+    translation_language: TranslationLanguage = "zh-CN"
     arxiv_search_enabled: bool = False
 
 
@@ -48,7 +50,7 @@ class UserPreferencesUpdate(BaseModel):
     pdf_zoom: Optional[int] = Field(default=None, ge=50, le=200)
     left_panel_open: Optional[bool] = None
     assistant_panel_open: Optional[bool] = None
-    translation_language: Optional[str] = Field(default=None, min_length=2, max_length=32)
+    translation_language: Optional[TranslationLanguage] = None
     arxiv_search_enabled: Optional[bool] = None
 
 
@@ -221,11 +223,67 @@ class JobRead(BaseModel):
 
     id: str
     paper_id: Optional[str]
+    translation_id: Optional[str] = None
     type: str
     status: JobStatus
     progress: int
     attempts: int
     max_attempts: int
+    error_code: Optional[str]
+    error_message: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class TranslationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_language: TranslationLanguage = "zh-CN"
+    priority_page: Optional[int] = Field(default=None, ge=1)
+
+
+class TranslationPageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    translation_id: str
+    physical_page: int
+    status: Literal[
+        "queued",
+        "running",
+        "completed",
+        "no_text",
+        "failed",
+        "cancelled",
+    ]
+    translated_text: Optional[str]
+    attempts: int
+    max_attempts: int
+    error_code: Optional[str]
+    error_message: Optional[str]
+    updated_at: datetime
+
+
+class PaperTranslationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    paper_id: str
+    target_language: TranslationLanguage
+    source_revision: str
+    status: Literal[
+        "queued",
+        "running",
+        "completed",
+        "partial",
+        "failed",
+        "cancelled",
+    ]
+    total_pages: int
+    completed_pages: int
+    failed_pages: int
+    priority_page: Optional[int]
+    cancel_requested: bool
     error_code: Optional[str]
     error_message: Optional[str]
     created_at: datetime

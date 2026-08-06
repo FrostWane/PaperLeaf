@@ -20,6 +20,7 @@ ModelPurpose = Literal[
     "query_rewrite",
     "evidence_support",
     "summary",
+    "translation",
     "embedding",
     "vision",
 ]
@@ -323,6 +324,7 @@ class ModelRouter(Generic[T]):
             "query_rewrite",
             "evidence_support",
             "summary",
+            "translation",
             "embedding",
             "vision",
         )

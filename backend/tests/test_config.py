@@ -49,6 +49,7 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
     ("changes", "message"),
     [
         ({"model_timeout_seconds": 0}, "模型超时"),
+        ({"model_timeout_seconds": 121}, "不能超过 120 秒"),
         ({"model_attempts_per_provider": 4}, "尝试次数"),
         ({"model_circuit_failure_threshold": 0}, "失败阈值"),
         ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),

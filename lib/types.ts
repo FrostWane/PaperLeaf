@@ -115,6 +115,28 @@ export interface AgentActivity {
   durationMs?: number;
 }
 
+export type PaperTranslationStatus = "queued" | "running" | "partial" | "completed" | "failed" | "cancelled";
+export type PaperTranslationPageStatus = "queued" | "running" | "completed" | "no_text" | "failed" | "cancelled";
+
+export interface PaperTranslationPage {
+  page: number;
+  status: PaperTranslationPageStatus;
+  text: string;
+  error?: string;
+}
+
+export interface PaperTranslation {
+  id: string;
+  paperId: string;
+  targetLanguage: string;
+  status: PaperTranslationStatus;
+  progress: number;
+  completedPages: number;
+  failedPages: number;
+  totalPages: number;
+  error?: string;
+}
+
 export interface AgentAskStreamHandlers {
   onActivity?: (activity: AgentActivity) => void;
   /** 每个 message_delta 到达后，返回累计且已隐藏内部 Chunk 标记的可见回答。 */

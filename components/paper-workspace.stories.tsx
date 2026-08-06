@@ -5,3 +5,4 @@ const meta = { title: "PaperLeaf/论文工作台", component: PaperWorkspace, pa
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const 默认回答: Story = { args: { paperId: "attention", demo: true } };
+export const 无文本页翻译入口: Story = { args: { paperId: "attention", demo: true, initialPage: 7 } };

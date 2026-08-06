@@ -140,6 +140,24 @@ describe("真实 API 契约", () => {
     expect(requests[1].body).toEqual({ name: "实验复现", parent_id: null });
   });
 
+  it("全文翻译创建传递当前页优先级并映射任务与逐页状态", async () => {
+    document.cookie = "paperleaf_csrf=translation-token; path=/";
+    let createPayload: unknown;
+    server.use(
+      http.post(`${API_BASE_URL}/papers/p1/translations`, async ({ request }) => {
+        createPayload = await request.json();
+        expect(request.headers.get("X-CSRF-Token")).toBe("translation-token");
+        return HttpResponse.json({ id: "t1", paper_id: "p1", target_language: "zh-CN", status: "partial", completed_pages: 5, failed_pages: 2, total_pages: 12 }, { status: 202 });
+      }),
+      http.get(`${API_BASE_URL}/papers/p1/translations/t2`, () => HttpResponse.json({ id: "t2", paper_id: "p1", target_language: "zh-CN", status: "completed", completed_pages: 0, total_pages: 12 })),
+      http.get(`${API_BASE_URL}/papers/p1/translations/t1/pages/7`, () => HttpResponse.json({ page: 7, status: "no_text", translated_text: "" })),
+    );
+    await expect(realDataSource.createPaperTranslation("p1", "zh-CN", 7)).resolves.toMatchObject({ id: "t1", status: "partial", progress: 100, completedPages: 5, failedPages: 2, totalPages: 12 });
+    expect(createPayload).toEqual({ target_language: "zh-CN", priority_page: 7 });
+    await expect(realDataSource.getPaperTranslation("p1", "t2")).resolves.toMatchObject({ status: "completed", progress: 100, completedPages: 0, totalPages: 12 });
+    await expect(realDataSource.getPaperTranslationPage("p1", "t1", 7)).resolves.toEqual({ page: 7, status: "no_text", text: "", error: undefined });
+  });
+
   it("文献列表支持服务端集合递归范围并映射出版物", async () => {
     let requested = "";
     server.use(http.get(`${API_BASE_URL}/papers`, ({ request }) => {

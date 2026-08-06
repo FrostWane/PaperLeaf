@@ -13,6 +13,7 @@ const modelHealth = {
       answer: { configured: true, status: "closed", consecutive_failures: 0, retry_after_ms: 0 },
       evidence_support: { configured: true, status: "closed", consecutive_failures: 0, retry_after_ms: 0 },
       summary: { configured: true, status: "closed", consecutive_failures: 0, retry_after_ms: 0 },
+      translation: { configured: true, status: "closed", consecutive_failures: 0, retry_after_ms: 0 },
       embedding: { configured: true, status: "closed", consecutive_failures: 0, retry_after_ms: 0 },
       vision: { configured: false, status: "open", consecutive_failures: 3, retry_after_ms: 5000 },
       query_rewrite: { configured: true, status: "closed", consecutive_failures: 0, retry_after_ms: 0 },
@@ -51,6 +52,7 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getByRole("button", { name: "启用用户 reader" })).toHaveTextContent("启用用户");
     expect(screen.getByRole("heading", { name: "AI 能力状态" })).toBeInTheDocument();
     expect(screen.getByText("回答生成")).toHaveAttribute("title", "根据检索到的论文证据组织回答");
+    expect(screen.getByText("全文翻译")).toHaveAttribute("title", "按物理页翻译已解析的论文文本");
     expect(screen.getByText("视觉 OCR")).toHaveTextContent("视觉 OCR");
     expect(screen.getByText(/暂不可用 · 尚未配置.*识别扫描版/)).toBeInTheDocument();
     expect(screen.queryByText("其他 AI 能力")).not.toBeInTheDocument();
