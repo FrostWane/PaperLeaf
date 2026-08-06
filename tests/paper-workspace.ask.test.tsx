@@ -37,7 +37,7 @@ describe("PaperWorkspace 统一持久化问答", () => {
     fireEvent.change(input, { target: { value: "当前论文的核心结论是什么？" } });
     fireEvent.click(assistant.getByRole("button", { name: "发送问题" }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    expect(await assistant.findByText("当前论文的核心结论是什么？")).toBeInTheDocument();
+    expect(await assistant.findByText("当前论文的核心结论是什么？", { selector: ".chat-message.user > p" })).toBeInTheDocument();
     expect(assistant.getByRole("button", { name: "发送问题" })).toBeDisabled();
     expect(await assistant.findByRole("button", { name: "取消运行" })).toBeInTheDocument();
   });

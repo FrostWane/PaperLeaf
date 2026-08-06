@@ -868,8 +868,8 @@ export const demoDataSource: PaperLeafDataSource = {
     demoPapers = demoPapers.map((paper) => paper.id === paperId ? updated : paper);
     return updated;
   },
-  async summarizePaper(paperId, _options) { await wait(420); return { ...paperSummary, paperId }; },
-  async buildStructureGraph(paperId, _options) { await wait(520); return { ...paperStructureGraph, paperId }; },
+  async summarizePaper(paperId) { await wait(420); return { ...paperSummary, paperId }; },
+  async buildStructureGraph(paperId) { await wait(520); return { ...paperStructureGraph, paperId }; },
   async createPaperTranslation(paperId, targetLanguage, priorityPage) {
     await wait(180);
     void priorityPage;

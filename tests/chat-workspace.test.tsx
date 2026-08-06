@@ -122,7 +122,7 @@ describe("ChatWorkspace", () => {
       ...demoDataSource,
       listChatSessions: listSessions,
       listChatMessages: listMessages,
-      getAgentRun: vi.fn().mockResolvedValue(activeRun("")),
+      getAgentRun: vi.fn().mockResolvedValueOnce(activeRun("")).mockResolvedValue(cancelled),
       subscribeAgentRun: vi.fn(async (_runId, _handlers, options) => {
         await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
       }),
@@ -199,7 +199,7 @@ describe("ChatWorkspace", () => {
     const input = await screen.findByPlaceholderText(/输入问题/);
     fireEvent.change(input, { target: { value: "已受理问题" } });
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("问题已受理");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/状态(?:正在|暂时无法)恢复/);
     expect(screen.getByText("问题已保存，等待后台处理")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送问题" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
