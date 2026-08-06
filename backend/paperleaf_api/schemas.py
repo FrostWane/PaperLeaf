@@ -31,11 +31,38 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
 
 
+class UserPreferences(BaseModel):
+    font_scale: Literal["small", "standard", "large"] = "standard"
+    pdf_zoom: int = Field(default=100, ge=50, le=200)
+    left_panel_open: bool = True
+    assistant_panel_open: bool = True
+    translation_language: str = Field(default="zh-CN", min_length=2, max_length=32)
+    arxiv_search_enabled: bool = False
+
+
+class UserPreferencesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    font_scale: Optional[Literal["small", "standard", "large"]] = None
+    pdf_zoom: Optional[int] = Field(default=None, ge=50, le=200)
+    left_panel_open: Optional[bool] = None
+    assistant_panel_open: Optional[bool] = None
+    translation_language: Optional[str] = Field(default=None, min_length=2, max_length=32)
+    arxiv_search_enabled: Optional[bool] = None
+
+
+class UserPreferencesRead(UserPreferences):
+    display_name: Optional[str] = None
+
+
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     email: str
+    display_name: Optional[str]
+    preferences: UserPreferences = Field(default_factory=UserPreferences)
     role: UserRole
     active: bool
     must_change_password: bool
@@ -216,6 +243,7 @@ class JobRead(BaseModel):
     attempts: int
     max_attempts: int
     error_code: Optional[str]
+    error_message: Optional[str]
     created_at: datetime
     updated_at: datetime
 

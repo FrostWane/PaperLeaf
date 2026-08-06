@@ -45,7 +45,15 @@ from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
-from .repository import MemoryRepository, PaperRecord, SQLAlchemyRepository, UserRecord
+from .repository import (
+    CurrentAdminProtectionError,
+    LastAdminProtectionError,
+    ManagedUserNotFoundError,
+    MemoryRepository,
+    PaperRecord,
+    SQLAlchemyRepository,
+    UserRecord,
+)
 from .schemas import (
     AgentResumeRequest,
     AgentRunRead,
@@ -70,6 +78,9 @@ from .schemas import (
     TagRead,
     TagUpdate,
     UserCreate,
+    UserPreferences,
+    UserPreferencesRead,
+    UserPreferencesUpdate,
     UserRead,
     UserUpdate,
 )
@@ -161,6 +172,11 @@ def _paper_read(paper: PaperRecord) -> PaperRead:
 
 def _user_read(user: UserRecord) -> UserRead:
     return UserRead.model_validate(user)
+
+
+def _user_preferences_read(user: UserRecord) -> UserPreferencesRead:
+    preferences = UserPreferences.model_validate(user.preferences or {})
+    return UserPreferencesRead(display_name=user.display_name, **preferences.model_dump())
 
 
 def _citation_dicts(
@@ -256,6 +272,7 @@ def create_app(
             "/api/v1/auth/me",
             "/api/v1/auth/change-password",
             "/api/v1/auth/logout",
+            "/api/v1/users/me/preferences",
         }:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
@@ -305,6 +322,31 @@ def create_app(
     async def me(user: Annotated[UserRecord, Depends(current_user)]) -> UserRead:
         return _user_read(user)
 
+    @app.get("/api/v1/users/me/preferences", response_model=UserPreferencesRead)
+    async def get_preferences(
+        user: Annotated[UserRecord, Depends(current_user)],
+    ) -> UserPreferencesRead:
+        return _user_preferences_read(user)
+
+    @app.patch("/api/v1/users/me/preferences", response_model=UserPreferencesRead)
+    async def update_preferences(
+        payload: UserPreferencesUpdate,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> UserPreferencesRead:
+        changes = payload.model_dump(exclude_unset=True)
+        display_name_marker = object()
+        display_name = changes.pop("display_name", display_name_marker)
+        preferences = UserPreferences.model_validate(user.preferences or {}).model_dump()
+        preferences.update(changes)
+        update_values: dict[str, object] = {"preferences": preferences}
+        if display_name is not display_name_marker:
+            update_values["display_name"] = display_name
+        updated = await services.repository.update_user(user.id, **update_values)
+        if not updated:  # pragma: no cover - 当前用户已由会话保证存在
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
+        return _user_preferences_read(updated)
+
     @app.post(
         "/api/v1/auth/logout",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -330,8 +372,8 @@ def create_app(
     ) -> UserRead:
         if not verify_password(user.password_hash, payload.current_password):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "当前密码错误")
-        await services.repository.set_password(user.id, payload.new_password)
-        return _user_read(user)
+        updated = await services.repository.set_password(user.id, payload.new_password)
+        return _user_read(updated)
 
     @app.get("/api/v1/admin/users", response_model=list[UserRead])
     async def list_users(_: Annotated[UserRecord, Depends(admin_user)]) -> list[UserRead]:
@@ -358,20 +400,17 @@ def create_app(
         admin: Annotated[UserRecord, Depends(admin_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> UserRead:
-        target = await services.repository.get_user(user_id)
-        if not target:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
-        removes_admin = target.role == UserRole.admin and (
-            payload.active is False or payload.role == UserRole.user
-        )
-        if removes_admin and await services.repository.count_active_admins() <= 1:
-            raise HTTPException(status.HTTP_409_CONFLICT, "不能停用或降级最后一名管理员")
-        if target.id == admin.id and payload.active is False:
-            raise HTTPException(status.HTTP_409_CONFLICT, "不能停用当前管理员")
-        updated = await services.repository.update_user(
-            user_id, **payload.model_dump(exclude_none=True)
-        )
-        return _user_read(updated)  # type: ignore[arg-type]
+        try:
+            updated = await services.repository.update_managed_user(
+                user_id,
+                admin.id,
+                **payload.model_dump(exclude_none=True),
+            )
+        except ManagedUserNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        except (CurrentAdminProtectionError, LastAdminProtectionError) as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        return _user_read(updated)
 
     @app.get("/api/v1/admin/jobs", response_model=list[JobRead])
     async def list_admin_jobs(

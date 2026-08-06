@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { API_BASE_URL, changePassword, getAdminModelHealth, login, realDataSource } from "@/lib/data-source";
+import { API_BASE_URL, changePassword, getAdminModelHealth, login, realDataSource, setAdminUserActive } from "@/lib/data-source";
 import { server } from "./test-server";
 
 describe("真实 API 契约", () => {
@@ -72,6 +72,14 @@ describe("真实 API 契约", () => {
       providers: [{ provider: "primary", purposes: { answer: { status: "open", consecutiveFailures: 3, retryAfterMs: 4200 } } }],
       policy: { timeoutSeconds: 30, attemptsPerProvider: 2, failureThreshold: 3, cooldownSeconds: 60 },
     });
+  });
+
+  it("管理员操作失败时保留服务端返回的具体原因", async () => {
+    server.use(http.patch(`${API_BASE_URL}/admin/users/admin-1`, () => HttpResponse.json(
+      { detail: "不能停用或降级最后一名管理员" },
+      { status: 409 },
+    )));
+    await expect(setAdminUserActive("admin-1", false)).rejects.toThrow("不能停用或降级最后一名管理员");
   });
 
   it("修改、重试和删除文献都使用 CSRF 且映射最新状态", async () => {

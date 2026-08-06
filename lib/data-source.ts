@@ -87,6 +87,22 @@ function mapEvidenceQuality(item: Record<string, unknown>): AgentEvidenceQuality
   };
 }
 
+async function apiError(response: Response, fallback: string): Promise<Error> {
+  try {
+    const payload = await response.json() as { detail?: unknown };
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return new Error(payload.detail.trim());
+    }
+    if (payload.detail && typeof payload.detail === "object") {
+      const message = (payload.detail as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim()) return new Error(message.trim());
+    }
+  } catch {
+    // 非 JSON 错误响应继续使用面向用户的本地兜底文案。
+  }
+  return new Error(fallback);
+}
+
 function visibleAgentAnswer(raw: string): string {
   return raw
     .replace(/\s*\[chunk:[^\]]+\]/g, "")
@@ -129,7 +145,7 @@ function mapAdminUser(item: Record<string, unknown>): UserRecord {
   const email = String(item.email);
   return {
     id: String(item.id),
-    name: email.split("@")[0],
+    name: String(item.display_name ?? "").trim() || email.split("@")[0],
     email,
     role: item.role === "admin" ? "管理员" : "用户",
     status: item.active === false ? "已停用" : "正常",
@@ -139,7 +155,7 @@ function mapAdminUser(item: Record<string, unknown>): UserRecord {
 
 export async function listAdminUsers(): Promise<UserRecord[]> {
   const response = await fetch(`${API_BASE_URL}/admin/users`, { credentials: "include" });
-  if (!response.ok) throw new Error("用户列表读取失败");
+  if (!response.ok) throw await apiError(response, "用户列表读取失败");
   return (await response.json() as Array<Record<string, unknown>>).map(mapAdminUser);
 }
 
@@ -150,7 +166,7 @@ export async function createAdminUser(email: string, temporaryPassword: string):
     headers: mutationHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ email, temporary_password: temporaryPassword, role: "user" }),
   });
-  if (!response.ok) throw new Error("用户创建失败，请检查邮箱或临时密码");
+  if (!response.ok) throw await apiError(response, "用户创建失败，请检查邮箱或临时密码");
   return mapAdminUser(await response.json() as Record<string, unknown>);
 }
 
@@ -161,7 +177,7 @@ export async function setAdminUserActive(userId: string, active: boolean): Promi
     headers: mutationHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ active }),
   });
-  if (!response.ok) throw new Error("用户状态更新失败");
+  if (!response.ok) throw await apiError(response, "用户状态更新失败");
   return mapAdminUser(await response.json() as Record<string, unknown>);
 }
 
@@ -175,18 +191,19 @@ function mapAdminJob(item: Record<string, unknown>): AdminJob {
     attempts: Number(item.attempts ?? 0),
     maxAttempts: Number(item.max_attempts ?? 0),
     errorCode: item.error_code ? String(item.error_code) : undefined,
+    errorMessage: item.error_message ? String(item.error_message) : undefined,
   };
 }
 
 export async function listAdminJobs(): Promise<AdminJob[]> {
   const response = await fetch(`${API_BASE_URL}/admin/jobs`, { credentials: "include" });
-  if (!response.ok) throw new Error("任务列表读取失败");
+  if (!response.ok) throw await apiError(response, "任务列表读取失败");
   return (await response.json() as Array<Record<string, unknown>>).map(mapAdminJob);
 }
 
 export async function retryAdminJob(jobId: string): Promise<AdminJob> {
   const response = await fetch(`${API_BASE_URL}/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST", credentials: "include", headers: mutationHeaders() });
-  if (!response.ok) throw new Error("任务当前无法重试");
+  if (!response.ok) throw await apiError(response, "任务当前无法重试");
   return mapAdminJob(await response.json() as Record<string, unknown>);
 }
 
@@ -202,7 +219,7 @@ function mapPurposeHealth(item: Record<string, unknown>): ModelPurposeHealth {
 
 export async function getAdminModelHealth(): Promise<ModelRuntimeHealth> {
   const response = await fetch(`${API_BASE_URL}/admin/model-health`, { credentials: "include" });
-  if (!response.ok) throw new Error("模型运行状态读取失败");
+  if (!response.ok) throw await apiError(response, "AI 能力状态读取失败");
   const raw = await response.json() as Record<string, unknown>;
   const policy = (raw.policy ?? {}) as Record<string, unknown>;
   const providers = Array.isArray(raw.providers) ? raw.providers : [];

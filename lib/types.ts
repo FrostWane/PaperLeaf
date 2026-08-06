@@ -186,6 +186,8 @@ export interface AdminJob {
   attempts: number;
   maxAttempts: number;
   errorCode?: string;
+  /** 后端允许向管理员公开的失败说明；不得包含论文正文或服务端堆栈。 */
+  errorMessage?: string;
 }
 
 export interface ModelPurposeHealth {

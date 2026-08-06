@@ -21,16 +21,73 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
     );
 
   expect(await sizeOf(".answer-text")).toBeGreaterThanOrEqual(14);
-  expect(await sizeOf(".evidence-quality-strip")).toBeGreaterThanOrEqual(11);
-  expect(await sizeOf(".citation-row q")).toBeGreaterThanOrEqual(11);
-  expect(await sizeOf(".composer-box textarea")).toBeGreaterThanOrEqual(13);
-  expect(await sizeOf(".paper-summary p")).toBeGreaterThanOrEqual(11);
-  expect(await sizeOf(".reader-status")).toBeGreaterThanOrEqual(10);
-  expect(await sizeOf(".mock-paper > p:not(.pdf-authors)")).toBeGreaterThanOrEqual(12);
+  expect(await sizeOf(".evidence-quality-strip")).toBeGreaterThanOrEqual(12);
+  expect(await sizeOf(".citation-row q")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".composer-box textarea")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".paper-summary p")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".reader-status")).toBeGreaterThanOrEqual(12);
+  expect(await sizeOf(".mock-paper > p:not(.pdf-authors)")).toBeGreaterThanOrEqual(14);
 
   const layout = await page.evaluate(() => ({
     viewport: window.innerWidth,
     document: document.documentElement.scrollWidth,
   }));
+  expect(layout.document).toBeLessThanOrEqual(layout.viewport);
+
+  await page.goto("/settings");
+  for (const option of [
+    { name: /小\s*适合高密度/, mode: "small", body: 14, support: 12 },
+    { name: /标准\s*默认阅读/, mode: "standard", body: 15, support: 12 },
+    { name: /大\s*适合 2K/, mode: "large", body: 17, support: 14 },
+  ]) {
+    await page.getByRole("radio", { name: option.name }).click();
+    const scale = await page.evaluate(() => ({
+      mode: document.documentElement.dataset.fontScale,
+      body: Number.parseFloat(getComputedStyle(document.querySelector(".setting-title p")!).fontSize),
+      support: Number.parseFloat(getComputedStyle(document.querySelector(".settings-form-row small")!).fontSize),
+    }));
+    expect(scale.mode).toBe(option.mode);
+    expect(scale.body).toBeGreaterThanOrEqual(option.body);
+    expect(scale.support).toBeGreaterThanOrEqual(option.support);
+  }
+
+  await page.goto("/admin");
+  for (const selector of [".metric-row span", ".metric-row small", ".data-table th", ".runtime-purposes small", ".job-row small"]) {
+    const size = await page.locator(selector).first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+    expect(size, selector).toBeGreaterThanOrEqual(12);
+  }
+  await expect(page.locator(".metric-row strong").first()).toHaveCSS("font-size", "22px");
+
+  await page.goto("/library?demo=1");
+  for (const selector of [".collection-tabs span", ".organization-section > span", ".data-table th"]) {
+    const size = await page.locator(selector).first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+    expect(size, selector).toBeGreaterThanOrEqual(12);
+  }
+  const finalLayout = await page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth }));
+  expect(finalLayout.document).toBeLessThanOrEqual(finalLayout.viewport);
+});
+
+test("移动端账户、退出与偏好控件保持可达触摸目标", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) >= 760, "仅在移动端项目中验证账户入口");
+
+  await page.goto("/library?demo=1");
+  const accountLink = page.getByRole("link", { name: /账户与退出设置/ });
+  await expect(accountLink).toBeVisible();
+  expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await accountLink.click();
+  await expect(page).toHaveURL(/\/settings$/);
+
+  const controls = [
+    page.getByRole("button", { name: "保存个人设置" }),
+    page.getByRole("switch", { name: "默认展开文献资料" }),
+    page.getByRole("button", { name: "退出登录" }),
+  ];
+  for (const control of controls) {
+    await control.scrollIntoViewIfNeeded();
+    await expect(control).toBeVisible();
+    expect((await control.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+
+  const layout = await page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth }));
   expect(layout.document).toBeLessThanOrEqual(layout.viewport);
 });

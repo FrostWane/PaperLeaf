@@ -112,6 +112,7 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
             },
         )
         assert changed.status_code == 200
+        assert changed.json()["must_change_password"] is False
         assert reader_client.get(f"/api/v1/papers/{paper_id}").status_code == 404
         assert reader_client.get("/api/v1/papers").json() == []
         isolated_bulk = reader_client.post(
@@ -207,9 +208,10 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
         job = next(iter(repository.jobs.values()))
         job.status = JobStatus.failed
         job.error_code = "PDF_PARSE_FAILED"
+        job.error_message = "PDF 文件已损坏，无法解析"
         jobs = client.get("/api/v1/admin/jobs")
         assert jobs.status_code == 200
-        assert "error_message" not in jobs.json()[0]
+        assert jobs.json()[0]["error_message"] == "PDF 文件已损坏，无法解析"
         assert "text" not in jobs.json()[0]
         retried = client.post(f"/api/v1/admin/jobs/{job.id}/retry", headers={"X-CSRF-Token": csrf})
         assert retried.status_code == 200

@@ -86,6 +86,8 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    preferences: Mapped[dict] = mapped_column(JSON, default=dict)
     password_hash: Mapped[str] = mapped_column(String(512))
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.user)
     active: Mapped[bool] = mapped_column(Boolean, default=True)

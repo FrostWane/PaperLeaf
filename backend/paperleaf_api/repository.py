@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -41,6 +42,8 @@ class UserRecord:
     id: str
     email: str
     password_hash: str
+    display_name: str | None = None
+    preferences: dict = field(default_factory=dict)
     role: UserRole = UserRole.user
     active: bool = True
     must_change_password: bool = True
@@ -100,6 +103,7 @@ class JobRecord:
     attempts: int = 0
     max_attempts: int = 3
     error_code: str | None = None
+    error_message: str | None = None
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
 
@@ -121,6 +125,18 @@ class AgentRunRecord:
     updated_at: datetime = field(default_factory=now)
 
 
+class ManagedUserNotFoundError(ValueError):
+    """管理员准备修改的用户不存在。"""
+
+
+class CurrentAdminProtectionError(ValueError):
+    """当前登录管理员不能停用自己。"""
+
+
+class LastAdminProtectionError(ValueError):
+    """变更会移除最后一名活跃管理员。"""
+
+
 class Repository(Protocol):
     async def find_user_by_email(self, email: str) -> UserRecord | None: ...
     async def get_user(self, user_id: str) -> UserRecord | None: ...
@@ -129,10 +145,13 @@ class Repository(Protocol):
     ) -> UserRecord: ...
     async def list_users(self) -> list[UserRecord]: ...
     async def update_user(self, user_id: str, **changes: object) -> UserRecord | None: ...
+    async def update_managed_user(
+        self, user_id: str, acting_admin_id: str, **changes: object
+    ) -> UserRecord: ...
     async def create_session(self, user_id: str, token: str, ttl_seconds: int) -> None: ...
     async def user_for_session(self, token: str) -> UserRecord | None: ...
     async def delete_session(self, token: str) -> None: ...
-    async def set_password(self, user_id: str, password: str) -> None: ...
+    async def set_password(self, user_id: str, password: str) -> UserRecord: ...
     async def create_paper(self, paper: PaperRecord) -> PaperRecord: ...
     async def list_papers(self, owner_id: str) -> list[PaperRecord]: ...
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
@@ -165,6 +184,7 @@ class MemoryRepository:
         self.jobs: dict[str, JobRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
         self.session_secret = session_secret
+        self._managed_user_lock = threading.Lock()
 
     async def ensure_admin(self, email: str, password: str) -> UserRecord:
         existing = await self.find_user_by_email(email)
@@ -208,14 +228,46 @@ class MemoryRepository:
         user = self.users.get(user_id)
         if not user:
             return None
-        for key in ("active", "role", "must_change_password"):
-            if key in changes and changes[key] is not None:
+        for key in ("active", "role", "must_change_password", "display_name", "preferences"):
+            if key in changes and (changes[key] is not None or key == "display_name"):
                 setattr(user, key, changes[key])
         if changes.get("active") is False:
             self.sessions = {
                 digest: value for digest, value in self.sessions.items() if value[0] != user_id
             }
         return user
+
+    async def update_managed_user(
+        self, user_id: str, acting_admin_id: str, **changes: object
+    ) -> UserRecord:
+        # MemoryRepository 也可能被多个 TestClient 线程共享；同步锁让检查与修改不可分割。
+        with self._managed_user_lock:
+            user = self.users.get(user_id)
+            if not user:
+                raise ManagedUserNotFoundError("用户不存在")
+            removes_active_admin = user.active and user.role == UserRole.admin and (
+                changes.get("active") is False or changes.get("role") == UserRole.user
+            )
+            if removes_active_admin:
+                active_admins = sum(
+                    1
+                    for item in self.users.values()
+                    if item.active and item.role == UserRole.admin
+                )
+                if active_admins <= 1:
+                    raise LastAdminProtectionError("不能停用或降级最后一名管理员")
+            if user.id == acting_admin_id and changes.get("active") is False:
+                raise CurrentAdminProtectionError("不能停用当前管理员")
+            for key in ("active", "role"):
+                if key in changes and changes[key] is not None:
+                    setattr(user, key, changes[key])
+            if changes.get("active") is False:
+                self.sessions = {
+                    digest: value
+                    for digest, value in self.sessions.items()
+                    if value[0] != user_id
+                }
+            return user
 
     async def create_session(self, user_id: str, token: str, ttl_seconds: int) -> None:
         digest = digest_session_token(token, self.session_secret)
@@ -236,10 +288,11 @@ class MemoryRepository:
     async def delete_session(self, token: str) -> None:
         self.sessions.pop(digest_session_token(token, self.session_secret), None)
 
-    async def set_password(self, user_id: str, password: str) -> None:
+    async def set_password(self, user_id: str, password: str) -> UserRecord:
         user = self.users[user_id]
         user.password_hash = hash_password(password)
         user.must_change_password = False
+        return user
 
     async def create_paper(self, paper: PaperRecord) -> PaperRecord:
         duplicate = next(
@@ -599,8 +652,14 @@ class SQLAlchemyRepository:
             user = await session.get(User, user_id)
             if not user:
                 return None
-            for key in ("active", "role", "must_change_password"):
-                if key in changes and changes[key] is not None:
+            for key in (
+                "active",
+                "role",
+                "must_change_password",
+                "display_name",
+                "preferences",
+            ):
+                if key in changes and (changes[key] is not None or key == "display_name"):
                     setattr(user, key, changes[key])
             if changes.get("active") is False:
                 sessions = await session.scalars(
@@ -608,6 +667,50 @@ class SQLAlchemyRepository:
                 )
                 for item in sessions:
                     await session.delete(item)
+            await session.commit()
+            await session.refresh(user)
+            return user
+
+    async def update_managed_user(
+        self, user_id: str, acting_admin_id: str, **changes: object
+    ) -> User:
+        async with get_session_factory()() as session:
+            # 统一顺序锁住所有活跃管理员，使“检查最后管理员 + 更新”处于同一事务，
+            # 防止两个管理员被并发停用或降级造成零管理员状态。
+            active_admins = list(
+                await session.scalars(
+                    select(User)
+                    .where(User.active.is_(True), User.role == UserRole.admin)
+                    .order_by(User.id)
+                    .with_for_update()
+                )
+            )
+            user = next((item for item in active_admins if item.id == user_id), None)
+            if user is None:
+                user = await session.get(User, user_id, with_for_update=True)
+            if not user:
+                raise ManagedUserNotFoundError("用户不存在")
+
+            removes_active_admin = user.active and user.role == UserRole.admin and (
+                changes.get("active") is False or changes.get("role") == UserRole.user
+            )
+            if removes_active_admin:
+                # READ COMMITTED 下等待行锁后用新语句重新计数，不能复用等待前的查询快照。
+                active_admin_count = await session.scalar(
+                    select(func.count()).select_from(User).where(
+                        User.active.is_(True), User.role == UserRole.admin
+                    )
+                )
+                if int(active_admin_count or 0) <= 1:
+                    raise LastAdminProtectionError("不能停用或降级最后一名管理员")
+            if user.id == acting_admin_id and changes.get("active") is False:
+                raise CurrentAdminProtectionError("不能停用当前管理员")
+
+            for key in ("active", "role"):
+                if key in changes and changes[key] is not None:
+                    setattr(user, key, changes[key])
+            if changes.get("active") is False:
+                await session.execute(delete(UserSession).where(UserSession.user_id == user_id))
             await session.commit()
             await session.refresh(user)
             return user
@@ -646,7 +749,7 @@ class SQLAlchemyRepository:
                 await session.delete(record)
                 await session.commit()
 
-    async def set_password(self, user_id: str, password: str) -> None:
+    async def set_password(self, user_id: str, password: str) -> User:
         async with get_session_factory()() as session:
             user = await session.get(User, user_id)
             if not user:
@@ -654,6 +757,8 @@ class SQLAlchemyRepository:
             user.password_hash = hash_password(password)
             user.must_change_password = False
             await session.commit()
+            await session.refresh(user)
+            return user
 
     async def create_paper(self, paper: PaperRecord) -> Paper:
         record = Paper(**paper.__dict__)
