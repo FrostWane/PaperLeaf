@@ -200,7 +200,7 @@ describe("ChatWorkspace", () => {
     fireEvent.change(input, { target: { value: "已受理问题" } });
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/状态(?:正在|暂时无法)恢复/);
-    expect(screen.getByText("问题已保存，等待后台处理")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "取消运行" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送问题" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     expect(submit).toHaveBeenCalledTimes(1);

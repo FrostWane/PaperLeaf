@@ -412,6 +412,8 @@ class AgentRun(Base):
                 "status IN ('pending', 'running', 'interrupted')"
             ),
         ),
+        Index("uq_agent_runs_user_message_id", "user_message_id", unique=True),
+        Index("uq_agent_runs_assistant_message_id", "assistant_message_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -443,7 +445,6 @@ class AgentRun(Base):
             initially="DEFERRED",
         ),
         nullable=True,
-        unique=True,
     )
     assistant_message_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey(
@@ -455,7 +456,6 @@ class AgentRun(Base):
             initially="DEFERRED",
         ),
         nullable=True,
-        unique=True,
     )
     request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     legacy_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
