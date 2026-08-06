@@ -243,3 +243,72 @@ export interface AgentEvent<T = unknown> {
   data: T;
   id?: string;
 }
+
+export type ChatSessionType = "paper" | "collection" | "library";
+export type AgentRunStatus = "pending" | "running" | "interrupted" | "completed" | "failed" | "cancelled";
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  type: ChatSessionType;
+  paperId?: string;
+  collectionId?: string;
+  currentRunId?: string;
+  currentRunStatus?: AgentRunStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  sequence: number;
+  status: "pending" | "streaming" | "completed" | "failed" | "cancelled";
+  content: string;
+  citations: Citation[];
+  runId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatSessionInput {
+  type: ChatSessionType;
+  title?: string;
+  paperId?: string;
+  collectionId?: string;
+}
+
+export interface ChatMessageSubmission {
+  sessionId: string;
+  messageId: string;
+  runId: string;
+  status: "pending";
+  replayed: boolean;
+}
+
+export interface AgentRunSnapshot {
+  runId: string;
+  sessionId: string;
+  status: AgentRunStatus;
+  cancelRequested: boolean;
+  pendingAction?: {
+    actionId: string;
+    type: string;
+    riskMessage: string;
+    allowedDecisions: string[];
+    candidates: Array<{ arxivId?: string; title?: string; authors?: string[] | string; abstract?: string; published?: string; pdfUrl?: string; journalRef?: string }>;
+  };
+  answer: string;
+  citations: Citation[];
+  evidenceQuality?: AgentEvidenceQuality;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentEventSubscriptionHandlers extends AgentAskStreamHandlers {
+  onEvent?: (event: AgentEvent) => void;
+  onConnectionState?: (state: "connected" | "reconnecting") => void;
+  onRunUpdate?: (run: AgentRunSnapshot) => void;
+}

@@ -20,8 +20,9 @@ export function parseSseChunk(input: string): AgentEvent[] {
       try {
         const parsed = JSON.parse(raw) as unknown;
         if (parsed && typeof parsed === "object" && "event" in parsed && "data" in parsed) {
-          const envelope = parsed as { event: AgentEventType; run_id?: string; data: unknown };
-          return [{ type: envelope.event, id: envelope.run_id ?? id, data: envelope.data }];
+          const envelope = parsed as { id?: string | number; sequence?: string | number; event: AgentEventType; data: unknown };
+          const eventId = id ?? envelope.sequence?.toString() ?? envelope.id?.toString();
+          return [{ type: envelope.event, id: eventId, data: envelope.data }];
         }
         return [{ type, id, data: parsed }];
       }

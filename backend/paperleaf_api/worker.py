@@ -18,6 +18,13 @@ from typing import Protocol
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .agent.graph import (
+    build_agent_graph,
+    build_configured_answerer,
+    build_configured_evidence_support_grader,
+)
+from .agent.tools import SQLLibrarySearch
+from .agent_execution import execute_agent_run
 from .config import settings
 from .crossref_service import crossref_client
 from .db import get_session_factory
@@ -42,11 +49,15 @@ from .pdf_metadata import (
     extract_pdf_metadata,
     normalize_doi,
 )
+from .rag.answer_quality import AnswerQualityPolicy
 from .rag.chunking import PageText, chunk_pages
+from .rag.retrieval_quality import EvidenceQualityPolicy
+from .repository import SQLAlchemyRepository
 from .storage import create_storage
 
 logger = logging.getLogger("paperleaf.worker")
 model_router = build_model_router(settings)
+agent_graph: object | None = None
 JOB_LEASE = timedelta(minutes=30)
 MAX_TRANSLATION_PAGE_CHARS = 48_000
 MAX_TRANSLATION_CHUNKS = 6
@@ -84,6 +95,7 @@ def utcnow() -> datetime:
 async def claim_job() -> ClaimedJob | None:
     exhausted_translation_ids: list[str] = []
     exhausted_parse_paper_ids: list[str] = []
+    exhausted_agent_run_ids: list[str] = []
     claimed: ClaimedJob | None = None
     async with get_session_factory()() as session:
         # Worker 异常退出后，租约到期的 running 作业可重新领取；旧 Worker 的
@@ -105,6 +117,8 @@ async def claim_job() -> ClaimedJob | None:
                 exhausted_translation_ids.append(stale.translation_id)
             if exhausted and stale.paper_id and stale.type == "parse_pdf":
                 exhausted_parse_paper_ids.append(stale.paper_id)
+            if exhausted and stale.type == "agent_run" and stale.agent_run_id:
+                exhausted_agent_run_ids.append(stale.agent_run_id)
             stale.status = JobStatus.failed if exhausted else JobStatus.queued
             stale.error_code = (
                 "WORKER_LEASE_EXHAUSTED" if exhausted else stale.error_code
@@ -141,6 +155,15 @@ async def claim_job() -> ClaimedJob | None:
                 paper.status = PaperStatus.failed
                 paper.updated_at = utcnow()
                 await session.commit()
+    repository = SQLAlchemyRepository(settings.session_secret)
+    for run_id in exhausted_agent_run_ids:
+        await repository.finish_agent_run(
+            run_id,
+            status="failed",
+            error_code="WORKER_LEASE_EXHAUSTED",
+            result_summary={"answer": "", "citations": []},
+            force=True,
+        )
     return claimed
 
 
@@ -1020,6 +1043,97 @@ async def process_translation_job(
         await session.commit()
 
 
+def build_worker_agent_graph(checkpointer: object | None = None) -> object:
+    retriever = SQLLibrarySearch(settings, model_router)
+    return build_agent_graph(
+        retriever=retriever,
+        answerer=build_configured_answerer(settings, model_router),
+        checkpointer=checkpointer,
+        quality_policy=EvidenceQualityPolicy(
+            min_confidence=settings.evidence_min_confidence,
+            min_vector_score=settings.evidence_min_vector_score,
+            min_lexical_coverage=settings.evidence_min_lexical_coverage,
+        ),
+        answer_quality_policy=AnswerQualityPolicy(
+            min_citation_coverage=settings.answer_min_citation_coverage,
+            min_claim_lexical_support=settings.answer_min_claim_lexical_support,
+            min_model_support_confidence=settings.answer_min_support_confidence,
+        ),
+        support_grader=build_configured_evidence_support_grader(
+            settings, model_router
+        ),
+    )
+
+
+async def _heartbeat_agent_job(job_id: str, claim_token: str) -> bool:
+    async with get_session_factory()() as session:
+        heartbeat_at = utcnow()
+        result = await session.execute(
+            Job.__table__.update()
+            .where(
+                Job.id == job_id,
+                Job.type == "agent_run",
+                Job.status == JobStatus.running,
+                Job.claim_token == claim_token,
+                Job.claimed_at.is_not(None),
+                Job.claimed_at >= heartbeat_at - JOB_LEASE,
+            )
+            .values(claimed_at=heartbeat_at, updated_at=heartbeat_at)
+        )
+        await session.commit()
+        return bool(result.rowcount)
+
+
+async def process_agent_run_job(
+    job_id: str,
+    claim_token: str,
+    *,
+    graph: object | None = None,
+    repository: object | None = None,
+) -> None:
+    async with get_session_factory()() as session:
+        job = await session.scalar(
+            select(Job).where(
+                Job.id == job_id,
+                Job.type == "agent_run",
+                Job.status == JobStatus.running,
+                Job.claim_token == claim_token,
+                Job.claimed_at.is_not(None),
+                Job.claimed_at >= utcnow() - JOB_LEASE,
+            )
+        )
+        if not job or not job.agent_run_id:
+            return
+        run_id = job.agent_run_id
+    runtime_repository = repository or SQLAlchemyRepository(settings.session_secret)
+    runtime_graph = graph or agent_graph or build_worker_agent_graph()
+    execution = asyncio.create_task(
+        execute_agent_run(
+            runtime_repository,
+            runtime_graph,
+            run_id,
+            claim_token,
+            answer_quality_policy=AnswerQualityPolicy(
+                min_citation_coverage=settings.answer_min_citation_coverage,
+                min_claim_lexical_support=settings.answer_min_claim_lexical_support,
+                min_model_support_confidence=settings.answer_min_support_confidence,
+            ),
+        )
+    )
+    while True:
+        done, _pending = await asyncio.wait({execution}, timeout=5)
+        if done:
+            await execution
+            return
+        if not await _heartbeat_agent_job(job_id, claim_token):
+            execution.cancel()
+            try:
+                await execution
+            except asyncio.CancelledError:
+                pass
+            return
+
+
 async def process_delete_job(job_id: str, claim_token: str | None = None) -> None:
     """幂等删除原件和全部数据库关联；对象已不存在也视为成功。"""
     storage = create_storage(settings)
@@ -1088,6 +1202,8 @@ async def process_job(claimed_job: ClaimedJob) -> None:
         await process_parse_job(claimed_job.id, claimed_job.token)
     elif job_type == "translate_paper":
         await process_translation_job(claimed_job.id, claimed_job.token)
+    elif job_type == "agent_run":
+        await process_agent_run_job(claimed_job.id, claimed_job.token)
     else:
         raise RuntimeError("UNKNOWN_JOB_TYPE")
 
@@ -1137,6 +1253,17 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
                 paper.status = (
                     PaperStatus.deleting if job.type == "delete_paper" else PaperStatus.failed
                 )
+        if job.type == "agent_run" and job.agent_run_id and job.status == JobStatus.failed:
+            repository = SQLAlchemyRepository(settings.session_secret)
+            await session.commit()
+            await repository.finish_agent_run(
+                job.agent_run_id,
+                status="failed",
+                error_code="AGENT_RUN_FAILED",
+                result_summary={"answer": "", "citations": []},
+                force=True,
+            )
+            return
         if translation and job.status == JobStatus.failed:
             completed = await session.scalar(
                 select(PaperTranslationPage.id).where(
@@ -1152,19 +1279,28 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
 
 
 async def run_worker() -> None:
+    global agent_graph
     settings.validate_production()
     logging.basicConfig(level=logging.INFO)
     logger.info("PaperLeaf Worker 已启动")
-    while True:
-        claimed_job = await claim_job()
-        if not claimed_job:
-            await asyncio.sleep(2)
-            continue
-        try:
-            await process_job(claimed_job)
-        except Exception as exc:  # 作业失败必须被归档并可重试
-            logger.exception("作业 %s 执行失败", claimed_job.id)
-            await fail_job(claimed_job, exc)
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    checkpoint_url = settings.database_url.replace(
+        "postgresql+asyncpg://", "postgresql://", 1
+    )
+    async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
+        await checkpointer.setup()
+        agent_graph = build_worker_agent_graph(checkpointer)
+        while True:
+            claimed_job = await claim_job()
+            if not claimed_job:
+                await asyncio.sleep(2)
+                continue
+            try:
+                await process_job(claimed_job)
+            except Exception as exc:  # 作业失败必须被归档并可重试
+                logger.exception("作业 %s 执行失败", claimed_job.id)
+                await fail_job(claimed_job, exc)
 
 
 if __name__ == "__main__":

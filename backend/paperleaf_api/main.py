@@ -2,7 +2,7 @@
 
 import asyncio
 import hashlib
-import re
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -32,6 +32,7 @@ from .agent.graph import (
     build_configured_evidence_support_grader,
 )
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
+from .agent_execution import execute_agent_run
 from .artifacts import (
     cited_chunk_ids,
     load_paper_evidence,
@@ -40,12 +41,14 @@ from .artifacts import (
 )
 from .arxiv_service import fetch_arxiv_pdf, get_arxiv_paper, search_arxiv
 from .config import Settings, settings
-from .model_runtime import build_model_router, collect_model_attempts
+from .model_runtime import build_model_router
 from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import (
+    ChatActiveRunError,
+    ChatIdempotencyConflictError,
     CurrentAdminProtectionError,
     LastAdminProtectionError,
     ManagedUserNotFoundError,
@@ -57,12 +60,18 @@ from .repository import (
 )
 from .schemas import (
     AgentResumeRequest,
+    AgentRunEventRead,
     AgentRunRead,
     ArtifactCitation,
     ArxivImportRequest,
     ArxivSearchResponse,
     ChangePasswordRequest,
+    ChatMessageRead,
     ChatMessageRequest,
+    ChatSessionCreate,
+    ChatSessionRead,
+    ChatSessionUpdate,
+    ChatSubmissionRead,
     CollectionCreate,
     CollectionRead,
     CollectionUpdate,
@@ -73,7 +82,6 @@ from .schemas import (
     PaperRead,
     PaperTranslationRead,
     PaperUpdate,
-    SSEEvent,
     StructureGraphResponse,
     SummaryResponse,
     TranslationCreate,
@@ -124,10 +132,11 @@ class AppServices:
             else SQLLibrarySearch(config, self.model_router)
         )
         self.agent_graph = self.build_agent_graph()
+        self.checkpointer: Optional[Any] = None
         self._agent_tasks: dict[str, asyncio.Task[Any]] = {}
         self._agent_tasks_lock = asyncio.Lock()
 
-    def build_agent_graph(self, checkpointer: Any | None = None) -> Any:
+    def build_agent_graph(self, checkpointer: Optional[Any] = None) -> Any:
         """生产重建 Graph 时保持与 App 相同的模型和质量策略。"""
 
         return build_agent_graph(
@@ -165,6 +174,45 @@ class AppServices:
                 return False
             task.cancel()
             return True
+
+    async def launch_local_agent_run(self, run_id: str) -> None:
+        claim_token = await self.repository.claim_agent_run_job(run_id)
+        if not claim_token:
+            return
+
+        async def runner() -> None:
+            try:
+                await execute_agent_run(
+                    self.repository,
+                    self.agent_graph,
+                    run_id,
+                    claim_token,
+                    answer_quality_policy=AnswerQualityPolicy(
+                        min_citation_coverage=self.config.answer_min_citation_coverage,
+                        min_claim_lexical_support=(
+                            self.config.answer_min_claim_lexical_support
+                        ),
+                        min_model_support_confidence=(
+                            self.config.answer_min_support_confidence
+                        ),
+                    ),
+                )
+            finally:
+                task = asyncio.current_task()
+                if task:
+                    await self.unregister_agent_task(run_id, task)
+
+        task = asyncio.create_task(runner())
+        await self.register_agent_task(run_id, task)
+
+    async def delete_checkpoints(self, thread_ids: list[str]) -> None:
+        if not thread_ids or self.config.is_demo:
+            return
+        delete_thread = getattr(self.checkpointer, "adelete_thread", None)
+        if not delete_thread:
+            raise RuntimeError("CHECKPOINT_DELETE_UNAVAILABLE")
+        for thread_id in thread_ids:
+            await delete_thread(thread_id)
 
 
 def _paper_read(paper: PaperRecord) -> PaperRead:
@@ -236,17 +284,62 @@ def _citation_dicts(
 
 def _agent_run_read(record: Any) -> AgentRunRead:
     summary = record.result_summary or {}
+    error_code = getattr(record, "error_code", None)
+    safe_errors = {
+        "UNVERIFIED_ANSWER": "回答未通过证据核验，请调整问题后重试",
+        "EVIDENCE_SCOPE_VIOLATION": "检索证据超出当前会话范围，运行已安全停止",
+        "AGENT_RUN_FAILED": "问答运行失败，请稍后重试",
+        "AGENT_RUN_CANCELLED": "问答运行已取消",
+        "MODEL_NOT_CONFIGURED": "尚未配置可用的回答模型",
+        "MODEL_TIMEOUT": "回答模型响应超时，请稍后重试",
+    }
+    error_message = safe_errors.get(error_code, "问答运行失败，请稍后重试") if error_code else None
+    raw_action = getattr(record, "pending_action", None)
+    pending_action = None
+    if isinstance(raw_action, dict):
+        candidate_keys = {
+            "arxiv_id",
+            "title",
+            "authors",
+            "abstract",
+            "published",
+            "pdf_url",
+            "journal_ref",
+        }
+        candidates = [
+            {key: value for key, value in item.items() if key in candidate_keys}
+            for item in raw_action.get("candidates", [])
+            if isinstance(item, dict)
+        ]
+        pending_action = {
+            key: raw_action[key]
+            for key in (
+                "action_id",
+                "type",
+                "risk_message",
+                "allowed_decisions",
+            )
+            if key in raw_action
+        }
+        pending_action["candidates"] = candidates
     return AgentRunRead(
         run_id=record.id,
         session_id=record.session_id,
         status=record.status,
+        cancel_requested=bool(getattr(record, "cancel_requested", False)),
+        scope_snapshot=dict(getattr(record, "scope_snapshot", {}) or {}),
+        pending_action=pending_action,
         answer=summary.get("answer", ""),
         citations=summary.get("citations", []),
         evidence_quality=summary.get("evidence_quality", {}),
         node_trace=summary.get("node_trace", []),
         model_attempts=summary.get("model_attempts", []),
         duration_ms=getattr(record, "duration_ms", None),
-        error=record.error_code,
+        error_code=error_code,
+        error_message=error_message,
+        error=error_message,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -273,8 +366,12 @@ def create_app(
         checkpoint_url = config.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
         async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
             await checkpointer.setup()
+            services.checkpointer = checkpointer
             services.agent_graph = services.build_agent_graph(checkpointer)
-            yield
+            try:
+                yield
+            finally:
+                services.checkpointer = None
 
     app = FastAPI(
         title="PaperLeaf API",
@@ -288,7 +385,13 @@ def create_app(
         allow_origins=config.allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-CSRF-Token", "Range"],
+        allow_headers=[
+            "Content-Type",
+            "X-CSRF-Token",
+            "Range",
+            "Idempotency-Key",
+            "Last-Event-ID",
+        ],
         expose_headers=["Accept-Ranges", "Content-Range", "Content-Length"],
     )
 
@@ -987,288 +1090,228 @@ def create_app(
         nodes, edges, mermaid = structure_graph(evidence)
         return StructureGraphResponse(paper_id=paper_id, nodes=nodes, edges=edges, mermaid=mermaid)
 
-    @app.post("/api/v1/chat/sessions/{session_id}/messages")
-    async def send_chat_message(
+    @app.get("/api/v1/chat/sessions", response_model=list[ChatSessionRead])
+    async def list_chat_sessions(
+        user: Annotated[UserRecord, Depends(current_user)],
+    ) -> list[ChatSessionRead]:
+        return [
+            ChatSessionRead.model_validate(item)
+            for item in await services.repository.list_chat_sessions(user.id)
+        ]
+
+    @app.post(
+        "/api/v1/chat/sessions",
+        response_model=ChatSessionRead,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_chat_session(
+        payload: ChatSessionCreate,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> ChatSessionRead:
+        if payload.type == "paper":
+            if not payload.paper_id or payload.collection_id:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "单篇会话必须且只能绑定 paper_id",
+                )
+            await owned_paper(payload.paper_id, user)
+        elif payload.type == "collection":
+            if not payload.collection_id or payload.paper_id:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "集合会话必须且只能绑定 collection_id",
+                )
+            if (
+                await services.repository.resolve_collection_paper_ids(
+                    payload.collection_id, user.id
+                )
+                is None
+            ):
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "集合不存在")
+        elif payload.paper_id or payload.collection_id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "全库会话不能绑定论文或集合",
+            )
+        record = await services.repository.create_chat_session(
+            user.id,
+            payload.title,
+            payload.type,
+            payload.paper_id,
+            payload.collection_id,
+        )
+        return ChatSessionRead.model_validate(record)
+
+    @app.get(
+        "/api/v1/chat/sessions/{session_id}", response_model=ChatSessionRead
+    )
+    async def get_chat_session(
+        session_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+    ) -> ChatSessionRead:
+        record = await services.repository.get_owned_chat_session(session_id, user.id)
+        if not record:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        return ChatSessionRead.model_validate(record)
+
+    @app.patch(
+        "/api/v1/chat/sessions/{session_id}", response_model=ChatSessionRead
+    )
+    async def update_chat_session(
+        session_id: str,
+        payload: ChatSessionUpdate,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> ChatSessionRead:
+        record = await services.repository.update_owned_chat_session(
+            session_id, user.id, payload.title
+        )
+        if not record:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        return ChatSessionRead.model_validate(record)
+
+    @app.delete(
+        "/api/v1/chat/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT
+    )
+    async def delete_chat_session(
+        session_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> Response:
+        chat_session = await services.repository.get_owned_chat_session(
+            session_id, user.id
+        )
+        if not chat_session:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        if chat_session.current_run_status in {"pending", "running", "interrupted"}:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "会话仍有运行中或等待确认的任务，请先取消",
+            )
+        thread_ids = await services.repository.list_session_thread_ids(
+            session_id, user.id
+        )
+        if thread_ids is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        try:
+            await services.delete_checkpoints(thread_ids)
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "会话 Checkpoint 清理失败，请稍后重试",
+            ) from exc
+        try:
+            deleted = await services.repository.delete_owned_chat_session(
+                session_id, user.id
+            )
+        except ChatActiveRunError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get(
+        "/api/v1/chat/sessions/{session_id}/messages",
+        response_model=list[ChatMessageRead],
+    )
+    async def list_chat_messages(
+        session_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+    ) -> list[ChatMessageRead]:
+        records = await services.repository.list_chat_messages(session_id, user.id)
+        if records is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        return [ChatMessageRead.model_validate(item) for item in records]
+
+    @app.post(
+        "/api/v1/chat/sessions/{session_id}/messages",
+        response_model=ChatSubmissionRead,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def submit_chat_message(
         session_id: str,
         payload: ChatMessageRequest,
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
-    ) -> StreamingResponse:
-        if not 1 <= len(session_id) <= 100:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "会话 ID 长度无效")
-        selected_paper_ids = payload.selected_paper_ids
-        if payload.scope == "collection":
-            if not payload.selected_collection_id:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "集合范围提问缺少 selected_collection_id",
-                )
+        client_message_id: Annotated[
+            str, Header(alias="Idempotency-Key", min_length=1, max_length=100)
+        ],
+    ) -> ChatSubmissionRead:
+        chat_session = await services.repository.get_owned_chat_session(
+            session_id, user.id
+        )
+        if not chat_session:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        if chat_session.type == "paper":
+            paper = await services.repository.get_owned_paper(
+                chat_session.paper_id or "", user.id
+            )
+            if not paper or paper.status not in {PaperStatus.ready, PaperStatus.partial}:
+                raise HTTPException(status.HTTP_409_CONFLICT, "绑定论文尚未完成索引")
+            paper_ids = [paper.id]
+        elif chat_session.type == "collection":
             resolved = await services.repository.resolve_collection_paper_ids(
-                payload.selected_collection_id,
-                user.id,
-                ready_only=True,
+                chat_session.collection_id or "", user.id, ready_only=True
             )
             if resolved is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "集合不存在")
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "绑定集合不存在")
             if not resolved:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "集合中暂无已完成索引、可提问的文献",
-                )
-            selected_paper_ids = resolved
-        run_id = str(uuid.uuid4())
-        thread_id = f"{user.id}:{session_id}:{run_id}"
-        initial = {
-            "run_id": run_id,
-            "session_id": session_id,
-            "user_id": user.id,
-            "query": payload.content,
-            "scope": payload.scope,
-            "selected_paper_ids": selected_paper_ids,
-            "web_enabled": payload.web_enabled,
-            "tool_steps": 0,
-            "status": "pending",
+                raise HTTPException(status.HTTP_409_CONFLICT, "集合暂无可提问文献")
+            paper_ids = resolved
+        else:
+            paper_ids = [
+                item.id
+                for item in await services.repository.list_papers(user.id)
+                if item.status in {PaperStatus.ready, PaperStatus.partial}
+            ]
+        scope_snapshot = {
+            "type": chat_session.type,
+            "paper_id": chat_session.paper_id,
+            "collection_id": chat_session.collection_id,
+            "paper_ids": paper_ids,
+            "web_enabled": bool(
+                payload.web_enabled
+                and UserPreferences.model_validate(
+                    getattr(user, "preferences", {}) or {}
+                ).arxiv_search_enabled
+            ),
         }
-        await services.repository.create_agent_run(run_id, user.id, session_id, thread_id)
-
-        async def events() -> AsyncIterator[str]:
-            run_started_at = time.perf_counter()
-            current_task = asyncio.current_task()
-            node_started_at: dict[str, float] = {}
-            node_attempt_offsets: dict[str, int] = {}
-            node_trace: list[dict[str, Any]] = []
-            attempt_buffer: list[Any] = []
-            result: dict[str, Any] = dict(initial)
-            if current_task:
-                await services.register_agent_task(run_id, current_task)
-            await services.repository.update_owned_agent_run(
-                run_id, user.id, status="running"
+        request_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "content": payload.content,
+                    "scope_snapshot": scope_snapshot,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        try:
+            submission = await services.repository.submit_chat_message(
+                session_id,
+                user.id,
+                payload.content,
+                client_message_id,
+                request_hash,
+                scope_snapshot,
             )
-            yield SSEEvent(event="run_started", run_id=run_id).encode()
-            try:
-                graph_config = {
-                    "recursion_limit": 8,
-                    "configurable": {"thread_id": thread_id},
-                }
-                with collect_model_attempts() as attempt_buffer:
-                    if hasattr(services.agent_graph, "astream"):
-                        async for graph_event in services.agent_graph.astream(
-                            initial, graph_config, stream_mode="debug"
-                        ):
-                            event_type = str(graph_event.get("type", ""))
-                            payload_data = graph_event.get("payload", {})
-                            if not isinstance(payload_data, dict):
-                                continue
-                            raw_node = str(payload_data.get("name", ""))
-                            task_id = str(payload_data.get("id", ""))
-                            step = int(graph_event.get("step", 0))
-                            if event_type == "task":
-                                if raw_node not in _PUBLIC_AGENT_NODES:
-                                    continue
-                                node_started_at[task_id] = time.perf_counter()
-                                node_attempt_offsets[task_id] = len(attempt_buffer)
-                                yield SSEEvent(
-                                    event="node_started",
-                                    run_id=run_id,
-                                    data={"node": raw_node, "step": step},
-                                ).encode()
-                                if raw_node == "retrieve_library":
-                                    yield SSEEvent(
-                                        event="tool_started",
-                                        run_id=run_id,
-                                        data={"tool": "search_library"},
-                                    ).encode()
-                                elif raw_node == "search_arxiv":
-                                    yield SSEEvent(
-                                        event="tool_started",
-                                        run_id=run_id,
-                                        data={"tool": "search_arxiv"},
-                                    ).encode()
-                                continue
-                            if event_type != "task_result":
-                                continue
-                            delta = payload_data.get("result")
-                            if isinstance(delta, dict):
-                                result.update(delta)
-                            interrupts = payload_data.get("interrupts")
-                            if interrupts:
-                                result["__interrupt__"] = interrupts
-                            if raw_node not in _PUBLIC_AGENT_NODES:
-                                continue
-                            duration_ms = round(
-                                (time.perf_counter() - node_started_at.pop(task_id, run_started_at))
-                                * 1000
-                            )
-                            offset = node_attempt_offsets.pop(task_id, len(attempt_buffer))
-                            node_model_attempts = [
-                                attempt.as_dict() for attempt in attempt_buffer[offset:]
-                            ]
-                            failed = bool(payload_data.get("error"))
-                            trace_item = {
-                                "node": raw_node,
-                                "step": step,
-                                "status": "failed" if failed else "completed",
-                                "duration_ms": duration_ms,
-                                "error_code": "NODE_EXECUTION_FAILED" if failed else None,
-                                "model_attempts": node_model_attempts,
-                            }
-                            node_trace.append(trace_item)
-                            yield SSEEvent(
-                                event="node_finished", run_id=run_id, data=trace_item
-                            ).encode()
-                            if raw_node == "grade_evidence":
-                                yield SSEEvent(
-                                    event="tool_finished",
-                                    run_id=run_id,
-                                    data={
-                                        "tool": "search_library",
-                                        "evidence_quality": dict(
-                                            result.get("evidence_quality", {})
-                                        ),
-                                    },
-                                ).encode()
-                            elif raw_node == "grade_answer_support":
-                                yield SSEEvent(
-                                    event="tool_finished",
-                                    run_id=run_id,
-                                    data={
-                                        "tool": "validate_answer",
-                                        "evidence_quality": dict(
-                                            result.get("evidence_quality", {})
-                                        ),
-                                    },
-                                ).encode()
-                            elif raw_node == "search_arxiv":
-                                yield SSEEvent(
-                                    event="tool_finished",
-                                    run_id=run_id,
-                                    data={
-                                        "tool": "search_arxiv",
-                                        "candidate_count": len(
-                                            result.get("arxiv_candidates", [])
-                                        ),
-                                    },
-                                ).encode()
-                    else:
-                        result = await services.agent_graph.ainvoke(initial, graph_config)
-                model_attempts = [attempt.as_dict() for attempt in attempt_buffer]
-                quality = dict(result.get("evidence_quality", {}))
-                interrupts = result.get("__interrupt__", [])
-                duration_ms = round((time.perf_counter() - run_started_at) * 1000)
-                if interrupts:
-                    pending = getattr(interrupts[0], "value", {})
-                    await services.repository.update_owned_agent_run(
-                        run_id,
-                        user.id,
-                        status="interrupted",
-                        tool_steps=int(result.get("tool_steps", 0)),
-                        pending_action=pending,
-                        result_summary={
-                            "answer": "",
-                            "citations": [],
-                            "evidence_quality": quality,
-                            "node_trace": node_trace,
-                            "model_attempts": model_attempts,
-                        },
-                        duration_ms=duration_ms,
-                    )
-                    yield SSEEvent(
-                        event="interrupt", run_id=run_id, data={"pending_action": pending}
-                    ).encode()
-                    return
-                citation_values = _citation_dicts(
-                    result.get("citations", []), result.get("retrieved_evidence", [])
-                )
-                await services.repository.update_owned_agent_run(
-                    run_id,
-                    user.id,
-                    status=result.get("status", "completed"),
-                    tool_steps=int(result.get("tool_steps", 0)),
-                    pending_action=None,
-                    result_summary={
-                        "answer": str(result.get("answer", "")),
-                        "citations": citation_values,
-                        "evidence_quality": quality,
-                        "node_trace": node_trace,
-                        "model_attempts": model_attempts,
-                    },
-                    duration_ms=duration_ms,
-                    error_code=result.get("error"),
-                )
-                answer = str(result.get("answer", ""))
-                # 最终答案先通过引用与证据门禁，再拆成较小 SSE 片段供界面渐进展示。
-                # 这避免把尚未核验的模型草稿提前暴露，同时让短回答也能看到流式效果。
-                for piece in re.findall(r".{1,16}", answer, flags=re.S):
-                    yield SSEEvent(
-                        event="message_delta", run_id=run_id, data={"delta": piece}
-                    ).encode()
-                    await asyncio.sleep(0)
-                for data in citation_values:
-                    yield SSEEvent(event="citation", run_id=run_id, data=data).encode()
-                yield SSEEvent(
-                    event="run_finished",
-                    run_id=run_id,
-                    data={
-                        "status": result.get("status", "completed"),
-                        "duration_ms": duration_ms,
-                    },
-                ).encode()
-            except asyncio.CancelledError:
-                duration_ms = round((time.perf_counter() - run_started_at) * 1000)
-                await services.repository.update_owned_agent_run(
-                    run_id,
-                    user.id,
-                    status="cancelled",
-                    pending_action=None,
-                    duration_ms=duration_ms,
-                    result_summary={
-                        "answer": "",
-                        "citations": [],
-                        "evidence_quality": dict(result.get("evidence_quality", {})),
-                        "node_trace": node_trace,
-                        "model_attempts": [
-                            attempt.as_dict() for attempt in attempt_buffer
-                        ],
-                    },
-                    error_code="AGENT_RUN_CANCELLED",
-                )
-                yield SSEEvent(
-                    event="run_finished",
-                    run_id=run_id,
-                    data={"status": "cancelled", "duration_ms": duration_ms},
-                ).encode()
-            except Exception:
-                duration_ms = round((time.perf_counter() - run_started_at) * 1000)
-                await services.repository.update_owned_agent_run(
-                    run_id,
-                    user.id,
-                    status="failed",
-                    error_code="AGENT_RUN_FAILED",
-                    duration_ms=duration_ms,
-                    result_summary={
-                        "answer": "",
-                        "citations": [],
-                        "evidence_quality": {},
-                        "node_trace": node_trace,
-                        "model_attempts": [
-                            attempt.as_dict() for attempt in attempt_buffer
-                        ],
-                    },
-                )
-                yield SSEEvent(
-                    event="error", run_id=run_id, data={"message": "Agent 运行失败"}
-                ).encode()
-            finally:
-                if current_task:
-                    await services.unregister_agent_task(run_id, current_task)
-
-        return StreamingResponse(
-            events(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
+        except ChatIdempotencyConflictError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except ChatActiveRunError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        if not submission:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        if config.is_demo and not submission.replayed:
+            await services.launch_local_agent_run(submission.run.id)
+        return ChatSubmissionRead(
+            session_id=session_id,
+            message_id=submission.message.id,
+            run_id=submission.run.id,
+            status="pending",
+            replayed=submission.replayed,
         )
 
     @app.get("/api/v1/agent/runs/{run_id}", response_model=AgentRunRead)
@@ -1280,6 +1323,78 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "运行不存在")
         return _agent_run_read(run)
 
+    @app.get("/api/v1/agent/runs/{run_id}/events")
+    async def get_agent_run_events(
+        run_id: str,
+        request: Request,
+        user: Annotated[UserRecord, Depends(current_user)],
+        last_event_id: Annotated[
+            Optional[str], Header(alias="Last-Event-ID")
+        ] = None,
+    ) -> StreamingResponse:
+        run = await services.repository.get_owned_agent_run(run_id, user.id)
+        if not run:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "运行不存在")
+        try:
+            after_sequence = int(last_event_id or "0")
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "Last-Event-ID 必须是事件序号"
+            ) from exc
+        if after_sequence < 0:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "Last-Event-ID 不能为负数"
+            )
+
+        async def persisted_events() -> AsyncIterator[str]:
+            cursor = after_sequence
+            last_heartbeat = time.monotonic()
+            while True:
+                records = await services.repository.list_owned_agent_run_events(
+                    run_id, user.id, cursor
+                )
+                if records is None:
+                    return
+                for record in records:
+                    cursor = record.sequence
+                    body = AgentRunEventRead(
+                        id=record.sequence,
+                        sequence=record.sequence,
+                        event=record.event,
+                        run_id=record.run_id,
+                        data=record.data or {},
+                        created_at=record.created_at,
+                    )
+                    yield (
+                        f"id: {record.sequence}\n"
+                        f"event: {record.event}\n"
+                        f"data: {body.model_dump_json()}\n\n"
+                    )
+                    last_heartbeat = time.monotonic()
+                current = await services.repository.get_owned_agent_run(run_id, user.id)
+                if not current or current.status in {
+                    "interrupted",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    return
+                if await request.is_disconnected():
+                    return
+                if time.monotonic() - last_heartbeat >= 15:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = time.monotonic()
+                await asyncio.sleep(0.25)
+
+        return StreamingResponse(
+            persisted_events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.post("/api/v1/agent/runs/{run_id}/resume", response_model=AgentRunRead)
     async def resume_agent_run(
         run_id: str,
@@ -1287,57 +1402,16 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> AgentRunRead:
-        run = await services.repository.get_owned_agent_run(run_id, user.id)
+        try:
+            run = await services.repository.resume_owned_agent_run(
+                run_id, user.id, payload.action_id, payload.decision
+            )
+        except (ChatIdempotencyConflictError, ChatActiveRunError) as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         if not run:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "运行不存在")
-        if run.status != "interrupted":
-            raise HTTPException(status.HTTP_409_CONFLICT, "运行未在等待确认")
-        pending = run.pending_action or {}
-        if pending.get("action_id") != payload.action_id:
-            raise HTTPException(status.HTTP_409_CONFLICT, "待确认动作不匹配")
-        if not config.is_demo:
-            from langgraph.types import Command
-
-            result = await services.agent_graph.ainvoke(
-                Command(resume=payload.decision),
-                {
-                    "recursion_limit": 8,
-                    "configurable": {"thread_id": run.thread_id},
-                },
-            )
-            await services.repository.update_owned_agent_run(
-                run_id,
-                user.id,
-                status=result.get("status", "completed"),
-                tool_steps=int(result.get("tool_steps", run.tool_steps)),
-                pending_action=None,
-                result_summary={
-                    "answer": str(result.get("answer", "")),
-                    "citations": _citation_dicts(
-                        result.get("citations", []), result.get("retrieved_evidence", [])
-                    ),
-                    "evidence_quality": dict(result.get("evidence_quality", {})),
-                },
-                error_code=result.get("error"),
-            )
-        else:
-            await services.repository.update_owned_agent_run(
-                run_id,
-                user.id,
-                status="completed",
-                pending_action=None,
-                result_summary={
-                    "answer": (
-                        "已批准导入，请选择候选文献并调用受控导入接口。"
-                        if payload.decision == "approve"
-                        else "已取消导入。"
-                    ),
-                    "citations": [],
-                    "evidence_quality": run.result_summary.get("evidence_quality", {})
-                    if run.result_summary
-                    else {},
-                },
-            )
+        if config.is_demo and run.status == "pending":
+            await services.launch_local_agent_run(run_id)
         return await get_agent_run(run_id, user)
 
     @app.post("/api/v1/agent/runs/{run_id}/cancel", response_model=AgentRunRead)
@@ -1346,22 +1420,14 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> AgentRunRead:
-        run = await services.repository.get_owned_agent_run(run_id, user.id)
+        try:
+            run = await services.repository.cancel_owned_agent_run(run_id, user.id)
+        except ChatActiveRunError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         if not run:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "运行不存在")
-        if run.status == "cancelled":
-            return _agent_run_read(run)
-        if run.status in {"completed", "failed"}:
-            raise HTTPException(status.HTTP_409_CONFLICT, "运行已经结束")
-        await services.repository.update_owned_agent_run(
-            run_id,
-            user.id,
-            status="cancelled",
-            pending_action=None,
-            error_code="AGENT_RUN_CANCELLED",
-        )
         await services.cancel_agent_task(run_id)
-        return await get_agent_run(run_id, user)
+        return _agent_run_read(run)
 
     return app
 

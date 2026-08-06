@@ -14,7 +14,12 @@ describe("parseSseChunk", () => {
   });
 
   it("解包后端 SSE envelope", () => {
-    const [event] = parseSseChunk('event: message_delta\ndata: {"event":"message_delta","run_id":"run-9","data":{"delta":"证据"}}\n\n');
-    expect(event).toEqual({ type: "message_delta", id: "run-9", data: { delta: "证据" } });
+    const [event] = parseSseChunk('id: 7\nevent: message_delta\ndata: {"id":7,"sequence":7,"event":"message_delta","run_id":"run-9","data":{"delta":"证据"}}\n\n');
+    expect(event).toEqual({ type: "message_delta", id: "7", data: { delta: "证据" } });
+  });
+
+  it("没有 SSE id 时使用 envelope sequence，不把 run_id 当游标", () => {
+    const [event] = parseSseChunk('event: citation\ndata: {"sequence":9,"event":"citation","run_id":"run-9","data":{"chunk_id":"c1"}}\n\n');
+    expect(event).toEqual({ type: "citation", id: "9", data: { chunk_id: "c1" } });
   });
 });

@@ -1,6 +1,7 @@
 """层级集合、递归论文范围与出版物字段测试。"""
 
 import asyncio
+import time
 import uuid
 from dataclasses import replace
 
@@ -244,17 +245,30 @@ def test_collection_tree_api_filters_and_collection_chat_scope(
         assert publication.status_code == 200
         assert publication.json()["publication"] == "Bioinformatics"
 
-        chat = client.post(
-            "/api/v1/chat/sessions/collection-test/messages",
+        chat_session = client.post(
+            "/api/v1/chat/sessions",
             headers={"X-CSRF-Token": csrf},
             json={
-                "content": "比较这些论文",
-                "scope": "collection",
-                "selected_collection_id": root["id"],
-                "selected_paper_ids": [paper_ids[3]],
+                "title": "DTA 集合问答",
+                "type": "collection",
+                "collection_id": root["id"],
             },
         )
-        assert chat.status_code == 200
+        assert chat_session.status_code == 201
+        chat = client.post(
+            f"/api/v1/chat/sessions/{chat_session.json()['id']}/messages",
+            headers={
+                "X-CSRF-Token": csrf,
+                "Idempotency-Key": "collection-message-1",
+            },
+            json={"content": "比较这些论文"},
+        )
+        assert chat.status_code == 202
+        for _ in range(100):
+            if captured:
+                break
+            time.sleep(0.01)
+        assert captured
         assert set(captured[0]["selected_paper_ids"]) == set(paper_ids[:2])
 
     async def create_other_user():
@@ -275,12 +289,12 @@ def test_collection_tree_api_filters_and_collection_chat_scope(
         assert other_login.status_code == 200 and other_csrf
         assert other_client.get(f"/api/v1/papers?collection_id={root['id']}").json() == []
         other_chat = other_client.post(
-            "/api/v1/chat/sessions/cross-user/messages",
+            "/api/v1/chat/sessions",
             headers={"X-CSRF-Token": other_csrf},
             json={
-                "content": "不应泄漏",
-                "scope": "collection",
-                "selected_collection_id": root["id"],
+                "title": "不应泄漏",
+                "type": "collection",
+                "collection_id": root["id"],
             },
         )
         assert other_chat.status_code == 404

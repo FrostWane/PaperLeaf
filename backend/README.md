@@ -80,20 +80,35 @@ RAG 检索与引用校验是独立实现；LangGraph 只负责状态、条件路
 ```json
 {
   "content": "这篇论文的核心贡献是什么？",
-  "scope": "paper",
-  "selected_paper_ids": ["paper-id"],
   "web_enabled": false
 }
 ```
 
-响应为 `text/event-stream`。每帧保持以下格式：
+请求必须携带 `Idempotency-Key`。API 会在一个事务内保存用户消息、助手占位消息、Agent Run、
+服务端解析的论文范围快照和唯一后台作业，然后返回 `202`：
+
+```json
+{
+  "session_id": "...",
+  "message_id": "...",
+  "run_id": "...",
+  "status": "pending",
+  "replayed": false
+}
+```
+
+重复键且请求内容一致时返回原结果；同一键对应不同内容时返回 `409`。真正的 LangGraph 运行由
+Worker 领取 `agent_run` 作业执行，不依赖原 HTTP 请求或浏览器连接继续存活。
+
+前端随后连接 `GET /api/v1/agent/runs/{run_id}/events`。事件先写入 PostgreSQL，再以
+`text/event-stream` 返回；断线重连可用 `Last-Event-ID` 补发遗漏事件。每帧保持以下格式：
 
 ```text
 event: message_delta
 data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 ```
 
-事件名固定为：`run_started`、`node_started`、`tool_started`、`tool_finished`、
+公开事件名固定为：`run_started`、`node_started`、`tool_started`、`tool_finished`、
 `message_delta`、`citation`、`interrupt`、`error`、`run_finished`。`interrupt` 的
 `data.pending_action` 包含 `action_id`、候选文献和允许决定；前端通过
 `POST /api/v1/agent/runs/{run_id}/resume` 提交：
@@ -102,7 +117,9 @@ data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 {"action_id":"...","decision":"approve"}
 ```
 
-前端只展示工具活动摘要，不展示或推断隐藏推理过程。
+前端只展示工具活动摘要，不展示或推断隐藏推理过程。回答不是原始模型 token 直出：Worker
+先在内存中缓冲完整事实段落，校验其 Chunk 引用属于当次召回证据并通过支持检查，再把段落
+原子写入消息与事件表；未通过的段落不会成为用户可见内容。
 
 `tool_finished.data.evidence_quality` 给出页级证据数量、检索通道、检索置信度、
 `retrieval_grade` 与可选的 `answer_support_grade`。这些字段是服务端质量门禁的公开摘要，

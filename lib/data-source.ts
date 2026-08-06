@@ -1,7 +1,7 @@
 import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
-import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvidenceQuality, ArxivResult, BulkPaperActionInput, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, UserRecord } from "./types";
+import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, BulkPaperActionInput, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -151,6 +151,126 @@ function mapAgentCitation(item: Record<string, unknown>, fallbackIndex: number):
     quote: String(item.excerpt ?? item.quote ?? item.text ?? ""),
     href: `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/file#page=${page}`,
   };
+}
+
+function mapChatSession(item: Record<string, unknown>): ChatSession {
+  const type = String(item.type ?? "library");
+  const rawStatus = item.current_run_status ? String(item.current_run_status) : undefined;
+  const statuses: AgentRunStatus[] = ["pending", "running", "interrupted", "completed", "failed", "cancelled"];
+  return {
+    id: String(item.id ?? item.session_id ?? ""),
+    title: String(item.title ?? "新对话"),
+    type: (type === "paper" || type === "collection" ? type : "library") as ChatSessionType,
+    paperId: item.paper_id ? String(item.paper_id) : undefined,
+    collectionId: item.collection_id ? String(item.collection_id) : undefined,
+    currentRunId: item.current_run_id ? String(item.current_run_id) : undefined,
+    currentRunStatus: rawStatus && statuses.includes(rawStatus as AgentRunStatus) ? rawStatus as AgentRunStatus : undefined,
+    createdAt: String(item.created_at ?? new Date(0).toISOString()),
+    updatedAt: String(item.updated_at ?? item.created_at ?? new Date(0).toISOString()),
+  };
+}
+
+function mapChatMessage(item: Record<string, unknown>): ChatMessage {
+  const rawCitations = Array.isArray(item.citations) ? item.citations : [];
+  return {
+    id: String(item.id ?? ""),
+    sessionId: String(item.session_id ?? ""),
+    role: item.role === "assistant" ? "assistant" : "user",
+    sequence: Number(item.sequence ?? 1),
+    status: item.status === "pending" || item.status === "streaming" || item.status === "failed" || item.status === "cancelled" ? item.status : "completed",
+    content: String(item.content ?? ""),
+    citations: rawCitations.map((citation, index) => mapAgentCitation(citation as Record<string, unknown>, index)),
+    runId: item.run_id ? String(item.run_id) : undefined,
+    createdAt: String(item.created_at ?? new Date(0).toISOString()),
+    updatedAt: String(item.updated_at ?? item.created_at ?? new Date(0).toISOString()),
+  };
+}
+
+function publicAgentError(value: unknown): string | undefined {
+  if (!value) return undefined;
+  const code = String(value);
+  const known: Record<string, string> = {
+    model_timeout: "模型响应超时，请稍后重试",
+    invalid_citation: "回答引用未通过核验",
+    citation_validation_failed: "回答引用未通过核验",
+    model_unavailable: "回答模型暂时不可用",
+    cancelled: "问答已取消",
+    internal_error: "问答运行遇到内部错误",
+  };
+  return known[code] ?? (/^[a-z0-9_.-]+$/i.test(code) ? "问答运行失败，请稍后重试" : code);
+}
+
+function mapAgentRun(item: Record<string, unknown>): AgentRunSnapshot {
+  const rawStatus = String(item.status ?? "pending");
+  const status: AgentRunStatus = rawStatus === "running" || rawStatus === "interrupted" || rawStatus === "completed" || rawStatus === "failed" || rawStatus === "cancelled" ? rawStatus : "pending";
+  const rawCitations = Array.isArray(item.citations) ? item.citations : [];
+  const rawQuality = item.evidence_quality;
+  const rawAction = item.pending_action;
+  const pendingAction = rawAction && typeof rawAction === "object" ? rawAction as Record<string, unknown> : undefined;
+  return {
+    runId: String(item.run_id ?? item.id ?? ""),
+    sessionId: String(item.session_id ?? ""),
+    status,
+    cancelRequested: item.cancel_requested === true,
+    pendingAction: pendingAction ? {
+      actionId: String(pendingAction.action_id ?? ""),
+      type: String(pendingAction.type ?? ""),
+      riskMessage: String(pendingAction.risk_message ?? "此操作需要你确认"),
+      allowedDecisions: Array.isArray(pendingAction.allowed_decisions) ? pendingAction.allowed_decisions.map(String) : [],
+      candidates: Array.isArray(pendingAction.candidates) ? pendingAction.candidates.filter((candidate) => candidate && typeof candidate === "object").map((candidate) => {
+        const raw = candidate as Record<string, unknown>;
+        return { arxivId: raw.arxiv_id ? String(raw.arxiv_id) : undefined, title: raw.title ? String(raw.title) : undefined, authors: Array.isArray(raw.authors) ? raw.authors.map(String) : raw.authors ? String(raw.authors) : undefined, abstract: raw.abstract ? String(raw.abstract) : undefined, published: raw.published ? String(raw.published) : undefined, pdfUrl: raw.pdf_url ? String(raw.pdf_url) : undefined, journalRef: raw.journal_ref ? String(raw.journal_ref) : undefined };
+      }) : [],
+    } : undefined,
+    answer: visibleAgentAnswer(String(item.answer ?? "")),
+    citations: rawCitations.map((citation, index) => mapAgentCitation(citation as Record<string, unknown>, index)),
+    evidenceQuality: rawQuality && typeof rawQuality === "object" ? mapEvidenceQuality(rawQuality as Record<string, unknown>) : undefined,
+    error: publicAgentError(item.error),
+    createdAt: String(item.created_at ?? new Date(0).toISOString()),
+    updatedAt: String(item.updated_at ?? item.created_at ?? new Date(0).toISOString()),
+  };
+}
+
+function isTerminalRun(status: AgentRunStatus): boolean {
+  return status === "interrupted" || status === "completed" || status === "failed" || status === "cancelled";
+}
+
+interface AgentEventAccumulator {
+  answer: string;
+  citations: Citation[];
+}
+
+function dispatchAgentEvent(event: AgentEvent, handlers: AgentEventSubscriptionHandlers, accumulator: AgentEventAccumulator): void {
+  const addCitations = (rawCitations: unknown[]): boolean => {
+    let changed = false;
+    for (const rawCitation of rawCitations) {
+      if (!rawCitation || typeof rawCitation !== "object") continue;
+      const citation = mapAgentCitation(rawCitation as Record<string, unknown>, accumulator.citations.length);
+      if (accumulator.citations.some((item) => item.chunkId === citation.chunkId && item.paperId === citation.paperId && item.page === citation.page)) continue;
+      accumulator.citations.push(citation);
+      changed = true;
+    }
+    if (changed) handlers.onCitationsUpdate?.(accumulator.citations.map((item) => ({ ...item })));
+    return changed;
+  };
+  handlers.onEvent?.(event);
+  if (event.type === "node_started" || event.type === "node_finished") {
+    const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : ((event.data as Record<string, unknown>)?.status === "failed" ? "failed" : "completed"));
+    if (activity) handlers.onActivity?.(activity);
+  }
+  if (event.type === "message_delta" && event.data && typeof event.data === "object" && "delta" in event.data) {
+    const delta = event.data as { delta: unknown; citations?: unknown };
+    if (Array.isArray(delta.citations)) addCitations(delta.citations);
+    accumulator.answer += String(delta.delta);
+    handlers.onAnswerUpdate?.(visibleAgentAnswer(accumulator.answer));
+  }
+  if (event.type === "citation" && event.data && typeof event.data === "object") {
+    addCitations([event.data]);
+  }
+  if (event.type === "tool_finished" && event.data && typeof event.data === "object" && "evidence_quality" in event.data) {
+    const quality = (event.data as { evidence_quality?: unknown }).evidence_quality;
+    if (quality && typeof quality === "object") handlers.onEvidenceQualityUpdate?.(mapEvidenceQuality(quality as Record<string, unknown>));
+  }
 }
 
 export async function login(email: string, password: string): Promise<SessionUser> {
@@ -332,6 +452,16 @@ export interface PaperLeafDataSource {
   deleteCollection(collectionId: string): Promise<void>;
   bulkPapers(input: BulkPaperActionInput): Promise<void>;
   recordPaperOpened(paperId: string): Promise<Paper>;
+  listChatSessions(): Promise<ChatSession[]>;
+  createChatSession(input: ChatSessionInput): Promise<ChatSession>;
+  updateChatSession(sessionId: string, title: string): Promise<ChatSession>;
+  deleteChatSession(sessionId: string): Promise<void>;
+  listChatMessages(sessionId: string): Promise<ChatMessage[]>;
+  submitChatMessage(sessionId: string, content: string, idempotencyKey: string, options?: { webEnabled?: boolean }): Promise<ChatMessageSubmission>;
+  getAgentRun(runId: string): Promise<AgentRunSnapshot>;
+  subscribeAgentRun(runId: string, handlers: AgentEventSubscriptionHandlers, options?: { signal?: AbortSignal; lastEventId?: number }): Promise<void>;
+  cancelAgentRun(runId: string): Promise<AgentRunSnapshot>;
+  resumeAgentRun(runId: string, actionId: string, decision: string): Promise<AgentRunSnapshot>;
   fileUrl(paperId: string): string;
 }
 
@@ -348,8 +478,185 @@ let demoCollections: PaperCollection[] = [
   { id: "follow-up", name: "近期跟进", description: "仍需继续核对的新方向", parentId: null, paperIds: ["graphrag"], recursivePaperCount: 1, children: [] },
 ];
 
+let demoSequence = 20;
+const demoNow = "2026-08-06T09:30:00.000Z";
+const initialDemoChatSessions: ChatSession[] = [
+  { id: "demo-session-paper", title: "Transformer 的核心贡献", type: "paper", paperId: "attention", createdAt: demoNow, updatedAt: "2026-08-06T10:12:00.000Z" },
+  { id: "demo-session-library", title: "核心方法对比", type: "collection", collectionId: "core-methods", createdAt: demoNow, updatedAt: "2026-08-06T10:06:00.000Z" },
+];
+const initialDemoChatMessages: Array<[string, ChatMessage[]]> = [
+  ["demo-session-paper", [
+    { id: "demo-message-p1", sessionId: "demo-session-paper", role: "user", sequence: 1, status: "completed", content: "这篇论文解决了什么问题？", citations: [], createdAt: demoNow, updatedAt: demoNow },
+    { id: "demo-message-p2", sessionId: "demo-session-paper", role: "assistant", sequence: 2, status: "completed", content: "## 研究问题\n\n论文希望在不使用循环或卷积的前提下完成序列建模，并提升训练并行度。[^1]\n\n**核心判断：** 自注意力把任意位置之间的路径长度缩短为常数级，同时保留可并行计算的矩阵操作。\n\n| 维度 | Transformer | RNN |\n| --- | --- | --- |\n| 顺序计算 | 少 | 多 |\n| 长距离路径 | 常数级 | 随距离增长 |\n\n```text\nAttention(Q, K, V) = softmax(QKᵀ / √dₖ)V\n```", citations: groundedAnswer.citations.map((citation) => ({ ...citation })), createdAt: "2026-08-06T10:12:00.000Z", updatedAt: "2026-08-06T10:12:00.000Z" },
+  ]],
+  ["demo-session-library", [
+    { id: "demo-message-l1", sessionId: "demo-session-library", role: "user", sequence: 1, status: "completed", content: "这些论文怎样处理外部证据？", citations: [], createdAt: demoNow, updatedAt: demoNow },
+    { id: "demo-message-l2", sessionId: "demo-session-library", role: "assistant", sequence: 2, status: "completed", content: "不同方法都把外部证据作为可回读的上下文，但检索粒度和证据组织方式不同。当前回答保留了物理页码，便于回到原文核对。", citations: groundedAnswer.citations.slice(0, 2), createdAt: "2026-08-06T10:06:00.000Z", updatedAt: "2026-08-06T10:06:00.000Z" },
+  ]],
+];
+let demoChatSessions: ChatSession[] = initialDemoChatSessions.map(demoSessionCopy);
+const demoChatMessages = new Map<string, ChatMessage[]>(initialDemoChatMessages.map(([sessionId, messages]) => [sessionId, messages.map((message) => ({ ...message, citations: message.citations.map((citation) => ({ ...citation })) }))]));
+const demoRuns = new Map<string, AgentRunSnapshot>();
+const demoRunEvents = new Map<string, AgentEvent[]>();
+const demoIdempotency = new Map<string, { content: string; submission: ChatMessageSubmission }>();
+const demoExecutingRuns = new Set<string>();
+const DEMO_CHAT_STORAGE_KEY = "paperleaf:demo-chat:v1";
+let demoChatHydrated = false;
+
+type PersistedDemoChatState = {
+  sequence: number;
+  sessions: ChatSession[];
+  messages: Array<[string, ChatMessage[]]>;
+  runs: Array<[string, AgentRunSnapshot]>;
+  events: Array<[string, AgentEvent[]]>;
+  idempotency: Array<[string, { content: string; submission: ChatMessageSubmission }]>;
+};
+
+function persistDemoChatState(): void {
+  if (typeof window === "undefined") return;
+  const state: PersistedDemoChatState = {
+    sequence: demoSequence,
+    sessions: demoChatSessions,
+    messages: [...demoChatMessages.entries()],
+    runs: [...demoRuns.entries()],
+    events: [...demoRunEvents.entries()],
+    idempotency: [...demoIdempotency.entries()],
+  };
+  window.localStorage.setItem(DEMO_CHAT_STORAGE_KEY, JSON.stringify(state));
+}
+
+function ensureDemoChatHydrated(): void {
+  if (demoChatHydrated || typeof window === "undefined") return;
+  demoChatHydrated = true;
+  try {
+    const raw = window.localStorage.getItem(DEMO_CHAT_STORAGE_KEY);
+    if (raw) {
+      const stored = JSON.parse(raw) as PersistedDemoChatState;
+      demoSequence = Number.isFinite(stored.sequence) ? stored.sequence : demoSequence;
+      demoChatSessions = Array.isArray(stored.sessions) ? stored.sessions.map(demoSessionCopy) : demoChatSessions;
+      demoChatMessages.clear();
+      for (const [sessionId, messages] of stored.messages ?? []) demoChatMessages.set(sessionId, messages);
+      demoRuns.clear();
+      for (const [runId, run] of stored.runs ?? []) demoRuns.set(runId, run);
+      demoRunEvents.clear();
+      for (const [runId, events] of stored.events ?? []) demoRunEvents.set(runId, events);
+      demoIdempotency.clear();
+      for (const [key, value] of stored.idempotency ?? []) demoIdempotency.set(key, value);
+    }
+  } catch {
+    window.localStorage.removeItem(DEMO_CHAT_STORAGE_KEY);
+  }
+  for (const run of demoRuns.values()) {
+    if (run.status !== "pending" && run.status !== "running") continue;
+    const question = [...(demoChatMessages.get(run.sessionId) ?? [])].reverse().find((message) => message.role === "user" && message.runId === run.runId)?.content;
+    if (!question) continue;
+    // 整页导航会销毁旧计时器；Demo 从已持久化的用户消息重新执行确定性流程。
+    run.answer = "";
+    run.citations = [];
+    demoRunEvents.set(run.runId, []);
+    void executeDemoRun(run.runId, question);
+  }
+}
+
 function demoId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}`;
+  demoSequence += 1;
+  return `${prefix}-${demoSequence}`;
+}
+
+function demoSessionCopy(session: ChatSession): ChatSession {
+  return { ...session };
+}
+
+/** 仅供测试与 Storybook 隔离模块级 Demo 状态；产品代码不应调用。 */
+export function resetDemoChatStateForTests(): void {
+  demoSequence = 20;
+  demoChatSessions = initialDemoChatSessions.map(demoSessionCopy);
+  demoChatMessages.clear();
+  for (const [sessionId, messages] of initialDemoChatMessages) {
+    demoChatMessages.set(sessionId, messages.map((message) => ({ ...message, citations: message.citations.map((citation) => ({ ...citation })) })));
+  }
+  demoRuns.clear();
+  demoRunEvents.clear();
+  demoIdempotency.clear();
+  demoExecutingRuns.clear();
+  demoChatHydrated = true;
+  if (typeof window !== "undefined") window.localStorage.removeItem(DEMO_CHAT_STORAGE_KEY);
+}
+
+function emitDemoRunEvent(runId: string, type: AgentEvent["type"], data: unknown): void {
+  const events = demoRunEvents.get(runId) ?? [];
+  events.push({ id: String(events.length + 1), type, data });
+  demoRunEvents.set(runId, events);
+  persistDemoChatState();
+}
+
+function updateDemoSessionRun(sessionId: string, run: AgentRunSnapshot): void {
+  demoChatSessions = demoChatSessions.map((session) => session.id === sessionId ? {
+    ...session,
+    currentRunId: run.runId,
+    currentRunStatus: run.status,
+    updatedAt: run.updatedAt,
+  } : session);
+  persistDemoChatState();
+}
+
+async function executeDemoRun(runId: string, question: string): Promise<void> {
+  const run = demoRuns.get(runId);
+  if (!run || demoExecutingRuns.has(runId)) return;
+  demoExecutingRuns.add(runId);
+  try {
+  run.status = "running";
+  run.updatedAt = new Date().toISOString();
+  updateDemoSessionRun(run.sessionId, run);
+  emitDemoRunEvent(runId, "run_started", { status: "running" });
+  const nodes = [
+    ["retrieve_library", "正在检索文献证据"],
+    ["generate_answer", "正在生成已核验段落"],
+    ["validate_citations", "正在核验引用页码"],
+  ] as const;
+  for (const [index, [node]] of nodes.entries()) {
+    if (run.cancelRequested) break;
+    emitDemoRunEvent(runId, "node_started", { node, step: index + 1 });
+    await wait(150);
+    emitDemoRunEvent(runId, "node_finished", { node, step: index + 1, status: "completed", duration_ms: 110 + index * 18 });
+  }
+  if (run.cancelRequested) {
+    run.status = "cancelled";
+    run.updatedAt = new Date().toISOString();
+    updateDemoSessionRun(run.sessionId, run);
+    emitDemoRunEvent(runId, "run_finished", { status: "cancelled" });
+    return;
+  }
+  const paragraphs = [
+    `## 回答\n\n针对“${question}”，现有证据显示：Transformer 通过自注意力缩短长距离依赖的计算路径，并允许训练阶段并行处理序列位置。`,
+    "\n\n**核验结论：** 这一判断来自论文方法与实验部分；引用按钮可以直接回到对应物理页。",
+  ];
+  const citations = groundedAnswer.citations.slice(0, 2).map((item) => ({ ...item }));
+  for (const paragraph of paragraphs) {
+    run.answer += paragraph;
+    run.updatedAt = new Date().toISOString();
+    emitDemoRunEvent(runId, "message_delta", { delta: paragraph });
+    await wait(100);
+  }
+  run.citations = citations;
+  citations.forEach((citation) => emitDemoRunEvent(runId, "citation", {
+    paper_id: citation.paperId,
+    paper_title: citation.paperTitle,
+    physical_page: citation.page,
+    chunk_id: citation.chunkId,
+    excerpt: citation.quote,
+  }));
+  run.status = "completed";
+  run.evidenceQuality = groundedAnswer.evidenceQuality;
+  run.updatedAt = new Date().toISOString();
+  const messages = demoChatMessages.get(run.sessionId) ?? [];
+  messages.push({ id: demoId("assistant-message"), sessionId: run.sessionId, role: "assistant", sequence: messages.length + 1, status: "completed", content: run.answer, citations, runId, createdAt: run.updatedAt, updatedAt: run.updatedAt });
+  demoChatMessages.set(run.sessionId, messages);
+  updateDemoSessionRun(run.sessionId, run);
+  emitDemoRunEvent(runId, "run_finished", { status: "completed" });
+  } finally {
+    demoExecutingRuns.delete(runId);
+  }
 }
 
 function flattenDemoCollections(collections: PaperCollection[]): PaperCollection[] {
@@ -488,6 +795,128 @@ export const demoDataSource: PaperLeafDataSource = {
     demoCollections = flat.map((collection) => ({ ...collection, recursivePaperCount: 0 }));
   },
   async recordPaperOpened(paperId) { await wait(80); const current = demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; const updated = { ...current, lastOpenedAt: new Date().toISOString() }; demoPapers = demoPapers.map((paper) => paper.id === paperId ? updated : paper); return updated; },
+  async listChatSessions() {
+    await wait(50);
+    return [...demoChatSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(demoSessionCopy);
+  },
+  async createChatSession(input) {
+    await wait(70);
+    const timestamp = new Date().toISOString();
+    const session: ChatSession = {
+      id: demoId("session"),
+      title: input.title?.trim() || "新对话",
+      type: input.type,
+      paperId: input.paperId,
+      collectionId: input.collectionId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    demoChatSessions = [session, ...demoChatSessions];
+    demoChatMessages.set(session.id, []);
+    persistDemoChatState();
+    return demoSessionCopy(session);
+  },
+  async updateChatSession(sessionId, title) {
+    await wait(60);
+    const current = demoChatSessions.find((session) => session.id === sessionId);
+    if (!current) throw new Error("对话不存在");
+    const updated = { ...current, title: title.trim() || current.title, updatedAt: new Date().toISOString() };
+    demoChatSessions = demoChatSessions.map((session) => session.id === sessionId ? updated : session);
+    persistDemoChatState();
+    return demoSessionCopy(updated);
+  },
+  async deleteChatSession(sessionId) {
+    await wait(60);
+    const active = demoChatSessions.find((session) => session.id === sessionId)?.currentRunStatus;
+    if (active === "pending" || active === "running" || active === "interrupted") throw new Error("请先取消正在运行的问答");
+    demoChatSessions = demoChatSessions.filter((session) => session.id !== sessionId);
+    demoChatMessages.delete(sessionId);
+    persistDemoChatState();
+  },
+  async listChatMessages(sessionId) {
+    await wait(45);
+    return (demoChatMessages.get(sessionId) ?? []).map((message) => ({ ...message, citations: message.citations.map((item) => ({ ...item })) }));
+  },
+  async submitChatMessage(sessionId, content, idempotencyKey) {
+    await wait(55);
+    const idempotencyScope = `${sessionId}:${idempotencyKey}`;
+    const replay = demoIdempotency.get(idempotencyScope);
+    if (replay) {
+      if (replay.content !== content) throw new Error("同一幂等键不能提交不同问题");
+      return { ...replay.submission, replayed: true };
+    }
+    const session = demoChatSessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error("对话不存在");
+    if (session.currentRunStatus === "pending" || session.currentRunStatus === "running" || session.currentRunStatus === "interrupted") throw new Error("当前对话仍在运行，请等待完成或主动取消");
+    const timestamp = new Date().toISOString();
+    const messageId = demoId("user-message");
+    const runId = demoId("run");
+    const messages = demoChatMessages.get(sessionId) ?? [];
+    messages.push({ id: messageId, sessionId, role: "user", sequence: messages.length + 1, status: "completed", content, citations: [], runId, createdAt: timestamp, updatedAt: timestamp });
+    demoChatMessages.set(sessionId, messages);
+    const run: AgentRunSnapshot = { runId, sessionId, status: "pending", cancelRequested: false, answer: "", citations: [], createdAt: timestamp, updatedAt: timestamp };
+    demoRuns.set(runId, run);
+    demoRunEvents.set(runId, []);
+    updateDemoSessionRun(sessionId, run);
+    const submission: ChatMessageSubmission = { sessionId, messageId, runId, status: "pending", replayed: false };
+    demoIdempotency.set(idempotencyScope, { content, submission });
+    persistDemoChatState();
+    void executeDemoRun(runId, content);
+    return { ...submission };
+  },
+  async getAgentRun(runId) {
+    await wait(35);
+    const run = demoRuns.get(runId);
+    if (!run) throw new Error("问答运行不存在");
+    return { ...run, citations: run.citations.map((item) => ({ ...item })) };
+  },
+  async subscribeAgentRun(runId, handlers, options) {
+    let cursor = options?.lastEventId ?? 0;
+    const accumulator: AgentEventAccumulator = { answer: "", citations: [] };
+    const pendingEvents = new Map<number, AgentEvent>();
+    handlers.onConnectionState?.("connected");
+    while (!options?.signal?.aborted) {
+      const events = demoRunEvents.get(runId) ?? [];
+      for (const event of events) {
+        const sequence = Number(event.id ?? 0);
+        if (sequence <= cursor) continue;
+        pendingEvents.set(sequence, event);
+        while (pendingEvents.has(cursor + 1)) {
+          const next = pendingEvents.get(cursor + 1)!;
+          pendingEvents.delete(cursor + 1);
+          cursor += 1;
+          dispatchAgentEvent(next, handlers, accumulator);
+        }
+      }
+      const run = demoRuns.get(runId);
+      if (!run) throw new Error("问答运行不存在");
+      if (options?.signal?.aborted) return;
+      handlers.onRunUpdate?.({ ...run, citations: run.citations.map((item) => ({ ...item })) });
+      if (isTerminalRun(run.status)) return;
+      await wait(40);
+    }
+  },
+  async cancelAgentRun(runId) {
+    await wait(40);
+    const run = demoRuns.get(runId);
+    if (!run) throw new Error("问答运行不存在");
+    if (run.status === "completed" || run.status === "failed") throw new Error("已结束的问答不能取消");
+    run.cancelRequested = true;
+    run.updatedAt = new Date().toISOString();
+    persistDemoChatState();
+    return { ...run, citations: run.citations.map((item) => ({ ...item })) };
+  },
+  async resumeAgentRun(runId, actionId, decision) {
+    await wait(40);
+    const run = demoRuns.get(runId);
+    if (!run || run.status !== "interrupted" || run.pendingAction?.actionId !== actionId) throw new Error("当前运行没有可恢复的确认动作");
+    if (!run.pendingAction.allowedDecisions.includes(decision)) throw new Error("确认决定不在允许范围内");
+    run.status = "pending";
+    run.pendingAction = undefined;
+    run.updatedAt = new Date().toISOString();
+    updateDemoSessionRun(run.sessionId, run);
+    return { ...run, citations: run.citations.map((item) => ({ ...item })) };
+  },
   fileUrl(paperId) { return `/demo?paper=${paperId}`; },
 };
 
@@ -656,7 +1085,123 @@ export const realDataSource: PaperLeafDataSource = {
     if (!r.ok) throw new Error("阅读时间记录失败");
     return mapPaper(await r.json() as Record<string, unknown>);
   },
+  async listChatSessions() {
+    const response = await fetch(`${API_BASE_URL}/chat/sessions`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw await apiError(response, "对话历史读取失败");
+    return (await response.json() as Array<Record<string, unknown>>).map(mapChatSession);
+  },
+  async createChatSession(input) {
+    const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
+      method: "POST",
+      credentials: "include",
+      headers: mutationHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ type: input.type, title: input.title, paper_id: input.paperId, collection_id: input.collectionId }),
+    });
+    if (!response.ok) throw await apiError(response, "新建对话失败");
+    return mapChatSession(await response.json() as Record<string, unknown>);
+  },
+  async updateChatSession(sessionId, title) {
+    const response = await fetch(`${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: mutationHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ title }),
+    });
+    if (!response.ok) throw await apiError(response, "对话重命名失败");
+    return mapChatSession(await response.json() as Record<string, unknown>);
+  },
+  async deleteChatSession(sessionId) {
+    const response = await fetch(`${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", credentials: "include", headers: mutationHeaders() });
+    if (!response.ok) throw await apiError(response, "对话删除失败");
+  },
+  async listChatMessages(sessionId) {
+    const response = await fetch(`${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw await apiError(response, "对话消息读取失败");
+    return (await response.json() as Array<Record<string, unknown>>).map(mapChatMessage);
+  },
+  async submitChatMessage(sessionId, content, idempotencyKey, options) {
+    const response = await fetch(`${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      credentials: "include",
+      headers: mutationHeaders({ "content-type": "application/json", "Idempotency-Key": idempotencyKey }),
+      body: JSON.stringify({ content, web_enabled: options?.webEnabled === true }),
+    });
+    if (!response.ok) throw await apiError(response, response.status === 409 ? "当前对话仍在运行，请等待完成或主动取消" : "问题提交失败");
+    const item = await response.json() as Record<string, unknown>;
+    return {
+      sessionId: String(item.session_id ?? sessionId),
+      messageId: String(item.message_id ?? ""),
+      runId: String(item.run_id ?? ""),
+      status: "pending",
+      replayed: item.replayed === true,
+    };
+  },
+  async getAgentRun(runId) {
+    const response = await fetch(`${API_BASE_URL}/agent/runs/${encodeURIComponent(runId)}`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw await apiError(response, "问答运行状态读取失败");
+    return mapAgentRun(await response.json() as Record<string, unknown>);
+  },
+  async subscribeAgentRun(runId, handlers, options) {
+    let lastEventId = options?.lastEventId ?? 0;
+    let reconnecting = false;
+    const accumulator: AgentEventAccumulator = { answer: "", citations: [] };
+    const pendingEvents = new Map<number, AgentEvent>();
+    while (!options?.signal?.aborted) {
+      try {
+        if (reconnecting) handlers.onConnectionState?.("reconnecting");
+        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        if (lastEventId > 0) headers["Last-Event-ID"] = String(lastEventId);
+        const response = await fetch(`${API_BASE_URL}/agent/runs/${encodeURIComponent(runId)}/events`, { credentials: "include", cache: "no-store", headers, signal: options?.signal });
+        if (!response.ok) {
+          if (response.status >= 500) throw new TypeError("temporary event stream failure");
+          throw await apiError(response, "回答事件读取失败");
+        }
+        reconnecting = false;
+        handlers.onConnectionState?.("connected");
+        for await (const event of readAgentStream(response)) {
+          if (options?.signal?.aborted) return;
+          const sequence = Number(event.id ?? 0);
+          if (sequence <= 0) {
+            dispatchAgentEvent(event, handlers, accumulator);
+            continue;
+          }
+          if (sequence <= lastEventId) continue;
+          pendingEvents.set(sequence, event);
+          while (pendingEvents.has(lastEventId + 1)) {
+            const next = pendingEvents.get(lastEventId + 1)!;
+            pendingEvents.delete(lastEventId + 1);
+            lastEventId += 1;
+            dispatchAgentEvent(next, handlers, accumulator);
+          }
+        }
+        const run = await realDataSource.getAgentRun(runId);
+        if (options?.signal?.aborted) return;
+        handlers.onRunUpdate?.(run);
+        if (isTerminalRun(run.status)) return;
+        reconnecting = true;
+      } catch (error) {
+        if (options?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        if (!(error instanceof TypeError)) throw error;
+        reconnecting = true;
+      }
+      await wait(350);
+    }
+  },
+  async cancelAgentRun(runId) {
+    const response = await fetch(`${API_BASE_URL}/agent/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!response.ok) throw await apiError(response, response.status === 409 ? "问答已经结束，无需取消" : "取消问答失败");
+    return mapAgentRun(await response.json() as Record<string, unknown>);
+  },
+  async resumeAgentRun(runId, actionId, decision) {
+    const response = await fetch(`${API_BASE_URL}/agent/runs/${encodeURIComponent(runId)}/resume`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ action_id: actionId, decision }) });
+    if (!response.ok) throw await apiError(response, "恢复问答失败");
+    return mapAgentRun(await response.json() as Record<string, unknown>);
+  },
   fileUrl(paperId) { return `${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/file`; },
 };
 
-export const getDataSource = (): PaperLeafDataSource => process.env.NEXT_PUBLIC_DATA_MODE === "real" ? realDataSource : demoDataSource;
+export const getDataSource = (): PaperLeafDataSource => {
+  if (process.env.NEXT_PUBLIC_DATA_MODE === "real") return realDataSource;
+  ensureDemoChatHydrated();
+  return demoDataSource;
+};

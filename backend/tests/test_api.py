@@ -1,7 +1,6 @@
 import asyncio
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -281,82 +280,118 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
         config, repository=repository, storage=LocalObjectStorage(tmp_path)
     )
 
+    class ControlledGraph:
+        async def ainvoke(self, initial, _config):
+            return {
+                **(initial if isinstance(initial, dict) else {}),
+                "status": "completed",
+                "answer": "当前证据不足，无法回答。",
+                "retrieved_evidence": [],
+                "citations": [],
+                "evidence_quality": {"grade": "insufficient"},
+            }
+
+    app_before_restart.state.services.agent_graph = ControlledGraph()
+
     with TestClient(app_before_restart) as owner_client:
         owner_csrf = _login(owner_client, "owner@example.com", "owner-password-123")
-        response = owner_client.post(
-            "/api/v1/chat/sessions/default/messages",
+        owner_session_response = owner_client.post(
+            "/api/v1/chat/sessions",
             headers={"X-CSRF-Token": owner_csrf},
-            json={"content": "什么是 RAG？", "scope": "library", "web_enabled": False},
+            json={"title": "RAG 问答", "type": "library"},
         )
-        assert response.status_code == 200
-        assert response.headers["cache-control"] == "no-cache"
-        assert response.headers["x-accel-buffering"] == "no"
-        assert "event: node_started" in response.text
-        assert "event: node_finished" in response.text
-        assert "event: tool_finished" in response.text
-        assert '"evidence_quality"' in response.text
-        assert '"paper_title"' in response.text
-        owner_run = next(
-            record for record in repository.agent_runs.values() if record.user_id == owner.id
+        assert owner_session_response.status_code == 201
+        owner_session_id = owner_session_response.json()["id"]
+        response = owner_client.post(
+            f"/api/v1/chat/sessions/{owner_session_id}/messages",
+            headers={
+                "X-CSRF-Token": owner_csrf,
+                "Idempotency-Key": "owner-message-1",
+            },
+            json={"content": "什么是 RAG？", "web_enabled": False},
         )
-        assert owner_run.result_summary["evidence_quality"]["grade"] == "sufficient"
-        assert [item["node"] for item in owner_run.result_summary["node_trace"]] == [
-            "validate_request",
-            "retrieve_library",
-            "grade_evidence",
-            "generate_answer",
-            "validate_citations",
-            "grade_answer_support",
-            "finalize",
-        ]
+        assert response.status_code == 202
+        owner_run_id = response.json()["run_id"]
+        for _ in range(100):
+            owner_run = repository.agent_runs[owner_run_id]
+            if owner_run.status in {"completed", "failed"}:
+                break
+            threading.Event().wait(0.01)
+        assert owner_run.status == "completed"
         assert owner_run.duration_ms is not None
         assert owner_run.duration_ms >= 0
         public_run = owner_client.get(f"/api/v1/agent/runs/{owner_run.id}").json()
-        assert public_run["node_trace"] == owner_run.result_summary["node_trace"]
-        assert public_run["model_attempts"] == []
+        assert public_run["status"] == "completed"
         assert public_run["duration_ms"] == owner_run.duration_ms
+        events = owner_client.get(f"/api/v1/agent/runs/{owner_run.id}/events")
+        assert events.status_code == 200
+        assert "event: node_started" in events.text
+        assert "event: message_delta" in events.text
+        assert "event: run_finished" in events.text
 
     with TestClient(app_before_restart) as other_client:
         other_csrf = _login(other_client, "other@example.com", "other-password-123")
-        response = other_client.post(
-            "/api/v1/chat/sessions/default/messages",
+        other_session_response = other_client.post(
+            "/api/v1/chat/sessions",
             headers={"X-CSRF-Token": other_csrf},
-            json={"content": "什么是 RAG？", "scope": "library", "web_enabled": False},
+            json={"title": "RAG 问答", "type": "library"},
         )
-        assert response.status_code == 200
-        other_run = next(
-            record for record in repository.agent_runs.values() if record.user_id == other.id
+        assert other_session_response.status_code == 201
+        other_session_id = other_session_response.json()["id"]
+        response = other_client.post(
+            f"/api/v1/chat/sessions/{other_session_id}/messages",
+            headers={
+                "X-CSRF-Token": other_csrf,
+                "Idempotency-Key": "other-message-1",
+            },
+            json={"content": "什么是 RAG？", "web_enabled": False},
         )
+        assert response.status_code == 202
+        other_run = repository.agent_runs[response.json()["run_id"]]
         assert other_client.get(f"/api/v1/agent/runs/{owner_run.id}").status_code == 404
 
-    assert owner_run.thread_id == f"{owner.id}:default:{owner_run.id}"
-    assert other_run.thread_id == f"{other.id}:default:{other_run.id}"
+    assert owner_run.thread_id == f"{owner.id}:{owner_session_id}:{owner_run.id}"
+    assert other_run.thread_id == f"{other.id}:{other_session_id}:{other_run.id}"
     assert owner_run.thread_id != other_run.thread_id
 
-    interrupted_id = str(uuid.uuid4())
     action_id = str(uuid.uuid4())
 
     async def seed_interrupted_run():
-        await repository.create_agent_run(
-            interrupted_id,
+        chat_session = await repository.create_chat_session(
             owner.id,
-            "default",
-            f"{owner.id}:default:{interrupted_id}",
+            "等待确认",
+            "library",
+            None,
+            None,
         )
-        await repository.update_owned_agent_run(
-            interrupted_id,
+        submission = await repository.submit_chat_message(
+            chat_session.id,
             owner.id,
+            "搜索并确认导入",
+            "interrupt-message-1",
+            "interrupt-hash-1",
+            {"type": "library", "paper_ids": [], "web_enabled": True},
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token is not None
+        await repository.start_agent_run(submission.run.id, token)
+        await repository.finish_agent_run(
+            submission.run.id,
             status="interrupted",
             pending_action={"action_id": action_id, "type": "confirm_arxiv_import"},
             result_summary={"answer": "", "citations": []},
+            claim_token=token,
         )
+        return submission.run.id
 
-    asyncio.run(seed_interrupted_run())
+    interrupted_id = asyncio.run(seed_interrupted_run())
 
     # 用同一持久仓库创建全新 App，模拟 API 进程重启后恢复业务所有权。
     app_after_restart = create_app(
         config, repository=repository, storage=LocalObjectStorage(tmp_path)
     )
+    app_after_restart.state.services.agent_graph = ControlledGraph()
     with TestClient(app_after_restart) as owner_client:
         owner_csrf = _login(owner_client, "owner@example.com", "owner-password-123")
         resumed = owner_client.post(
@@ -365,7 +400,7 @@ def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_pat
             json={"action_id": action_id, "decision": "reject"},
         )
         assert resumed.status_code == 200
-        assert resumed.json()["status"] == "completed"
+        assert resumed.json()["pending_action"] is None
 
     with TestClient(app_after_restart) as other_client:
         _login(other_client, "other@example.com", "other-password-123")
@@ -388,13 +423,7 @@ def test_agent_cancel_is_idempotent_and_stops_active_graph(tmp_path) -> None:
             self.started = threading.Event()
             self.cancelled = threading.Event()
 
-        async def astream(self, initial, graph_config, stream_mode):
-            assert stream_mode == "debug"
-            yield {
-                "step": 1,
-                "type": "task",
-                "payload": {"id": "slow-node", "name": "retrieve_library"},
-            }
+        async def ainvoke(self, _initial, _config):
             self.started.set()
             try:
                 await asyncio.Event().wait()
@@ -405,19 +434,25 @@ def test_agent_cancel_is_idempotent_and_stops_active_graph(tmp_path) -> None:
     slow_graph = SlowGraph()
     app.state.services.agent_graph = slow_graph
 
-    with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as executor:
+    with TestClient(app) as client:
         csrf = _login(client, "admin@example.com", "admin-password-123")
-
-        def send_message():
-            return client.post(
-                "/api/v1/chat/sessions/cancel-test/messages",
-                headers={"X-CSRF-Token": csrf},
-                json={"content": "等待取消", "scope": "library", "web_enabled": False},
-            )
-
-        response_future = executor.submit(send_message)
+        chat_session = client.post(
+            "/api/v1/chat/sessions",
+            headers={"X-CSRF-Token": csrf},
+            json={"title": "取消测试", "type": "library"},
+        )
+        assert chat_session.status_code == 201
+        submitted = client.post(
+            f"/api/v1/chat/sessions/{chat_session.json()['id']}/messages",
+            headers={
+                "X-CSRF-Token": csrf,
+                "Idempotency-Key": "cancel-message-1",
+            },
+            json={"content": "等待取消", "web_enabled": False},
+        )
+        assert submitted.status_code == 202
         assert slow_graph.started.wait(timeout=5)
-        run = next(iter(repository.agent_runs.values()))
+        run = repository.agent_runs[submitted.json()["run_id"]]
 
         cancelled = client.post(
             f"/api/v1/agent/runs/{run.id}/cancel",
@@ -427,7 +462,7 @@ def test_agent_cancel_is_idempotent_and_stops_active_graph(tmp_path) -> None:
         assert cancelled.json()["status"] == "cancelled"
         assert slow_graph.cancelled.wait(timeout=5)
 
-        stream_response = response_future.result(timeout=5)
+        stream_response = client.get(f"/api/v1/agent/runs/{run.id}/events")
         assert stream_response.status_code == 200
         assert '"status":"cancelled"' in stream_response.text
 

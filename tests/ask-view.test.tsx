@@ -1,124 +1,64 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AskView } from "@/components/ask-view";
 import { API_BASE_URL } from "@/lib/data-source";
 import { server } from "./test-server";
 
-const question = "论文如何解释证据位置偏差？";
+const collectionPayload = [{ id: "core", name: "核心方法", parent_id: null, paper_ids: [], recursive_paper_count: 1, children: [
+  { id: "child", name: "证据定位", parent_id: "core", paper_ids: ["p1"], recursive_paper_count: 1, children: [] },
+] }];
 
-describe("AskView 真实问答状态", () => {
+describe("AskView 持久化问答", () => {
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_DATA_MODE", "real");
+    localStorage.clear();
     server.use(
-      http.get(`${API_BASE_URL}/papers`, () => HttpResponse.json([
-        { id: "p1", title: "论文甲", authors: ["作者甲"], year: 2025, page_count: 12, status: "ready", last_opened_at: "2026-08-04T10:00:00Z" },
-        { id: "p2", title: "论文乙", authors: ["作者乙"], year: 2024, page_count: 8, status: "indexing" },
-      ])),
-      http.get(`${API_BASE_URL}/collections`, () => HttpResponse.json([
-        { id: "core", name: "核心方法", parent_id: null, paper_ids: [], recursive_paper_count: 1, children: [
-          { id: "child", name: "证据定位", parent_id: "core", paper_ids: ["p1"], recursive_paper_count: 1, children: [] },
-        ] },
-        { id: "empty", name: "空集合", parent_id: null, paper_ids: [], recursive_paper_count: 0, children: [] },
-      ])),
+      http.get(`${API_BASE_URL}/papers`, () => HttpResponse.json([{ id: "p1", title: "论文甲", authors: ["作者甲"], year: 2025, page_count: 12, status: "ready" }])),
+      http.get(`${API_BASE_URL}/collections`, () => HttpResponse.json(collectionPayload)),
+      http.get(`${API_BASE_URL}/chat/sessions`, () => HttpResponse.json([])),
+      http.get(`${API_BASE_URL}/users/me/preferences`, () => HttpResponse.json({ arxiv_search_enabled: false })),
     );
   });
   afterEach(() => { cleanup(); vi.unstubAllEnvs(); });
 
-  it("提交后立即保留问题，并按 SSE 回答与引用事件增量更新", async () => {
-    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, () => new HttpResponse(
-      new ReadableStream<Uint8Array>({ start(nextController) { controller = nextController; } }),
-      { headers: { "content-type": "text/event-stream" } },
-    )));
-
+  it("示例问题只写入输入框并聚焦，不产生 POST", async () => {
+    let posts = 0;
+    server.use(http.post(`${API_BASE_URL}/chat/sessions`, () => { posts += 1; return HttpResponse.error(); }));
     render(<AskView />);
-    fireEvent.change(screen.getByPlaceholderText(/这些论文如何解释/), { target: { value: question } });
-    fireEvent.click(screen.getByRole("button", { name: "开始提问" }));
-
-    expect(await screen.findByRole("heading", { name: question })).toBeInTheDocument();
-    expect(screen.getByText("正在准备基于文献证据的回答…")).toBeInTheDocument();
-    expect(controller).toBeDefined();
-
-    const encoder = new TextEncoder();
-    await act(async () => {
-      controller?.enqueue(encoder.encode('event: message_delta\ndata: {"event":"message_delta","run_id":"r1","data":{"delta":"证据显示位置会影响回答"}}\n\n'));
-    });
-    expect(await screen.findByText("证据显示位置会影响回答")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /论文甲/ })).not.toBeInTheDocument();
-
-    await act(async () => {
-      controller?.enqueue(encoder.encode('event: citation\ndata: {"event":"citation","run_id":"r1","data":{"paper_id":"p1","paper_title":"论文甲","physical_page":4,"chunk_id":"p1:p4:c0","excerpt":"原文证据"}}\n\n'));
-    });
-    expect(await screen.findByRole("link", { name: /论文甲/ })).toHaveTextContent("PDF 4");
-
-    await act(async () => {
-      controller?.enqueue(encoder.encode('event: run_finished\ndata: {"event":"run_finished","run_id":"r1","data":{"status":"completed"}}\n\n'));
-      controller?.close();
-    });
-    await waitFor(() => expect(screen.getByRole("button", { name: "开始提问" })).toBeEnabled());
+    fireEvent.click(await screen.findByRole("button", { name: /比较这些论文所采用的方法/ }));
+    const input = screen.getByPlaceholderText(/输入问题/);
+    expect(input).toHaveValue("比较这些论文所采用的方法与关键假设");
+    expect(input).toHaveFocus();
+    expect(posts).toBe(0);
   });
 
-  it("服务端运行错误可见，并保留已提交问题和已收到的部分回答", async () => {
-    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, () => new HttpResponse(
-      'event: message_delta\ndata: {"event":"message_delta","run_id":"r2","data":{"delta":"已收到部分证据"}}\n\nevent: error\ndata: {"event":"error","run_id":"r2","data":{"message":"证据服务暂时不可用"}}\n\n',
-      { headers: { "content-type": "text/event-stream" } },
-    )));
-
+  it("集合范围由会话保存，提交接口只传 collection_id 而不传前端论文快照", async () => {
+    let sessions: Record<string, unknown>[] = [];
+    let createBody: unknown;
+    let messageBody: unknown;
+    server.use(
+      http.get(`${API_BASE_URL}/chat/sessions`, () => HttpResponse.json(sessions)),
+      http.post(`${API_BASE_URL}/chat/sessions`, async ({ request }) => {
+        createBody = await request.json();
+        const session = { id: "s-core", title: "比较两种方法", type: "collection", collection_id: "core", created_at: "2026-08-06T10:00:00Z", updated_at: "2026-08-06T10:00:00Z" };
+        sessions = [session];
+        return HttpResponse.json(session, { status: 201 });
+      }),
+      http.get(`${API_BASE_URL}/chat/sessions/s-core/messages`, () => HttpResponse.json([])),
+      http.post(`${API_BASE_URL}/chat/sessions/s-core/messages`, async ({ request }) => {
+        messageBody = await request.json();
+        return HttpResponse.json({ session_id: "s-core", message_id: "m1", run_id: "r1", status: "pending", replayed: false }, { status: 202 });
+      }),
+      http.get(`${API_BASE_URL}/agent/runs/r1`, () => HttpResponse.json({ run_id: "r1", session_id: "s-core", status: "completed", cancel_requested: false, answer: "", citations: [], created_at: "2026-08-06T10:00:00Z", updated_at: "2026-08-06T10:00:01Z" })),
+    );
     render(<AskView />);
-    fireEvent.change(screen.getByPlaceholderText(/这些论文如何解释/), { target: { value: question } });
-    fireEvent.click(screen.getByRole("button", { name: "开始提问" }));
-
-    expect(await screen.findByRole("heading", { name: question })).toBeInTheDocument();
-    expect(await screen.findByText("已收到部分证据")).toBeInTheDocument();
-    expect(await screen.findByRole("alert")).toHaveTextContent("证据服务暂时不可用");
-  });
-
-  it("HTTP 服务错误可见且不清空问题", async () => {
-    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, () => new HttpResponse(null, { status: 503 })));
-
-    render(<AskView />);
-    fireEvent.change(screen.getByPlaceholderText(/这些论文如何解释/), { target: { value: question } });
-    fireEvent.click(screen.getByRole("button", { name: "开始提问" }));
-
-    expect(await screen.findByRole("heading", { name: question })).toBeInTheDocument();
-    expect(await screen.findByRole("alert")).toHaveTextContent("问答服务暂时不可用");
-  });
-
-  it("网络错误可见且不清空问题", async () => {
-    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, () => HttpResponse.error()));
-
-    render(<AskView />);
-    fireEvent.change(screen.getByPlaceholderText(/这些论文如何解释/), { target: { value: question } });
-    fireEvent.click(screen.getByRole("button", { name: "开始提问" }));
-
-    expect(await screen.findByRole("heading", { name: question })).toBeInTheDocument();
-    expect(await screen.findByRole("alert")).toHaveTextContent("网络连接失败");
-  });
-
-  it("提交集合 ID 由服务端递归解析文献范围", async () => {
-    let payload: Record<string, unknown> | undefined;
-    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, async ({ request }) => {
-      payload = await request.json() as Record<string, unknown>;
-      return new HttpResponse(
-        'event: run_finished\ndata: {"event":"run_finished","run_id":"r3","data":{"status":"completed"}}\n\n',
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    }));
-
-    render(<AskView />);
-    const collectionButton = await screen.findByRole("treeitem", { name: /核心方法.*1/ });
-    fireEvent.click(collectionButton);
-    fireEvent.change(screen.getByPlaceholderText(/这些论文如何解释/), { target: { value: question } });
-    fireEvent.click(screen.getByRole("button", { name: "开始提问" }));
-
-    await waitFor(() => expect(payload).toMatchObject({ scope: "collection", selected_collection_id: "core", selected_paper_ids: [] }));
+    fireEvent.click(await screen.findByRole("treeitem", { name: /核心方法.*1/ }));
+    const input = screen.getByPlaceholderText(/输入问题/);
+    fireEvent.change(input, { target: { value: "比较两种方法" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(messageBody).toEqual({ content: "比较两种方法", web_enabled: false }));
+    expect(createBody).toEqual({ type: "collection", title: "比较两种方法", collection_id: "core" });
     expect(screen.queryByText("最近阅读")).not.toBeInTheDocument();
-  });
-
-  it("点击示例问题会写入输入框", async () => {
-    render(<AskView />);
-    fireEvent.click(screen.getByRole("button", { name: /比较 Transformer 与 RNN/ }));
-    expect(screen.getByPlaceholderText(/这些论文如何解释/)).toHaveValue("比较 Transformer 与 RNN 的计算路径");
   });
 });

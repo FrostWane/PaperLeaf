@@ -1,55 +1,44 @@
-import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaperWorkspace } from "@/components/paper-workspace";
-import { demoDataSource } from "@/lib/data-source";
-import type { AgentAnswer, AgentAskStreamHandlers } from "@/lib/types";
+import { demoDataSource, resetDemoChatStateForTests } from "@/lib/data-source";
 
-describe("PaperWorkspace 问答增量状态", () => {
+describe("PaperWorkspace 统一持久化问答", () => {
+  beforeEach(() => {
+    resetDemoChatStateForTests();
+    localStorage.clear();
+    vi.stubGlobal("ResizeObserver", class {
+      observe() { /* 测试不需要尺寸通知。 */ }
+      unobserve() { /* 测试不需要尺寸通知。 */ }
+      disconnect() { /* 测试不需要尺寸通知。 */ }
+    });
+  });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it("立即显示问题，增量加入回答和引文，并在失败后保留现场", async () => {
-    vi.stubGlobal("ResizeObserver", class {
-      observe() { /* 测试中不需要真实尺寸通知。 */ }
-      unobserve() { /* 测试中不需要真实尺寸通知。 */ }
-      disconnect() { /* 测试中不需要真实尺寸通知。 */ }
-    });
-    let handlers: AgentAskStreamHandlers | undefined;
-    let rejectAsk: ((reason: unknown) => void) | undefined;
-    const ask = vi.spyOn(demoDataSource, "ask").mockImplementation((question, paperIds, nextHandlers) => {
-      handlers = nextHandlers;
-      expect(question).toBe("当前论文的核心结论是什么？");
-      expect(paperIds).toEqual(["attention"]);
-      return new Promise<AgentAnswer>((_resolve, reject) => { rejectAsk = reject; });
-    });
-
+  it("单篇助手恢复绑定当前论文的历史会话，并且只挂载一个事件订阅实例", async () => {
+    const listSessions = vi.spyOn(demoDataSource, "listChatSessions");
+    const subscribe = vi.spyOn(demoDataSource, "subscribeAgentRun");
     const { container } = render(<PaperWorkspace demo paperId="attention" />);
-    // 回归桌面端和移动端同时挂载时，同名输入框被重复注册、桌面输入被隐藏表单覆盖的问题。
-    const assistant = within(container.querySelector(".workspace-desktop") as HTMLElement);
-    const questionInput = assistant.getByPlaceholderText("继续追问这篇论文…");
-    fireEvent.change(questionInput, { target: { value: "当前论文的核心结论是什么？" } });
-    fireEvent.submit(questionInput.closest("form") as HTMLFormElement);
+    const desktopAssistant = within(container.querySelector(".workspace-desktop .workspace-assistant") as HTMLElement);
+    expect(await desktopAssistant.findByText("Transformer 的核心贡献")).toBeInTheDocument();
+    expect(await desktopAssistant.findByText("这篇论文解决了什么问题？")).toBeInTheDocument();
+    expect(await desktopAssistant.findByRole("heading", { name: "研究问题" })).toBeInTheDocument();
+    expect(listSessions).toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(container.querySelector(".workspace-mobile .chat-workspace")).toBeNull();
+  });
 
-    await waitFor(() => expect(ask).toHaveBeenCalledOnce());
-    expect(assistant.getByText("当前论文的核心结论是什么？", { selector: ".question-text" })).toBeInTheDocument();
-    expect(assistant.getByText("正在准备基于文献证据的回答…")).toBeInTheDocument();
-
-    act(() => handlers?.onAnswerUpdate?.("已收到一部分证据回答"));
-    expect(assistant.getByText(/已收到一部分证据回答/)).toBeInTheDocument();
-
-    act(() => handlers?.onCitationsUpdate?.([{
-      id: "attention:p2:c0",
-      chunkId: "attention:p2:c0",
-      paperId: "attention",
-      paperTitle: "Attention Is All You Need",
-      page: 2,
-      quote: "原文证据",
-      href: "/api/v1/papers/attention/file#page=2",
-    }]));
-    expect(assistant.getByRole("button", { name: "引用 [1]，查看 PDF 第 2 页" })).toBeInTheDocument();
-
-    await act(async () => rejectAsk?.(new Error("问答运行失败")));
-    expect(assistant.getByRole("alert")).toHaveTextContent("问答运行失败");
-    expect(assistant.getByText("当前论文的核心结论是什么？", { selector: ".question-text" })).toBeInTheDocument();
-    expect(assistant.getByText(/已收到一部分证据回答/)).toBeInTheDocument();
+  it("新问题通过统一会话接口提交，运行中禁用重复发送并提供取消", async () => {
+    const submit = vi.spyOn(demoDataSource, "submitChatMessage");
+    const { container } = render(<PaperWorkspace demo paperId="attention" />);
+    const assistant = within(container.querySelector(".workspace-desktop .workspace-assistant") as HTMLElement);
+    fireEvent.click(await assistant.findByRole("button", { name: /新对话/ }));
+    const input = await assistant.findByPlaceholderText(/输入问题/);
+    fireEvent.change(input, { target: { value: "当前论文的核心结论是什么？" } });
+    fireEvent.click(assistant.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(await assistant.findByText("当前论文的核心结论是什么？")).toBeInTheDocument();
+    expect(assistant.getByRole("button", { name: "发送问题" })).toBeDisabled();
+    expect(await assistant.findByRole("button", { name: "取消运行" })).toBeInTheDocument();
   });
 });

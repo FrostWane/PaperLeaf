@@ -15,10 +15,14 @@ from typing import Protocol
 
 from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session_factory
 from .models import (
     AgentRun,
+    AgentRunEvent,
+    ChatMessage,
+    ChatSession,
     Collection,
     Job,
     JobStatus,
@@ -93,6 +97,7 @@ class JobRecord:
     paper_id: str | None
     type: str
     translation_id: str | None = None
+    agent_run_id: str | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     attempts: int = 0
@@ -118,6 +123,13 @@ class AgentRunRecord:
     token_usage: dict | None = None
     result_summary: dict | None = None
     pending_action: dict | None = None
+    cancel_requested: bool = False
+    scope_snapshot: dict = field(default_factory=dict)
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    request_hash: str | None = None
+    resume_action_id: str | None = None
+    resume_decision: str | None = None
     error_code: str | None = None
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
@@ -143,6 +155,62 @@ class TranslationRecord:
 
 
 @dataclass
+class ChatSessionRecord:
+    id: str
+    user_id: str
+    title: str
+    type: str
+    paper_id: str | None = None
+    collection_id: str | None = None
+    current_run_id: str | None = None
+    current_run_status: str | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class ChatMessageRecord:
+    id: str
+    session_id: str
+    role: str
+    sequence: int
+    status: str
+    content: str
+    citations: list[dict] = field(default_factory=list)
+    run_id: str | None = None
+    client_message_id: str | None = None
+    request_hash: str | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class AgentRunEventRecord:
+    id: int
+    run_id: str
+    sequence: int
+    event: str
+    data: dict = field(default_factory=dict)
+    event_key: str | None = None
+    created_at: datetime = field(default_factory=now)
+
+
+@dataclass(frozen=True)
+class ChatSubmission:
+    message: ChatMessageRecord | ChatMessage
+    run: AgentRunRecord | AgentRun
+    replayed: bool
+
+
+class ChatIdempotencyConflictError(ValueError):
+    """同一客户端消息 ID 被用于不同请求正文。"""
+
+
+class ChatActiveRunError(ValueError):
+    """同一会话已有尚未结束的 Agent Run。"""
+
+
+@dataclass
 class TranslationPageRecord:
     id: str
     translation_id: str
@@ -153,9 +221,6 @@ class TranslationPageRecord:
     priority: int = 1000
     attempts: int = 0
     max_attempts: int = 3
-    available_at: datetime = field(default_factory=now)
-    claimed_at: datetime | None = None
-    claim_token: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     created_at: datetime = field(default_factory=now)
@@ -191,6 +256,7 @@ def source_revision(pages: list[tuple[int, str]]) -> str:
 
 
 MAX_COLLECTION_DEPTH = 5
+AGENT_JOB_LEASE = timedelta(minutes=30)
 
 
 def _validate_collection_change(
@@ -328,7 +394,11 @@ class MemoryRepository:
         self.paper_pages: dict[str, dict[int, str]] = {}
         self.translations: dict[str, TranslationRecord] = {}
         self.translation_pages: dict[str, TranslationPageRecord] = {}
+        self.chat_sessions: dict[str, ChatSessionRecord] = {}
+        self.chat_messages: dict[str, ChatMessageRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
+        self.agent_run_events: dict[int, AgentRunEventRecord] = {}
+        self._next_agent_event_id = 1
         self.session_secret = session_secret
         self._managed_user_lock = threading.Lock()
 
@@ -1065,6 +1135,223 @@ class MemoryRepository:
                 )
         return job
 
+    def _chat_session_with_current_run(
+        self, record: ChatSessionRecord
+    ) -> ChatSessionRecord:
+        runs = sorted(
+            (
+                item
+                for item in self.agent_runs.values()
+                if item.session_id == record.id and item.user_id == record.user_id
+            ),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        record.current_run_id = runs[0].id if runs else None
+        record.current_run_status = runs[0].status if runs else None
+        return record
+
+    async def create_chat_session(
+        self,
+        user_id: str,
+        title: str,
+        session_type: str,
+        paper_id: str | None,
+        collection_id: str | None,
+    ) -> ChatSessionRecord:
+        normalized_title = title.strip()
+        if not normalized_title:
+            raise ValueError("会话标题不能为空")
+        record = ChatSessionRecord(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            title=normalized_title,
+            type=session_type,
+            paper_id=paper_id,
+            collection_id=collection_id,
+        )
+        self.chat_sessions[record.id] = record
+        return record
+
+    async def list_chat_sessions(self, user_id: str) -> list[ChatSessionRecord]:
+        return [
+            self._chat_session_with_current_run(item)
+            for item in sorted(
+                (
+                    item
+                    for item in self.chat_sessions.values()
+                    if item.user_id == user_id
+                ),
+                key=lambda item: item.updated_at,
+                reverse=True,
+            )
+        ]
+
+    async def get_owned_chat_session(
+        self, session_id: str, user_id: str
+    ) -> ChatSessionRecord | None:
+        record = self.chat_sessions.get(session_id)
+        return (
+            self._chat_session_with_current_run(record)
+            if record and record.user_id == user_id
+            else None
+        )
+
+    async def update_owned_chat_session(
+        self, session_id: str, user_id: str, title: str
+    ) -> ChatSessionRecord | None:
+        record = await self.get_owned_chat_session(session_id, user_id)
+        if not record:
+            return None
+        normalized_title = title.strip()
+        if not normalized_title:
+            raise ValueError("会话标题不能为空")
+        record.title = normalized_title
+        record.updated_at = now()
+        return record
+
+    async def list_session_thread_ids(self, session_id: str, user_id: str) -> list[str] | None:
+        if not await self.get_owned_chat_session(session_id, user_id):
+            return None
+        return [
+            item.thread_id
+            for item in self.agent_runs.values()
+            if item.session_id == session_id and item.user_id == user_id
+        ]
+
+    async def delete_owned_chat_session(self, session_id: str, user_id: str) -> bool:
+        record = await self.get_owned_chat_session(session_id, user_id)
+        if not record:
+            return False
+        if record.current_run_status in {"pending", "running", "interrupted"}:
+            raise ChatActiveRunError("会话仍有运行中或等待确认的任务，请先取消")
+        run_ids = {
+            item.id
+            for item in self.agent_runs.values()
+            if item.session_id == session_id and item.user_id == user_id
+        }
+        self.jobs = {
+            key: item
+            for key, item in self.jobs.items()
+            if item.agent_run_id not in run_ids
+        }
+        self.agent_run_events = {
+            key: item
+            for key, item in self.agent_run_events.items()
+            if item.run_id not in run_ids
+        }
+        for run_id in run_ids:
+            self.agent_runs.pop(run_id, None)
+        self.chat_messages = {
+            key: item
+            for key, item in self.chat_messages.items()
+            if item.session_id != session_id
+        }
+        self.chat_sessions.pop(session_id, None)
+        return True
+
+    async def list_chat_messages(
+        self, session_id: str, user_id: str
+    ) -> list[ChatMessageRecord] | None:
+        if not await self.get_owned_chat_session(session_id, user_id):
+            return None
+        return sorted(
+            (
+                item
+                for item in self.chat_messages.values()
+                if item.session_id == session_id
+            ),
+            key=lambda item: item.sequence,
+        )
+
+    async def submit_chat_message(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        client_message_id: str,
+        request_hash: str,
+        scope_snapshot: dict,
+    ) -> ChatSubmission | None:
+        chat_session = await self.get_owned_chat_session(session_id, user_id)
+        if not chat_session:
+            return None
+        existing = next(
+            (
+                item
+                for item in self.chat_messages.values()
+                if item.session_id == session_id
+                and item.client_message_id == client_message_id
+            ),
+            None,
+        )
+        if existing:
+            if existing.request_hash != request_hash:
+                raise ChatIdempotencyConflictError("客户端消息 ID 已用于不同请求")
+            run = self.agent_runs.get(existing.run_id or "")
+            if not run:
+                raise RuntimeError("幂等消息关联的 Agent Run 不存在")
+            return ChatSubmission(existing, run, True)
+        if any(
+            item.session_id == session_id
+            and item.status in {"pending", "running", "interrupted"}
+            for item in self.agent_runs.values()
+        ):
+            raise ChatActiveRunError("当前会话已有正在运行或等待确认的任务")
+        next_sequence = 1 + max(
+            (
+                item.sequence
+                for item in self.chat_messages.values()
+                if item.session_id == session_id
+            ),
+            default=0,
+        )
+        run_id = str(uuid.uuid4())
+        user_message = ChatMessageRecord(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            role="user",
+            sequence=next_sequence,
+            status="completed",
+            content=content,
+            run_id=run_id,
+            client_message_id=client_message_id,
+            request_hash=request_hash,
+        )
+        assistant_message = ChatMessageRecord(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            role="assistant",
+            sequence=next_sequence + 1,
+            status="pending",
+            content="",
+            run_id=run_id,
+        )
+        run = AgentRunRecord(
+            id=run_id,
+            user_id=user_id,
+            session_id=session_id,
+            thread_id=f"{user_id}:{session_id}:{run_id}",
+            scope_snapshot=dict(scope_snapshot),
+            user_message_id=user_message.id,
+            assistant_message_id=assistant_message.id,
+            request_hash=request_hash,
+        )
+        job = JobRecord(
+            id=str(uuid.uuid4()),
+            paper_id=None,
+            agent_run_id=run_id,
+            type="agent_run",
+        )
+        self.chat_messages[user_message.id] = user_message
+        self.chat_messages[assistant_message.id] = assistant_message
+        self.agent_runs[run.id] = run
+        self.jobs[job.id] = job
+        if chat_session.title == "新会话":
+            chat_session.title = content.strip().replace("\n", " ")[:60]
+        chat_session.updated_at = now()
+        return ChatSubmission(user_message, run, False)
+
     async def create_agent_run(
         self, run_id: str, user_id: str, session_id: str, thread_id: str
     ) -> AgentRunRecord:
@@ -1077,6 +1364,18 @@ class MemoryRepository:
     ) -> AgentRunRecord | None:
         record = self.agent_runs.get(run_id)
         return record if record and record.user_id == user_id else None
+
+    async def get_agent_run(self, run_id: str) -> AgentRunRecord | None:
+        return self.agent_runs.get(run_id)
+
+    async def get_agent_run_input(
+        self, run_id: str
+    ) -> tuple[AgentRunRecord, str] | None:
+        run = self.agent_runs.get(run_id)
+        if not run or not run.user_message_id:
+            return None
+        message = self.chat_messages.get(run.user_message_id)
+        return (run, message.content) if message else None
 
     async def update_owned_agent_run(
         self, run_id: str, user_id: str, **changes: object
@@ -1097,6 +1396,330 @@ class MemoryRepository:
                 setattr(record, key, changes[key])
         record.updated_at = now()
         return record
+
+    async def append_agent_run_event(
+        self,
+        run_id: str,
+        event: str,
+        data: dict,
+        *,
+        event_key: str | None = None,
+        claim_token: str | None = None,
+    ) -> AgentRunEventRecord | None:
+        if run_id not in self.agent_runs:
+            return None
+        if claim_token is not None and not self._agent_claim_is_current(
+            run_id, claim_token
+        ):
+            return None
+        if event_key:
+            existing = next(
+                (
+                    item
+                    for item in self.agent_run_events.values()
+                    if item.run_id == run_id and item.event_key == event_key
+                ),
+                None,
+            )
+            if existing:
+                return existing
+        sequence = 1 + max(
+            (
+                item.sequence
+                for item in self.agent_run_events.values()
+                if item.run_id == run_id
+            ),
+            default=0,
+        )
+        record = AgentRunEventRecord(
+            id=self._next_agent_event_id,
+            run_id=run_id,
+            sequence=sequence,
+            event=event,
+            data=dict(data),
+            event_key=event_key,
+        )
+        self._next_agent_event_id += 1
+        self.agent_run_events[record.id] = record
+        return record
+
+    async def list_owned_agent_run_events(
+        self, run_id: str, user_id: str, after_sequence: int = 0
+    ) -> list[AgentRunEventRecord] | None:
+        if not await self.get_owned_agent_run(run_id, user_id):
+            return None
+        return sorted(
+            (
+                item
+                for item in self.agent_run_events.values()
+                if item.run_id == run_id and item.sequence > after_sequence
+            ),
+            key=lambda item: item.sequence,
+        )
+
+    def _agent_claim_is_current(self, run_id: str, claim_token: str) -> bool:
+        job = next(
+            (item for item in self.jobs.values() if item.agent_run_id == run_id), None
+        )
+        return bool(
+            job
+            and job.status == JobStatus.running
+            and job.claim_token == claim_token
+            and job.claimed_at
+            and job.claimed_at >= now() - AGENT_JOB_LEASE
+        )
+
+    async def claim_agent_run_job(self, run_id: str) -> str | None:
+        job = next(
+            (item for item in self.jobs.values() if item.agent_run_id == run_id), None
+        )
+        if not job or job.status != JobStatus.queued or job.available_at > now():
+            return None
+        token = str(uuid.uuid4())
+        job.status = JobStatus.running
+        job.attempts += 1
+        job.claim_token = token
+        job.claimed_at = now()
+        job.updated_at = now()
+        return token
+
+    async def start_agent_run(
+        self, run_id: str, claim_token: str
+    ) -> AgentRunRecord | None:
+        run = self.agent_runs.get(run_id)
+        if (
+            not run
+            or not self._agent_claim_is_current(run_id, claim_token)
+            or run.cancel_requested
+            or run.status == "cancelled"
+        ):
+            return None
+        if run.status == "pending":
+            run.status = "running"
+            run.updated_at = now()
+        assistant = self.chat_messages.get(run.assistant_message_id or "")
+        if assistant and assistant.status == "pending":
+            assistant.status = "streaming"
+            assistant.updated_at = now()
+        await self.append_agent_run_event(
+            run_id,
+            "run_started",
+            {"status": "running"},
+            event_key="run_started",
+            claim_token=claim_token,
+        )
+        return run
+
+    async def publish_agent_paragraph(
+        self,
+        run_id: str,
+        paragraph_index: int,
+        content: str,
+        citations: list[dict],
+        classification: str,
+        claim_token: str,
+    ) -> AgentRunEventRecord | None:
+        run = self.agent_runs.get(run_id)
+        if (
+            not run
+            or not self._agent_claim_is_current(run_id, claim_token)
+            or run.cancel_requested
+            or run.status != "running"
+        ):
+            return None
+        key = f"paragraph:{paragraph_index}"
+        existing = next(
+            (
+                item
+                for item in self.agent_run_events.values()
+                if item.run_id == run_id and item.event_key == key
+            ),
+            None,
+        )
+        if existing:
+            return existing
+        message = self.chat_messages.get(run.assistant_message_id or "")
+        if not message:
+            return None
+        delta = content if not message.content else f"\n\n{content}"
+        message.content = f"{message.content}{delta}"
+        message.citations = list(
+            {item["chunk_id"]: item for item in [*message.citations, *citations]}.values()
+        )
+        message.updated_at = now()
+        return await self.append_agent_run_event(
+            run_id,
+            "message_delta",
+            {
+                "delta": delta,
+                "message_id": message.id,
+                "classification": classification,
+                "citations": citations,
+            },
+            event_key=key,
+            claim_token=claim_token,
+        )
+
+    async def finish_agent_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        result_summary: dict,
+        tool_steps: int = 0,
+        duration_ms: int | None = None,
+        error_code: str | None = None,
+        pending_action: dict | None = None,
+        claim_token: str | None = None,
+        force: bool = False,
+    ) -> AgentRunRecord | None:
+        if status not in {"interrupted", "completed", "failed", "cancelled"}:
+            raise ValueError("非法 Agent Run 终态")
+        run = self.agent_runs.get(run_id)
+        if not run:
+            return None
+        if not force and (
+            claim_token is None
+            or not self._agent_claim_is_current(run_id, claim_token)
+        ):
+            return None
+        if run.status in {"completed", "failed", "cancelled"}:
+            return run
+        if run.cancel_requested or run.status == "cancelled":
+            status = "cancelled"
+            error_code = "AGENT_RUN_CANCELLED"
+        run.status = status
+        run.result_summary = dict(result_summary)
+        run.tool_steps = tool_steps
+        run.duration_ms = duration_ms
+        run.error_code = error_code
+        run.pending_action = pending_action
+        run.updated_at = now()
+        assistant = self.chat_messages.get(run.assistant_message_id or "")
+        if assistant:
+            assistant.status = (
+                "pending"
+                if status == "interrupted"
+                else "completed"
+                if status == "completed"
+                else "cancelled"
+                if status == "cancelled"
+                else "failed"
+            )
+            assistant.updated_at = now()
+        for job in self.jobs.values():
+            if job.agent_run_id == run_id:
+                job.status = (
+                    JobStatus.completed
+                    if status in {"completed", "interrupted", "cancelled"}
+                    else JobStatus.failed
+                )
+                job.progress = 100
+                job.claim_token = None
+                job.claimed_at = None
+                job.updated_at = now()
+        await self.append_agent_run_event(
+            run_id,
+            "interrupt"
+            if status == "interrupted"
+            else "run_finished"
+            if status != "failed"
+            else "error",
+            {
+                "status": status,
+                "duration_ms": duration_ms,
+                **({"pending_action": pending_action or {}} if status == "interrupted" else {}),
+            },
+            event_key="terminal",
+            # 当前方法已在变更任何状态前验证租约；作业终态会清除 token，
+            # 因此终态事件在同一内存事务中不再重复验证已失效的 token。
+            claim_token=None,
+        )
+        return run
+
+    async def cancel_owned_agent_run(
+        self, run_id: str, user_id: str
+    ) -> AgentRunRecord | None:
+        run = await self.get_owned_agent_run(run_id, user_id)
+        if not run:
+            return None
+        if run.status == "cancelled":
+            return run
+        if run.status in {"completed", "failed"}:
+            raise ChatActiveRunError("运行已经结束")
+        was_interrupted = run.status == "interrupted"
+        if was_interrupted:
+            for event in self.agent_run_events.values():
+                if event.run_id == run_id and event.event_key == "terminal":
+                    event.event_key = f"interrupt:{event.sequence}"
+        run.cancel_requested = True
+        return await self.finish_agent_run(
+            run_id,
+            status="cancelled",
+            result_summary=run.result_summary or {},
+            error_code="AGENT_RUN_CANCELLED",
+            force=True,
+        )
+
+    async def resume_owned_agent_run(
+        self,
+        run_id: str,
+        user_id: str,
+        action_id: str,
+        decision: str,
+    ) -> AgentRunRecord | None:
+        run = await self.get_owned_agent_run(run_id, user_id)
+        if not run:
+            return None
+        if run.resume_action_id:
+            if run.resume_action_id == action_id and run.resume_decision == decision:
+                return run
+            raise ChatIdempotencyConflictError("该待确认动作已使用不同决定处理")
+        if run.status != "interrupted":
+            raise ChatActiveRunError("运行未在等待确认")
+        pending = run.pending_action or {}
+        if pending.get("action_id") != action_id:
+            raise ChatIdempotencyConflictError("待确认动作不匹配")
+        run.resume_action_id = action_id
+        run.resume_decision = decision
+        run.scope_snapshot = {
+            **run.scope_snapshot,
+            "resume_decision": decision,
+        }
+        run.status = "pending"
+        run.pending_action = None
+        run.error_code = None
+        run.updated_at = now()
+        job = next(
+            (item for item in self.jobs.values() if item.agent_run_id == run_id),
+            None,
+        )
+        if not job:
+            job = JobRecord(
+                id=str(uuid.uuid4()),
+                paper_id=None,
+                agent_run_id=run_id,
+                type="agent_run",
+            )
+            self.jobs[job.id] = job
+        job.status = JobStatus.queued
+        job.progress = 0
+        job.attempts = 0
+        job.available_at = now()
+        job.claimed_at = None
+        job.claim_token = None
+        job.error_code = None
+        job.error_message = None
+        for event in self.agent_run_events.values():
+            if event.run_id == run_id and event.event_key == "terminal":
+                event.event_key = f"interrupt:{event.sequence}"
+        await self.append_agent_run_event(
+            run_id,
+            "run_started",
+            {"status": "pending", "resumed": True},
+            event_key=f"resume:{action_id}:{decision}",
+        )
+        return run
 
 
 class SQLAlchemyRepository:
@@ -1583,6 +2206,483 @@ class SQLAlchemyRepository:
                 raise ValueError("同级集合名称已存在") from exc
             await session.refresh(record)
             return record
+
+    async def _append_agent_event_in_session(
+        self,
+        session: object,
+        run_id: str,
+        event: str,
+        data: dict,
+        event_key: str | None,
+    ) -> AgentRunEvent:
+        if event_key:
+            existing = await session.scalar(
+                select(AgentRunEvent).where(
+                    AgentRunEvent.run_id == run_id,
+                    AgentRunEvent.event_key == event_key,
+                )
+            )
+            if existing:
+                return existing
+        sequence = 1 + int(
+            await session.scalar(
+                select(func.max(AgentRunEvent.sequence)).where(
+                    AgentRunEvent.run_id == run_id
+                )
+            )
+            or 0
+        )
+        record = AgentRunEvent(
+            run_id=run_id,
+            sequence=sequence,
+            event=event,
+            data=dict(data),
+            event_key=event_key,
+        )
+        session.add(record)
+        await session.flush()
+        return record
+
+    async def append_agent_run_event(
+        self,
+        run_id: str,
+        event: str,
+        data: dict,
+        *,
+        event_key: str | None = None,
+        claim_token: str | None = None,
+    ) -> AgentRunEvent | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if not run:
+                return None
+            if claim_token is not None and not await self._sql_agent_claim_current(
+                session, run_id, claim_token
+            ):
+                return None
+            record = await self._append_agent_event_in_session(
+                session, run_id, event, data, event_key
+            )
+            await session.commit()
+            await session.refresh(record)
+            return record
+
+    async def _sql_agent_claim_current(
+        self, session: object, run_id: str, claim_token: str
+    ) -> bool:
+        job = await session.scalar(
+            select(Job)
+            .where(
+                Job.agent_run_id == run_id,
+                Job.type == "agent_run",
+                Job.status == JobStatus.running,
+                Job.claim_token == claim_token,
+                Job.claimed_at.is_not(None),
+                Job.claimed_at >= now() - AGENT_JOB_LEASE,
+            )
+            .with_for_update()
+        )
+        return bool(job)
+
+    async def claim_agent_run_job(self, run_id: str) -> str | None:
+        async with get_session_factory()() as session:
+            job = await session.scalar(
+                select(Job)
+                .where(
+                    Job.agent_run_id == run_id,
+                    Job.type == "agent_run",
+                    Job.status == JobStatus.queued,
+                    Job.available_at <= now(),
+                )
+                .with_for_update(skip_locked=True)
+            )
+            if not job:
+                return None
+            token = str(uuid.uuid4())
+            job.status = JobStatus.running
+            job.attempts += 1
+            job.claim_token = token
+            job.claimed_at = now()
+            job.updated_at = now()
+            await session.commit()
+            return token
+
+    async def list_owned_agent_run_events(
+        self, run_id: str, user_id: str, after_sequence: int = 0
+    ) -> list[AgentRunEvent] | None:
+        async with get_session_factory()() as session:
+            owned = await session.scalar(
+                select(AgentRun.id).where(
+                    AgentRun.id == run_id, AgentRun.user_id == user_id
+                )
+            )
+            if not owned:
+                return None
+            return list(
+                await session.scalars(
+                    select(AgentRunEvent)
+                    .where(
+                        AgentRunEvent.run_id == run_id,
+                        AgentRunEvent.sequence > after_sequence,
+                    )
+                    .order_by(AgentRunEvent.sequence)
+                )
+            )
+
+    async def get_agent_run(self, run_id: str) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            return await session.get(AgentRun, run_id)
+
+    async def get_agent_run_input(self, run_id: str) -> tuple[AgentRun, str] | None:
+        async with get_session_factory()() as session:
+            run = await session.get(AgentRun, run_id)
+            if not run or not run.user_message_id:
+                return None
+            message = await session.get(ChatMessage, run.user_message_id)
+            return (run, message.content) if message else None
+
+    async def start_agent_run(self, run_id: str, claim_token: str) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if (
+                not run
+                or not await self._sql_agent_claim_current(
+                    session, run_id, claim_token
+                )
+                or run.cancel_requested
+                or run.status == "cancelled"
+            ):
+                return None
+            if run.status == "pending":
+                run.status = "running"
+                run.updated_at = now()
+            assistant = (
+                await session.scalar(
+                    select(ChatMessage)
+                    .where(ChatMessage.id == run.assistant_message_id)
+                    .with_for_update()
+                )
+                if run.assistant_message_id
+                else None
+            )
+            if assistant and assistant.status == "pending":
+                assistant.status = "streaming"
+                assistant.updated_at = now()
+            await self._append_agent_event_in_session(
+                session,
+                run_id,
+                "run_started",
+                {"status": "running"},
+                "run_started",
+            )
+            await session.commit()
+            await session.refresh(run)
+            return run
+
+    async def publish_agent_paragraph(
+        self,
+        run_id: str,
+        paragraph_index: int,
+        content: str,
+        citations: list[dict],
+        classification: str,
+        claim_token: str,
+    ) -> AgentRunEvent | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if (
+                not run
+                or not await self._sql_agent_claim_current(
+                    session, run_id, claim_token
+                )
+                or run.cancel_requested
+                or run.status != "running"
+                or not run.assistant_message_id
+            ):
+                return None
+            event_key = f"paragraph:{paragraph_index}"
+            existing = await session.scalar(
+                select(AgentRunEvent).where(
+                    AgentRunEvent.run_id == run_id,
+                    AgentRunEvent.event_key == event_key,
+                )
+            )
+            if existing:
+                return existing
+            assistant = await session.scalar(
+                select(ChatMessage)
+                .where(ChatMessage.id == run.assistant_message_id)
+                .with_for_update()
+            )
+            if not assistant:
+                return None
+            delta = content if not assistant.content else f"\n\n{content}"
+            assistant.content = f"{assistant.content}{delta}"
+            by_chunk = {
+                str(item.get("chunk_id")): item
+                for item in [*assistant.citations, *citations]
+                if item.get("chunk_id")
+            }
+            assistant.citations = list(by_chunk.values())
+            assistant.status = "streaming"
+            assistant.updated_at = now()
+            record = await self._append_agent_event_in_session(
+                session,
+                run_id,
+                "message_delta",
+                {
+                    "delta": delta,
+                    "message_id": assistant.id,
+                    "classification": classification,
+                    "citations": citations,
+                },
+                event_key,
+            )
+            await session.commit()
+            await session.refresh(record)
+            return record
+
+    async def finish_agent_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        result_summary: dict,
+        tool_steps: int = 0,
+        duration_ms: int | None = None,
+        error_code: str | None = None,
+        pending_action: dict | None = None,
+        claim_token: str | None = None,
+        force: bool = False,
+    ) -> AgentRun | None:
+        if status not in {"interrupted", "completed", "failed", "cancelled"}:
+            raise ValueError("非法 Agent Run 终态")
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if not run:
+                return None
+            if not force and (
+                claim_token is None
+                or not await self._sql_agent_claim_current(
+                    session, run_id, claim_token
+                )
+            ):
+                return None
+            if run.status in {"completed", "failed", "cancelled"}:
+                return run
+            if run.cancel_requested:
+                status = "cancelled"
+                error_code = "AGENT_RUN_CANCELLED"
+            run.status = status
+            run.result_summary = dict(result_summary)
+            run.tool_steps = tool_steps
+            run.duration_ms = duration_ms
+            run.error_code = error_code
+            run.pending_action = pending_action
+            run.updated_at = now()
+            assistant = (
+                await session.scalar(
+                    select(ChatMessage)
+                    .where(ChatMessage.id == run.assistant_message_id)
+                    .with_for_update()
+                )
+                if run.assistant_message_id
+                else None
+            )
+            if assistant:
+                assistant.status = (
+                    "pending"
+                    if status == "interrupted"
+                    else "completed"
+                    if status == "completed"
+                    else "cancelled"
+                    if status == "cancelled"
+                    else "failed"
+                )
+                assistant.updated_at = now()
+            job = await session.scalar(
+                select(Job)
+                .where(Job.agent_run_id == run_id)
+                .with_for_update()
+            )
+            if job:
+                job.status = (
+                    JobStatus.completed
+                    if status in {"completed", "interrupted", "cancelled"}
+                    else JobStatus.failed
+                )
+                job.progress = 100
+                job.claim_token = None
+                job.claimed_at = None
+                job.updated_at = now()
+            await self._append_agent_event_in_session(
+                session,
+                run_id,
+                "interrupt"
+                if status == "interrupted"
+                else "error"
+                if status == "failed"
+                else "run_finished",
+                {
+                    "status": status,
+                    "duration_ms": duration_ms,
+                    **(
+                        {"pending_action": pending_action or {}}
+                        if status == "interrupted"
+                        else {}
+                    ),
+                },
+                "terminal",
+            )
+            await session.commit()
+            await session.refresh(run)
+            return run
+
+    async def cancel_owned_agent_run(self, run_id: str, user_id: str) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun)
+                .where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+                .with_for_update()
+            )
+            if not run:
+                return None
+            if run.status == "cancelled":
+                return run
+            if run.status in {"completed", "failed"}:
+                raise ChatActiveRunError("运行已经结束")
+            was_interrupted = run.status == "interrupted"
+            if was_interrupted:
+                terminal = await session.scalar(
+                    select(AgentRunEvent)
+                    .where(
+                        AgentRunEvent.run_id == run_id,
+                        AgentRunEvent.event_key == "terminal",
+                    )
+                    .with_for_update()
+                )
+                if terminal:
+                    terminal.event_key = f"interrupt:{terminal.sequence}"
+            run.cancel_requested = True
+            run.status = "cancelled"
+            run.error_code = "AGENT_RUN_CANCELLED"
+            run.pending_action = None
+            run.updated_at = now()
+            assistant = (
+                await session.scalar(
+                    select(ChatMessage)
+                    .where(ChatMessage.id == run.assistant_message_id)
+                    .with_for_update()
+                )
+                if run.assistant_message_id
+                else None
+            )
+            if assistant:
+                assistant.status = "cancelled"
+                assistant.updated_at = now()
+            job = await session.scalar(
+                select(Job)
+                .where(Job.agent_run_id == run_id)
+                .with_for_update()
+            )
+            if job:
+                job.status = JobStatus.completed
+                job.error_code = "AGENT_RUN_CANCELLED"
+                job.error_message = "用户已取消 Agent 运行"
+                job.claim_token = None
+                job.claimed_at = None
+                job.updated_at = now()
+            await self._append_agent_event_in_session(
+                session,
+                run_id,
+                "run_finished",
+                {"status": "cancelled"},
+                "terminal",
+            )
+            await session.commit()
+            await session.refresh(run)
+            return run
+
+    async def resume_owned_agent_run(
+        self,
+        run_id: str,
+        user_id: str,
+        action_id: str,
+        decision: str,
+    ) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun)
+                .where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+                .with_for_update()
+            )
+            if not run:
+                return None
+            if run.resume_action_id:
+                if (
+                    run.resume_action_id == action_id
+                    and run.resume_decision == decision
+                ):
+                    return run
+                raise ChatIdempotencyConflictError("该待确认动作已使用不同决定处理")
+            if run.status != "interrupted":
+                raise ChatActiveRunError("运行未在等待确认")
+            pending = run.pending_action or {}
+            if pending.get("action_id") != action_id:
+                raise ChatIdempotencyConflictError("待确认动作不匹配")
+            run.resume_action_id = action_id
+            run.resume_decision = decision
+            run.scope_snapshot = {
+                **(run.scope_snapshot or {}),
+                "resume_decision": decision,
+            }
+            run.status = "pending"
+            run.pending_action = None
+            run.error_code = None
+            run.updated_at = now()
+            job = await session.scalar(
+                select(Job)
+                .where(Job.agent_run_id == run_id)
+                .with_for_update()
+            )
+            if not job:
+                job = Job(agent_run_id=run_id, type="agent_run")
+                session.add(job)
+            job.status = JobStatus.queued
+            job.progress = 0
+            job.attempts = 0
+            job.available_at = now()
+            job.claim_token = None
+            job.claimed_at = None
+            job.error_code = None
+            job.error_message = None
+            # interrupted 的 terminal 事件只代表暂停；resume 后允许新的最终事件键。
+            terminal = await session.scalar(
+                select(AgentRunEvent).where(
+                    AgentRunEvent.run_id == run_id,
+                    AgentRunEvent.event_key == "terminal",
+                )
+            )
+            if terminal:
+                terminal.event_key = f"interrupt:{terminal.sequence}"
+            await self._append_agent_event_in_session(
+                session,
+                run_id,
+                "run_started",
+                {"status": "pending", "resumed": True},
+                f"resume:{action_id}:{decision}",
+            )
+            await session.commit()
+            await session.refresh(run)
+            return run
 
     async def list_collections(self, owner_id: str) -> list[Collection]:
         async with get_session_factory()() as session:
@@ -2218,6 +3318,308 @@ class SQLAlchemyRepository:
             await session.commit()
             await session.refresh(job)
             return job
+
+    async def create_chat_session(
+        self,
+        user_id: str,
+        title: str,
+        session_type: str,
+        paper_id: str | None,
+        collection_id: str | None,
+    ) -> ChatSession:
+        normalized_title = title.strip()
+        if not normalized_title:
+            raise ValueError("会话标题不能为空")
+        record = ChatSession(
+            user_id=user_id,
+            title=normalized_title,
+            type=session_type,
+            paper_id=paper_id,
+            collection_id=collection_id,
+        )
+        async with get_session_factory()() as session:
+            session.add(record)
+            await session.commit()
+            await session.refresh(record)
+            return record
+
+    async def _chat_session_with_current_run_sql(
+        self, session: AsyncSession, record: ChatSession
+    ) -> ChatSession:
+        latest = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.session_id == record.id,
+                AgentRun.user_id == record.user_id,
+            )
+            .order_by(AgentRun.created_at.desc())
+            .limit(1)
+        )
+        record.current_run_id = latest.id if latest else None
+        record.current_run_status = latest.status if latest else None
+        return record
+
+    async def list_chat_sessions(self, user_id: str) -> list[ChatSession]:
+        async with get_session_factory()() as session:
+            records = list(
+                await session.scalars(
+                    select(ChatSession)
+                    .where(ChatSession.user_id == user_id)
+                    .order_by(ChatSession.updated_at.desc())
+                )
+            )
+            for record in records:
+                await self._chat_session_with_current_run_sql(session, record)
+            return records
+
+    async def get_owned_chat_session(
+        self, session_id: str, user_id: str
+    ) -> ChatSession | None:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(ChatSession).where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+            )
+            if record is None:
+                return None
+            return await self._chat_session_with_current_run_sql(session, record)
+
+    async def update_owned_chat_session(
+        self, session_id: str, user_id: str, title: str
+    ) -> ChatSession | None:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(ChatSession)
+                .where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                return None
+            normalized_title = title.strip()
+            if not normalized_title:
+                raise ValueError("会话标题不能为空")
+            record.title = normalized_title
+            record.updated_at = now()
+            await session.commit()
+            await session.refresh(record)
+            return await self._chat_session_with_current_run_sql(session, record)
+
+    async def list_session_thread_ids(
+        self, session_id: str, user_id: str
+    ) -> list[str] | None:
+        async with get_session_factory()() as session:
+            owned = await session.scalar(
+                select(ChatSession.id).where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+            )
+            if owned is None:
+                return None
+            return list(
+                await session.scalars(
+                    select(AgentRun.thread_id).where(
+                        AgentRun.session_id == session_id,
+                        AgentRun.user_id == user_id,
+                    )
+                )
+            )
+
+    async def delete_owned_chat_session(
+        self, session_id: str, user_id: str
+    ) -> bool:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(ChatSession)
+                .where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                return False
+            active = await session.scalar(
+                select(AgentRun.id).where(
+                    AgentRun.session_id == session_id,
+                    AgentRun.status.in_(["pending", "running", "interrupted"]),
+                )
+            )
+            if active is not None:
+                raise ChatActiveRunError(
+                    "会话仍有运行中或等待确认的任务，请先取消"
+                )
+            run_ids = list(
+                await session.scalars(
+                    select(AgentRun.id).where(AgentRun.session_id == session_id)
+                )
+            )
+            if run_ids:
+                # jobs.agent_run_id 使用 SET NULL，以便管理员保留一般任务记录；
+                # 删除会话时必须显式清理 Agent 作业，避免留下无归属历史。
+                await session.execute(delete(Job).where(Job.agent_run_id.in_(run_ids)))
+            await session.delete(record)
+            await session.commit()
+            return True
+
+    async def list_chat_messages(
+        self, session_id: str, user_id: str
+    ) -> list[ChatMessage] | None:
+        async with get_session_factory()() as session:
+            owned = await session.scalar(
+                select(ChatSession.id).where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+            )
+            if owned is None:
+                return None
+            return list(
+                await session.scalars(
+                    select(ChatMessage)
+                    .where(ChatMessage.session_id == session_id)
+                    .order_by(ChatMessage.sequence)
+                )
+            )
+
+    async def submit_chat_message(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        client_message_id: str,
+        request_hash: str,
+        scope_snapshot: dict,
+    ) -> ChatSubmission | None:
+        async with get_session_factory()() as session:
+            chat_session = await session.scalar(
+                select(ChatSession)
+                .where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+                .with_for_update()
+            )
+            if chat_session is None:
+                return None
+            existing = await session.scalar(
+                select(ChatMessage).where(
+                    ChatMessage.session_id == session_id,
+                    ChatMessage.client_message_id == client_message_id,
+                )
+            )
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise ChatIdempotencyConflictError(
+                        "客户端消息 ID 已用于不同请求"
+                    )
+                run = await session.get(AgentRun, existing.run_id)
+                if run is None:
+                    raise RuntimeError("幂等消息关联的 Agent Run 不存在")
+                return ChatSubmission(existing, run, True)
+            active = await session.scalar(
+                select(AgentRun.id).where(
+                    AgentRun.session_id == session_id,
+                    AgentRun.status.in_(["pending", "running", "interrupted"]),
+                )
+            )
+            if active is not None:
+                raise ChatActiveRunError("当前会话已有正在运行或等待确认的任务")
+            next_sequence = 1 + int(
+                await session.scalar(
+                    select(func.max(ChatMessage.sequence)).where(
+                        ChatMessage.session_id == session_id
+                    )
+                )
+                or 0
+            )
+            run_id = str(uuid.uuid4())
+            user_message = ChatMessage(
+                id=str(uuid.uuid4()),
+                session_id=session_id,
+                role="user",
+                sequence=next_sequence,
+                status="completed",
+                content=content,
+                citations=[],
+                run_id=run_id,
+                client_message_id=client_message_id,
+                request_hash=request_hash,
+            )
+            assistant_message = ChatMessage(
+                id=str(uuid.uuid4()),
+                session_id=session_id,
+                role="assistant",
+                sequence=next_sequence + 1,
+                status="pending",
+                content="",
+                citations=[],
+                run_id=run_id,
+            )
+            run = AgentRun(
+                id=run_id,
+                user_id=user_id,
+                session_id=session_id,
+                thread_id=f"{user_id}:{session_id}:{run_id}",
+                status="pending",
+                cancel_requested=False,
+                scope_snapshot=dict(scope_snapshot),
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+                request_hash=request_hash,
+            )
+            job = Job(
+                agent_run_id=run_id,
+                type="agent_run",
+                status=JobStatus.queued,
+            )
+            session.add_all([user_message, assistant_message, run, job])
+            if chat_session.title == "新会话":
+                chat_session.title = content.strip().replace("\n", " ")[:60]
+            chat_session.updated_at = now()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                async with get_session_factory()() as retry_session:
+                    replay = await retry_session.scalar(
+                        select(ChatMessage).where(
+                            ChatMessage.session_id == session_id,
+                            ChatMessage.client_message_id == client_message_id,
+                        )
+                    )
+                    if replay is not None:
+                        if replay.request_hash != request_hash:
+                            raise ChatIdempotencyConflictError(
+                                "客户端消息 ID 已用于不同请求"
+                            ) from exc
+                        replay_run = await retry_session.get(AgentRun, replay.run_id)
+                        if replay_run is None:
+                            raise RuntimeError(
+                                "幂等消息关联的 Agent Run 不存在"
+                            ) from exc
+                        return ChatSubmission(replay, replay_run, True)
+                    retry_active = await retry_session.scalar(
+                        select(AgentRun.id).where(
+                            AgentRun.session_id == session_id,
+                            AgentRun.status.in_(
+                                ["pending", "running", "interrupted"]
+                            ),
+                        )
+                    )
+                    if retry_active is not None:
+                        raise ChatActiveRunError(
+                            "当前会话已有正在运行或等待确认的任务"
+                        ) from exc
+                raise
+            await session.refresh(user_message)
+            await session.refresh(run)
+            return ChatSubmission(user_message, run, False)
 
     async def create_agent_run(
         self, run_id: str, user_id: str, session_id: str, thread_id: str

@@ -1,17 +1,15 @@
 "use client";
 
-import { AlignLeft, ArrowLeft, ChevronLeft, ChevronRight, FileText, Focus, Info, Languages, Maximize2, MessageSquare, Minus, Network, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, PencilLine, Plus, Quote, Send, X } from "lucide-react";
+import { AlignLeft, ArrowLeft, ChevronLeft, ChevronRight, FileText, Focus, Info, Languages, Maximize2, MessageSquare, Minus, Network, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, PencilLine, Plus, Quote, X } from "lucide-react";
 import dynamic from "next/dynamic";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { z } from "zod";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
-import { groundedAnswer, papers } from "@/lib/fixtures";
+import { papers } from "@/lib/fixtures";
 import { demoCurrentUser, getCurrentUser, updateUserPreferences } from "@/lib/preferences-api";
 import { useWorkspaceStore, type MobilePane } from "@/lib/store";
-import type { AgentActivity, AgentAnswer, Paper, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput } from "@/lib/types";
-import { AgentRunProgress } from "./agent-run-progress";
-import { EvidenceQualityStrip } from "./evidence-quality-strip";
+import type { Paper, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput } from "@/lib/types";
+import { ChatWorkspace } from "./chat-workspace";
 import { PaperDetailsDialog } from "./paper-details-dialog";
 import { StructureDiagram } from "./structure-diagram";
 import { SummaryContent } from "./summary-content";
@@ -22,10 +20,6 @@ const RealPdfDocument = dynamic(
   { ssr: false, loading: () => <p role="status">正在准备 PDF 阅读器…</p> },
 );
 
-const questionSchema = z.object({
-  question: z.string().trim().min(3, "问题至少需要 3 个字符").max(500, "问题不能超过 500 个字符"),
-});
-type QuestionInput = z.infer<typeof questionSchema>;
 type AssistantView = "ask" | "summary" | "structure";
 
 const tabItems: { id: MobilePane; label: string; icon: typeof FileText }[] = [
@@ -39,6 +33,17 @@ const assistantTabs: { id: AssistantView; label: string; icon: typeof MessageSqu
   { id: "summary", label: "概览", icon: AlignLeft },
   { id: "structure", label: "结构", icon: Network },
 ];
+
+function subscribeNarrowViewport(onChange: () => void): () => void {
+  if (typeof window === "undefined" || !window.matchMedia) return () => undefined;
+  const query = window.matchMedia("(max-width: 900px)");
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function getNarrowViewport(): boolean {
+  return typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 900px)").matches);
+}
 
 function ResizeSeparator({ label }: { label: string }) {
   return <Separator className="resize-handle" aria-label={label} />;
@@ -67,21 +72,17 @@ function translationStatusLabel(translation: PaperTranslation): string {
 
 export function PaperWorkspace({ paperId = "attention", demo = false, initialPage }: { paperId?: string; demo?: boolean; initialPage?: number }) {
   const isReal = !demo && process.env.NEXT_PUBLIC_DATA_MODE === "real";
+  const narrowViewport = useSyncExternalStore(subscribeNarrowViewport, getNarrowViewport, () => false);
   const dataSource = demo ? demoDataSource : getDataSource();
   const fallbackPaper = papers.find((item) => item.id === paperId) ?? papers[0];
   const [paper, setPaper] = useState<Paper | null>(isReal ? null : fallbackPaper);
   const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage ?? (demo ? 2 : 1)));
   const [mobilePane, setMobilePane] = useState<MobilePane>("pdf");
   const [assistantView, setAssistantView] = useState<AssistantView>("ask");
-  const [answer, setAnswer] = useState<AgentAnswer | null>(isReal ? null : groundedAnswer);
-  const [activities, setActivities] = useState<AgentActivity[]>([]);
   const [summary, setSummary] = useState<PaperSummary | null>(null);
   const [structure, setStructure] = useState<PaperStructureGraph | null>(null);
-  const [busy, setBusy] = useState<"ask" | "summary" | "structure" | null>(null);
+  const [busy, setBusy] = useState<"summary" | "structure" | null>(null);
   const [loadMessage, setLoadMessage] = useState("");
-  const [askMessage, setAskMessage] = useState("");
-  const [questionDraft, setQuestionDraft] = useState("");
-  const [questionError, setQuestionError] = useState("");
   const [artifactMessage, setArtifactMessage] = useState("");
   const [manageMessage, setManageMessage] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -93,6 +94,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const [panelMessage, setPanelMessage] = useState("");
   const [translationDialogOpen, setTranslationDialogOpen] = useState(false);
   const [translationLanguage, setTranslationLanguage] = useState(demoCurrentUser.preferences.translationLanguage);
+  const [webEnabled, setWebEnabled] = useState(demoCurrentUser.preferences.arxivSearchEnabled);
   const [translation, setTranslation] = useState<PaperTranslation | null>(null);
   const [translationVisible, setTranslationVisible] = useState(false);
   const [translationPage, setTranslationPage] = useState<PaperTranslationPage | null>(null);
@@ -164,6 +166,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
         setZoomPercent(nextZoom);
         lastPersistedZoomRef.current = nextZoom;
         setTranslationLanguage(user.preferences.translationLanguage);
+        setWebEnabled(user.preferences.arxivSearchEnabled);
       } catch (error) {
         if (!stopped) setPanelMessage(error instanceof Error ? error.message : "阅读偏好读取失败，已使用默认布局");
       } finally {
@@ -227,45 +230,6 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   function openCitation(page: number) {
     setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
     setMobilePane("pdf");
-  }
-
-  async function submit(values: QuestionInput) {
-    const question = values.question;
-    setBusy("ask");
-    setAskMessage("");
-    setActivities([]);
-    setAnswer({ question, answer: "", citations: [], activities: [] });
-    try {
-      const next = await dataSource.ask(question, [paperId], {
-        onActivity: (activity) => {
-          setActivities((items) => items.some((item) => item.key === activity.key) ? items.map((item) => item.key === activity.key ? activity : item) : [...items, activity]);
-        },
-        onAnswerUpdate: (nextAnswer) => {
-          setAnswer((current) => current?.question === question ? { ...current, answer: nextAnswer } : current);
-        },
-        onCitationsUpdate: (citations) => {
-          setAnswer((current) => current?.question === question ? { ...current, citations } : current);
-        },
-        onEvidenceQualityUpdate: (evidenceQuality) => {
-          setAnswer((current) => current?.question === question ? { ...current, evidenceQuality } : current);
-        },
-      });
-      setAnswer(next);
-      setActivities(next.activities ?? []);
-      setQuestionDraft("");
-    }
-    catch (error) { setAskMessage(error instanceof Error ? error.message : "提问失败"); }
-    finally { setBusy(null); }
-  }
-
-  async function validateAndSubmitQuestion() {
-    const parsed = questionSchema.safeParse({ question: questionDraft });
-    if (!parsed.success) {
-      setQuestionError(parsed.error.issues[0]?.message ?? "请输入有效问题");
-      return;
-    }
-    setQuestionError("");
-    await submit(parsed.data);
   }
 
   async function generateSummary() {
@@ -378,7 +342,6 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const pageShortcuts = paper.pages ? [...new Set([1, 2, Math.ceil(paper.pages / 2), paper.pages])].filter((page) => page > 0 && page <= paper.pages) : [1];
 
   const evidencePages = [...new Set([
-    ...(answer?.citations.map((item) => item.page) ?? []),
     ...(summary?.citations.map((item) => item.physicalPage) ?? []),
     ...(structure?.nodes.map((item) => item.physicalPage) ?? []),
   ])];
@@ -432,7 +395,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
       </details>
     </div>
     <div className={translation && translationVisible ? "document-stage translation-stage" : "document-stage"} tabIndex={0} aria-label="PDF 页面，可滚动浏览">
-      <div className="translation-original">{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
+      <div className="translation-original" tabIndex={0} aria-label={`原始 PDF，第 ${currentPage} 页`}>{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
       {translation && translationVisible && <aside className="translation-page" aria-label={`${translationLanguageLabel(translation.targetLanguage)}译文，第 ${currentPage} 页`}>
         <div className="translation-page-head"><div><span>{translationLanguageLabel(translation.targetLanguage)}译文</span><strong>第 {currentPage} 页</strong></div><button type="button" className="icon-button" aria-label="关闭译文双栏" onClick={() => setTranslationVisible(false)}><X size={16} /></button></div>
         <div className="translation-progress" role="status"><span>{translationStatusLabel(translation)}</span><progress aria-label={`翻译进度 ${translation.progress}%`} max={100} value={translation.progress}>{translation.progress}%</progress></div>
@@ -447,11 +410,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     <div className="reader-status"><strong>{evidencePages.includes(currentPage) ? "证据页已定位" : "论文页面"}</strong><span>第 {currentPage} 页</span><span>{translation && translationVisible ? `原文 + ${translationLanguageLabel(translation.targetLanguage)}译文` : isReal ? "原始 PDF" : "模拟文本层"}</span></div>
   </section>;
 
-  const askContent = <div className="conversation">
-    <AgentRunProgress activities={activities} />
-    {answer ? <><div className={`run-note ${answer.evidenceQuality?.grade === "insufficient" ? "quality-insufficient" : ""}`} role="status">{answer.evidenceQuality?.summary ?? (busy === "ask" ? "问题已提交，正在检索并等待回答事件" : `已保留 ${answer.citations.length} 条可验证证据`)}</div><EvidenceQualityStrip quality={answer.evidenceQuality} /><span className="eyebrow">你的问题</span><p className="question-text">{answer.question}</p><span className="eyebrow">{busy === "ask" && !answer.answer ? "回答状态" : answer.evidenceQuality?.grade === "insufficient" ? "证据状态" : "基于原文回答"}</span><p className="answer-text">{answer.answer || (busy === "ask" ? "正在准备基于文献证据的回答…" : "本次运行未返回回答。")} {answer.citations.map((citation, index) => <button key={citation.id} className="inline-citation" onClick={() => openCitation(citation.page)} aria-label={`引用 [${index + 1}]，查看 PDF 第 ${citation.page} 页`}>[{index + 1}]</button>)}</p>{answer.citations.length > 0 && <div className="citation-list" aria-label="回答引用">{answer.citations.map((citation, index) => <button className="citation-row" key={citation.id} onClick={() => openCitation(citation.page)}><span className="citation-no">{String(index + 1).padStart(2, "0")}</span><q>{citation.quote}</q><span className="citation-page">PDF {String(citation.page).padStart(2, "0")}</span></button>)}</div>}</> : <div className="assistant-empty"><Quote size={19} /><strong>从原文开始提问</strong><p>回答只使用当前论文中已完成索引的内容，并附上可回读的物理页码。</p></div>}
-    {askMessage && <p className="field-error" role="alert">{askMessage}</p>}
-  </div>;
+  const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} onOpenCitation={(citation) => openCitation(citation.page)} />;
 
   const summaryContent = <div className="artifact-panel">
     <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>围绕研究问题、方法、结果与限制整理；不会补写证据中不存在的内容。</p></div><button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateSummary()}>{busy === "summary" ? "正在生成" : summary ? "重新生成" : "生成概览"}</button></div>
@@ -467,17 +426,16 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     {artifactMessage && <p className="field-error" role="alert">{artifactMessage}</p>}
   </div>;
 
-  const askPane = <aside className={`workspace-assistant pane-view ${mobilePane === "ask" ? "mobile-active" : ""}`} aria-label="论文助手">
+  const renderAskPane = (surface: "desktop" | "mobile") => <aside className={`workspace-assistant pane-view ${mobilePane === "ask" ? "mobile-active" : ""}`} aria-label="论文助手">
     <div className="assistant-head"><span className="assistant-title"><Quote size={14} />论文助手</span><nav className="assistant-tabs" aria-label="论文助手视图">{assistantTabs.map(({ id, label, icon: Icon }) => <button key={id} className={assistantView === id ? "active" : ""} aria-current={assistantView === id ? "page" : undefined} onClick={() => { setAssistantView(id); setArtifactMessage(""); }}><Icon size={13} />{label}</button>)}</nav></div>
-    {assistantView === "ask" ? askContent : assistantView === "summary" ? summaryContent : structureContent}
-    {assistantView === "ask" && <form className="composer" onSubmit={(event) => { event.preventDefault(); void validateAndSubmitQuestion(); }}><label className="composer-box"><span className="sr-only">向论文提问</span><textarea name="question" value={questionDraft} onChange={(event) => { setQuestionDraft(event.target.value); if (questionError) setQuestionError(""); }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void validateAndSubmitQuestion(); } }} placeholder="继续追问这篇论文…" rows={2} /><button className="send-button" disabled={busy === "ask" || !readyForArtifacts} aria-label="发送问题"><Send size={15} /></button></label>{questionError && <span className="field-error">{questionError}</span>}<div className="composer-meta"><span>{readyForArtifacts ? "仅依据当前论文回答" : "等待索引完成后可提问"}</span><span>{busy === "ask" ? "正在检索…" : "Ctrl + Enter"}</span></div></form>}
+    {assistantView === "ask" ? ((surface === "mobile") === narrowViewport ? askContent : null) : assistantView === "summary" ? summaryContent : structureContent}
   </aside>;
 
   return (
     <div ref={workspaceRef} className="paper-workspace" data-client-ready="false">
       <nav className="mobile-workspace-tabs" aria-label="移动端工作区">{tabItems.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setMobilePane(id)} className={mobilePane === id ? "active" : ""} aria-current={mobilePane === id ? "page" : undefined}><Icon size={15} />{label}<span className="sr-only">{mobilePane === id ? "，当前视图" : ""}</span></button>)}</nav>
-      <div className="workspace-desktop"><Group orientation="horizontal" id={demo ? "demo-workspace" : "paper-workspace"}>{leftPanelOpen && <Fragment key="info-zone"><Panel id="info" defaultSize="20%" minSize="16%" maxSize="28%">{infoPane}</Panel><ResizeSeparator label="调整论文信息栏宽度" /></Fragment>}<Panel key="reader-zone" id="reader" defaultSize={leftPanelOpen && assistantPanelOpen ? "49%" : leftPanelOpen ? "72%" : assistantPanelOpen ? "69%" : "100%"} minSize={leftPanelOpen || assistantPanelOpen ? "42%" : "100%"}>{readerPane}</Panel>{assistantPanelOpen && <Fragment key="assistant-zone"><ResizeSeparator label="调整论文助手栏宽度" /><Panel id="assistant" defaultSize="31%" minSize="25%" maxSize="39%">{askPane}</Panel></Fragment>}</Group></div>
-      <div className="workspace-mobile">{infoPane}{readerPane}{askPane}</div>
+      <div className="workspace-desktop"><Group orientation="horizontal" id={demo ? "demo-workspace" : "paper-workspace"}>{leftPanelOpen && <Fragment key="info-zone"><Panel id="info" defaultSize="20%" minSize="16%" maxSize="28%">{infoPane}</Panel><ResizeSeparator label="调整论文信息栏宽度" /></Fragment>}<Panel key="reader-zone" id="reader" defaultSize={leftPanelOpen && assistantPanelOpen ? "49%" : leftPanelOpen ? "72%" : assistantPanelOpen ? "69%" : "100%"} minSize={leftPanelOpen || assistantPanelOpen ? "42%" : "100%"}>{readerPane}</Panel>{assistantPanelOpen && <Fragment key="assistant-zone"><ResizeSeparator label="调整论文助手栏宽度" /><Panel id="assistant" defaultSize="31%" minSize="25%" maxSize="39%">{renderAskPane("desktop")}</Panel></Fragment>}</Group></div>
+      <div className="workspace-mobile">{infoPane}{readerPane}{renderAskPane("mobile")}</div>
       {panelMessage && <p className="workspace-preference-error" role="alert">{panelMessage}</p>}
       <PaperDetailsDialog paper={paper} open={detailsOpen} onOpenChange={setDetailsOpen} onSave={updatePaper} onDelete={deletePaper} onRetry={retryPaper} />
       <TranslationConfirmDialog open={translationDialogOpen} pages={paper.pages} targetLanguage={translationLanguage} busy={translationBusy} error={translationMessage} onTargetLanguageChange={setTranslationLanguage} onOpenChange={setTranslationDialogOpen} onConfirm={() => void startTranslation()} />

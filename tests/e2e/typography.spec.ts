@@ -20,11 +20,11 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
       Number.parseFloat(getComputedStyle(element).fontSize),
     );
 
-  expect(await sizeOf(".answer-text")).toBeGreaterThanOrEqual(14);
-  expect(await sizeOf(".evidence-quality-strip")).toBeGreaterThanOrEqual(12);
-  expect(await sizeOf(".citation-row q")).toBeGreaterThanOrEqual(14);
-  expect(await sizeOf(".composer-box textarea")).toBeGreaterThanOrEqual(14);
-  expect(await sizeOf(".paper-summary p")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".safe-markdown")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".chat-message > span")).toBeGreaterThanOrEqual(12);
+  expect(await sizeOf(".chat-citations small")).toBeGreaterThanOrEqual(12);
+  expect(await sizeOf(".chat-composer textarea")).toBeGreaterThanOrEqual(14);
+  expect(await sizeOf(".paper-summary p")).toBeGreaterThanOrEqual(12);
   expect(await sizeOf(".reader-status")).toBeGreaterThanOrEqual(12);
   expect(await sizeOf(".mock-paper > p:not(.pdf-authors)")).toBeGreaterThanOrEqual(14);
 

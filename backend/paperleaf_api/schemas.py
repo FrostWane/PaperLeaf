@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .models import JobStatus, PaperStatus, UserRole
 
@@ -123,23 +123,117 @@ class PaperBulkActionResponse(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=12_000)
-    scope: Literal["paper", "selection", "collection", "library"] = "library"
-    selected_paper_ids: list[str] = Field(default_factory=list, max_length=50)
-    selected_collection_id: Optional[str] = None
     web_enabled: bool = False
+
+
+class ChatSessionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="新会话", min_length=1, max_length=200)
+    type: Literal["paper", "collection", "library"] = "library"
+    paper_id: Optional[str] = None
+    collection_id: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("会话标题不能为空")
+        return normalized
+
+
+class ChatSessionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("会话标题不能为空")
+        return normalized
+
+
+class ChatSessionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str
+    type: Literal["paper", "collection", "library"]
+    paper_id: Optional[str]
+    collection_id: Optional[str]
+    current_run_id: Optional[str] = None
+    current_run_status: Optional[
+        Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]
+    ] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    session_id: str
+    role: Literal["user", "assistant"]
+    sequence: int = Field(ge=1)
+    status: Literal["pending", "streaming", "completed", "failed", "cancelled"]
+    content: str
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    run_id: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatSubmissionRead(BaseModel):
+    session_id: str
+    message_id: str
+    run_id: str
+    status: Literal["pending"] = "pending"
+    replayed: bool = False
 
 
 class AgentRunRead(BaseModel):
     run_id: str
     session_id: str
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]
+    cancel_requested: bool = False
+    scope_snapshot: dict[str, Any] = Field(default_factory=dict)
+    pending_action: Optional[dict[str, Any]] = None
     answer: str = ""
     citations: list[dict[str, Any]] = Field(default_factory=list)
     evidence_quality: dict[str, Any] = Field(default_factory=dict)
     node_trace: list[dict[str, Any]] = Field(default_factory=list)
     model_attempts: list[dict[str, Any]] = Field(default_factory=list)
     duration_ms: Optional[int] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
     error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentRunEventRead(BaseModel):
+    id: int
+    sequence: int
+    event: Literal[
+        "run_started",
+        "node_started",
+        "node_finished",
+        "tool_started",
+        "tool_finished",
+        "message_delta",
+        "citation",
+        "interrupt",
+        "error",
+        "run_finished",
+    ]
+    run_id: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
 
 
 class AgentResumeRequest(BaseModel):

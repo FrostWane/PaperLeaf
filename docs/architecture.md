@@ -13,7 +13,7 @@ flowchart TB
     end
     subgraph Services["应用服务"]
         API["FastAPI\n认证 / RBAC / CRUD / SSE"]
-        Worker["Python Worker\n解析 / OCR / 切块 / 嵌入 / 清理"]
+        Worker["Python Worker\n解析 / OCR / Agent / 翻译 / 清理"]
         Graph["LangGraph\n状态 / 路由 / 中断 / 恢复"]
         RAG["页级 RAG\n向量 + 关键词 + RRF"]
         Runtime["模型运行时\n超时 / 主备 / 熔断 / 脱敏轨迹"]
@@ -28,7 +28,7 @@ flowchart TB
     Web -->|"REST / SSE / Range"| API
     API --> DB
     API --> Store
-    API --> Graph
+    Worker --> Graph
     Graph --> RAG
     Graph --> Arxiv
     Graph --> Runtime
@@ -142,6 +142,36 @@ sequenceDiagram
 
 `tool_finished` SSE 只向前端发送上述可公开的质量摘要，不发送思维链。该边界使切块、召回、页聚合、检索质量、答案支持、拒答和引用准确率可以分别测试。
 
+## 持久问答与后台 Agent
+
+```mermaid
+sequenceDiagram
+    participant U as 浏览器
+    participant A as FastAPI
+    participant D as PostgreSQL
+    participant W as Worker
+    participant G as LangGraph
+
+    U->>A: POST 消息 + Idempotency-Key
+    A->>D: 原子保存消息、Run、范围快照和 Job
+    A-->>U: 202 + message_id + run_id
+    W->>D: SKIP LOCKED 领取 agent_run + 租约令牌
+    W->>G: 使用服务端范围和 Checkpoint 执行
+    G-->>W: 模型流与候选段落
+    W->>W: 校验引用归属与证据支持
+    W->>D: 原子追加已核验段落和公开事件
+    U->>A: GET events + Last-Event-ID
+    A->>D: 回放遗漏事件并等待新事件
+    A-->>U: SSE 增量 / 引用 / 中断 / 终态
+```
+
+- 会话分别绑定单篇论文、集合或全库。提交时由服务端递归解析可访问且已索引的论文 ID，并把结果写入 Run 范围快照；模型和前端都不能在执行中扩大范围。
+- 同一会话只允许一个活动 Run。相同幂等键与相同请求只复用已受理结果，不重复创建消息、Run 或作业；相同键配不同请求会被拒绝。
+- Agent 事件按 Run 内递增序号持久化。SSE 是可中断的观察通道，不拥有运行生命周期；页面关闭、路由切换和临时断线不会取消 Worker。
+- 模型可以内部流式返回，但只有完整事实段落通过引用来源和证据支持检查后才同时追加到助手消息与 `message_delta` 事件。失败、取消和过期租约不能写入未经核验的尾部内容。
+- arXiv 候选通过 `interrupt` 进入持久等待状态。批准或拒绝动作携带 `action_id`，相同决定可幂等重放；恢复后清除待确认动作并重新入队同一 Run。
+- 取消请求先持久化。Worker 在节点和写入边界检查取消与租约；失去租约的旧 Worker 不能取消或覆盖后来领取者的结果。
+
 ## 模型运行时
 
 问答、证据支持检查、论文总结、全文翻译、查询/文献嵌入和视觉 OCR 共用同一类运行策略，但按 `provider + purpose` 隔离故障状态：
@@ -179,8 +209,8 @@ arXiv 下载由独立、鉴权且需要 CSRF 的导入接口完成；论文总�
 - PostgreSQL 与 MinIO 使用健康检查和持久卷。
 - 作业记录阶段、尝试次数和错误码；重复执行不应生成重复 Chunk 或对象。
 - 作业领取记录租约时间和随机令牌。每个模型分块前后都会检查并续租；已经过期的 Worker 不能复活自己的租约，也不能继续调用模型或写回结果。单次模型超时最多 120 秒，显著短于 30 分钟作业租约；翻译页按瞬态/永久错误分类重试并退避。
-- Agent Run 所有权、中断状态、节点轨迹与 LangGraph Checkpoint 均写入 PostgreSQL，API 重建后可按原运行 ID 恢复；其他用户访问同一 ID 仍返回 404。
-- API 维护当前进程内运行任务表；取消接口先持久化取消状态，再向对应异步任务传播取消。重复取消返回同一结果，完成或失败的运行不能被改写为取消。
+- 问答会话、消息、Agent Run、公开事件、中断状态、范围快照与 LangGraph Checkpoint 均写入 PostgreSQL，API 或浏览器重建后可按原运行 ID 恢复；其他用户访问同一 ID 仍返回 404。
+- Worker 使用作业租约执行 Agent。取消接口持久化取消状态，执行者在安全边界停止 Graph 与模型调用；重复取消保持幂等，完成或失败的运行不能被改写为取消。
 - 删除采用 `deleting` 状态和后台清理，避免部分删除对外可见。
 
 ## 扩展点

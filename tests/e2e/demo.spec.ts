@@ -5,13 +5,13 @@ test("公开演示可以提问并通过引用跳到论文页", async ({ page }) 
   await page.goto("/demo");
   await expect(page.getByRole("main", { name: "PaperLeaf 文献阅读工作台" })).toBeVisible();
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
-  const mobile = page.viewportSize()!.width < 760;
+  const mobile = page.viewportSize()!.width <= 900;
   if (mobile) {
     await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
     await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("提问");
   }
   const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
-  const citation = assistant.getByRole("button", { name: /引用 \[2\].*第 6 页/ });
+  const citation = assistant.getByRole("button", { name: /PDF 6/ });
   await expect(citation).toBeVisible();
   await citation.click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
@@ -19,20 +19,20 @@ test("公开演示可以提问并通过引用跳到论文页", async ({ page }) 
   await expect(reader.getByText("6 / 15")).toBeVisible();
 });
 
-test("跨文献提问展示证据质量并跳到引用物理页", async ({ page }) => {
+test("跨文献提问持久化运行状态并跳到引用物理页", async ({ page }) => {
   await page.goto("/ask");
   await expect(page.locator('.ask-layout[data-client-ready="true"]')).toBeVisible();
-  await page.getByPlaceholder(/这些论文如何解释/).fill("作者为什么放弃循环结构？");
-  await page.getByRole("button", { name: "开始提问" }).click();
+  await page.getByPlaceholder(/输入问题/).fill("作者为什么放弃循环结构？");
+  await page.getByRole("button", { name: "发送问题" }).click();
 
-  const trace = page.getByLabel("Agent 运行轨迹");
+  const trace = page.getByLabel("问答处理阶段");
   await expect(trace).toBeVisible();
-  await expect(trace).toContainText("检查问题范围");
-  await expect(page.getByRole("status")).toContainText("关键词与语义检索相互印证");
-  await page.getByRole("link", { name: /Attention Is All You Need.*PDF 2/ }).click();
+  await expect(trace).toContainText("检索");
+  await expect(page.getByText(/离开页面不会中断|回答已完成并持久化/)).toBeVisible();
+  await page.getByRole("button", { name: /Attention Is All You Need.*PDF 2/ }).first().click();
 
   await expect(page).toHaveURL(/\/library\/attention\?page=2/);
-  const mobile = page.viewportSize()!.width < 760;
+  const mobile = page.viewportSize()!.width <= 900;
   const reader = mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader");
   await expect(reader.getByText("2 / 15")).toBeVisible();
 });
@@ -55,7 +55,7 @@ test("论文工作台没有 serious 或 critical 无障碍问题", async ({ page
 test("论文工作台分隔条和引用保留完整可访问语义", async ({ page }) => {
   await page.goto("/demo");
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
-  const mobile = page.viewportSize()!.width < 760;
+  const mobile = page.viewportSize()!.width <= 900;
   if (!mobile) {
     const separators = page.locator('.workspace-desktop [role="separator"]');
     await expect(separators).toHaveCount(2);
@@ -67,13 +67,27 @@ test("论文工作台分隔条和引用保留完整可访问语义", async ({ pa
   }
   if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
   const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
-  await expect(assistant.getByRole("button", { name: /引用 \[1\].*第 2 页/ })).toBeVisible();
+  await expect(assistant.getByRole("button", { name: /PDF 2/ }).first()).toBeVisible();
+});
+
+test("跨文献后台问答离开页面后继续，返回时恢复会话", async ({ page }) => {
+  await page.goto("/ask");
+  const input = page.getByPlaceholder(/输入问题/);
+  await input.fill("离开页面后仍要完成的问题");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  const submittedQuestion = page.locator(".chat-message.user > p").filter({ hasText: "离开页面后仍要完成的问题" });
+  await expect(submittedQuestion).toHaveText("离开页面后仍要完成的问题");
+  await page.goto("/library?demo=1");
+  await page.waitForTimeout(1100);
+  await page.goto("/ask");
+  await expect(page.locator(".chat-message.user > p").filter({ hasText: "离开页面后仍要完成的问题" })).toHaveText("离开页面后仍要完成的问题");
+  await expect(page.locator(".safe-markdown").filter({ hasText: "核验结论" })).toBeVisible();
 });
 
 test("公开演示可以生成证据化概览和结构图", async ({ page }) => {
   await page.goto("/demo");
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
-  const mobile = page.viewportSize()!.width < 760;
+  const mobile = page.viewportSize()!.width <= 900;
   if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
   const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
 
@@ -94,7 +108,7 @@ test("公开演示可以生成证据化概览和结构图", async ({ page }) => 
 test("文献设置可以编辑元数据且删除需要二次确认", async ({ page }) => {
   await page.goto("/demo");
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
-  const mobile = page.viewportSize()!.width < 760;
+  const mobile = page.viewportSize()!.width <= 900;
   if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^信息/ }).click();
   const info = mobile ? page.locator(".workspace-mobile .workspace-info.mobile-active") : page.locator(".workspace-desktop .workspace-info");
   await info.getByRole("button", { name: "编辑文献信息" }).click();
@@ -116,7 +130,7 @@ test("文献设置可以编辑元数据且删除需要二次确认", async ({ pa
 test("PDF 工具栏支持缩放、专注阅读和可恢复的逐页双栏翻译", async ({ page }) => {
   await page.goto("/demo");
   await expect(page.locator('.paper-workspace[data-client-ready="true"]')).toBeVisible();
-  const mobile = page.viewportSize()!.width < 760;
+  const mobile = page.viewportSize()!.width <= 900;
   const desktop = page.locator(".workspace-desktop");
   const reader = mobile
     ? page.locator(".workspace-mobile .workspace-reader.mobile-active")
@@ -168,9 +182,59 @@ test("PDF 工具栏支持缩放、专注阅读和可恢复的逐页双栏翻译"
 
   const globalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(globalOverflow).toBeLessThanOrEqual(1);
-  if (mobile) {
+  if (page.viewportSize()!.width <= 390) {
     const toolbar = reader.locator(".reader-toolbar");
     const box = await toolbar.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
     expect(box.scroll).toBeGreaterThan(box.client);
+  }
+});
+
+test("持久问答在 390/768 与 200% 等效视口下完整可操作", async ({ page }) => {
+  const initialViewport = page.viewportSize();
+  if (!initialViewport) throw new Error("响应式门禁需要固定 Playwright 视口");
+  test.skip(![390, 768].includes(initialViewport.width), "只在移动端与平板门禁视口运行");
+
+  await page.goto("/ask");
+  const workspace = page.locator('.chat-workspace[data-active-run="false"]');
+  await expect(workspace).toBeVisible();
+
+  const historyButton = workspace.getByRole("button", { name: "历史" });
+  const newSessionButton = workspace.getByRole("button", { name: "新对话" });
+  const sendButton = workspace.getByRole("button", { name: "发送问题" });
+  for (const control of [historyButton, newSessionButton, sendButton]) {
+    const box = await control.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+
+  if (initialViewport.width === 390) {
+    await expect(workspace.getByRole("complementary", { name: "历史对话" })).toHaveCount(0);
+    await historyButton.click();
+    await expect(workspace.getByRole("complementary", { name: "历史对话" })).toBeVisible();
+    await workspace.getByRole("button", { name: "关闭历史对话" }).click();
+  }
+
+  await newSessionButton.click();
+  const closeHistory = workspace.getByRole("button", { name: "关闭历史对话" });
+  if (await closeHistory.isVisible().catch(() => false)) await closeHistory.click();
+  const prompt = workspace.getByRole("button", { name: "比较这些论文所采用的方法与关键假设" });
+  await expect(prompt).toBeVisible();
+  expect((await prompt.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await prompt.click();
+  await expect(workspace.getByPlaceholder(/输入问题/)).toHaveValue("比较这些论文所采用的方法与关键假设");
+  await expect(sendButton).toBeEnabled();
+  await expect(workspace).toHaveAttribute("data-active-run", "false");
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+
+  if (initialViewport.width === 768) {
+    // 768 CSS px 缩为一半，等效验证浏览器 200% 放大时的 384 CSS px 重排。
+    await page.setViewportSize({ width: 384, height: 512 });
+    const narrowCloseHistory = workspace.getByRole("button", { name: "关闭历史对话" });
+    if (await narrowCloseHistory.isVisible().catch(() => false)) await narrowCloseHistory.click();
+    await expect(workspace.getByPlaceholder(/输入问题/)).toBeVisible();
+    await expect(sendButton).toBeVisible();
+    const zoomedOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(zoomedOverflow).toBeLessThanOrEqual(1);
   }
 });

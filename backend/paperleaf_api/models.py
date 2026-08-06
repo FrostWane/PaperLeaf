@@ -283,6 +283,7 @@ class Job(Base):
     __table_args__ = (
         Index("ix_jobs_claim", "status", "available_at", "created_at"),
         Index("uq_jobs_translation_id", "translation_id", unique=True),
+        Index("uq_jobs_agent_run_id", "agent_run_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -291,6 +292,9 @@ class Job(Base):
     )
     translation_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("paper_translations.id", ondelete="SET NULL"), nullable=True
+    )
+    agent_run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
     )
     type: Mapped[str] = mapped_column(String(64))
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.queued)
@@ -308,12 +312,94 @@ class Job(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+    __table_args__ = (Index("ix_chat_sessions_user_updated", "user_id", "updated_at"),)
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), default="新会话")
+    type: Mapped[str] = mapped_column(String(32), default="library")
+    paper_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("papers.id", ondelete="SET NULL"), nullable=True
+    )
+    collection_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("collections.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "client_message_id", name="uq_chat_message_client_id"
+        ),
+        UniqueConstraint("session_id", "sequence", name="uq_chat_message_sequence"),
+        Index("ix_chat_messages_session_created", "session_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "chat_sessions.id",
+            name="fk_chat_messages_session_id_chat_sessions",
+            ondelete="CASCADE",
+        ),
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    sequence: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="completed")
+    content: Mapped[str] = mapped_column(Text)
+    citations: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey(
+            "agent_runs.id",
+            name="fk_chat_messages_run_id_agent_runs",
+            ondelete="CASCADE",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+        index=True,
+    )
+    client_message_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
+    __table_args__ = (
+        Index(
+            "uq_agent_runs_active_session",
+            "session_id",
+            unique=True,
+            postgresql_where=sql_text(
+                "status IN ('pending', 'running', 'interrupted')"
+            ),
+            sqlite_where=sql_text(
+                "status IN ('pending', 'running', 'interrupted')"
+            ),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    session_id: Mapped[str] = mapped_column(String(100), index=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "chat_sessions.id",
+            name="fk_agent_runs_session_id_chat_sessions",
+            ondelete="CASCADE",
+        ),
+        index=True,
+    )
     thread_id: Mapped[str] = mapped_column(String(300), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     tool_steps: Mapped[int] = mapped_column(Integer, default=0)
@@ -321,6 +407,55 @@ class AgentRun(Base):
     token_usage: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     result_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     pending_action: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    user_message_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey(
+            "chat_messages.id",
+            name="fk_agent_runs_user_message_id_chat_messages",
+            ondelete="SET NULL",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+        unique=True,
+    )
+    assistant_message_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey(
+            "chat_messages.id",
+            name="fk_agent_runs_assistant_message_id_chat_messages",
+            ondelete="SET NULL",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+        unique=True,
+    )
+    request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    legacy_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    resume_action_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    resume_decision: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentRunEvent(Base):
+    __tablename__ = "agent_run_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_agent_run_event_sequence"),
+        UniqueConstraint("run_id", "event_key", name="uq_agent_run_event_key"),
+        Index("ix_agent_run_events_run_sequence", "run_id", "sequence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_key: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    event: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
