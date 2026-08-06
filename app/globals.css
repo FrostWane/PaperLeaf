@@ -529,6 +529,37 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 .summary-artifact > .artifact-fallback-note { margin-bottom: 14px; padding: 9px 10px; border: 1px solid #ead8b4; border-radius: 5px; background: #fff9ed; color: #765923; line-height: 1.6; white-space: normal; }
+.artifact-heading p, .assistant-empty p, .artifact-empty p { font-size: 12px; }
+.artifact-state { display: grid; gap: 7px; margin-top: 18px; padding: 16px 2px; border-top: 2px solid var(--blue-line); border-bottom: 1px solid var(--border); }
+.artifact-state strong { font-size: 14px; }.artifact-state p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.artifact-state .secondary-button { width: fit-content; margin-top: 5px; }
+.artifact-state.error { border-top-color: var(--danger-line); }.artifact-state.error strong { color: var(--danger-ink); }
+.artifact-state .artifact-evidence-excerpt { padding: 11px 12px; border-left: 2px solid var(--blue-line); background: #f8faf9; color: var(--ink-soft); font-size: 13px; white-space: pre-wrap; }
+.artifact-evidence-excerpt span { display: block; margin-bottom: 5px; color: var(--blue-ink); font-size: 12px; font-weight: 650; }
+.artifact-stale-note { margin: 0 0 14px; padding: 10px 12px; border-left: 2px solid var(--warn-line); background: #fffaf0; color: var(--warn-ink); font-size: 13px; line-height: 1.6; }
+.summary-sections { border-top: 1px solid var(--border-strong); }
+.summary-artifact .summary-content { font-size: 14px; }
+.summary-artifact > .artifact-fallback-note { font-size: 13px; }
+.summary-section { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.summary-section-heading { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.summary-section-heading > span { color: var(--blue-ink); font-family: var(--font-mono); font-size: 12px; }
+.summary-section-heading h4 { margin: 0; color: var(--ink); font-size: 15px; line-height: 1.4; }
+.summary-section ul { display: grid; gap: 13px; margin: 12px 0 0 36px; padding: 0; list-style: none; }
+.summary-section li { min-width: 0; }
+.summary-section li > p { margin: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.72; }
+.summary-fact-citations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.summary-fact-citations button, .structure-node-citations button { width: auto; min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: #fbfcfb; color: var(--blue-ink); font-size: 12px; }
+.summary-fact-citations button:hover, .structure-node-citations button:hover { border-color: var(--blue-line); background: var(--blue-soft); }
+.summary-fact-citations button span, .structure-node-citations button span { max-width: 110px; overflow: hidden; color: var(--quiet); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.structure-outline { border-top-color: var(--border-strong); }
+.structure-outline > li { padding: 13px 0; border-bottom: 1px solid var(--border); }
+.structure-outline .structure-node-main { min-height: 44px; padding: 0; border: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: start; gap: 8px; text-align: left; }
+.structure-node-main > span:last-child { min-width: 0; display: grid; gap: 4px; }
+.structure-node-main small { color: var(--blue-ink); font-size: 12px; font-weight: 650; }
+.structure-node-main strong { color: var(--ink); font-size: 14px; line-height: 1.45; }
+.structure-outline .structure-node-main em { color: var(--muted); font-family: inherit; font-size: 13px; font-style: normal; line-height: 1.55; white-space: normal; }
+.structure-outline .structure-index { padding-top: 1px; font-size: 12px; }
+.structure-node-citations { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 0 38px; }
 
 /* 应用区字号由个人偏好统一驱动；正文/辅助文字仍保留清晰层级。 */
 :is(.app-shell, .demo-page) { font-size: var(--ui-body-font); }

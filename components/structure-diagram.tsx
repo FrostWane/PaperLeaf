@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
+import { structureNodeTypeLabels } from "@/lib/artifacts";
 import type { PaperStructureGraph } from "@/lib/types";
 
 export function StructureDiagram({ graph, onOpenPage }: { graph: PaperStructureGraph; onOpenPage: (page: number) => void }) {
@@ -40,7 +41,13 @@ export function StructureDiagram({ graph, onOpenPage }: { graph: PaperStructureG
         {failed && <span className="artifact-loading">图形渲染失败，仍可使用下方证据目录。</span>}
       </div>
       <ol className="structure-outline" aria-label="结构节点与原文页码">
-        {graph.nodes.map((node, index) => <li key={node.id}><button onClick={() => onOpenPage(node.physicalPage)}><span className="structure-index">{String(index + 1).padStart(2, "0")}</span><span>{node.label}</span><em>PDF {node.physicalPage}</em></button></li>)}
+        {graph.nodes.map((node, index) => <li key={node.id}>
+          <button className="structure-node-main" type="button" onClick={() => onOpenPage(node.citations[0].physicalPage)} aria-label={`${structureNodeTypeLabels[node.type]}：${node.label}，查看首条证据 PDF 第 ${node.citations[0].physicalPage} 页`}>
+            <span className="structure-index">{String(index + 1).padStart(2, "0")}</span>
+            <span><small>{structureNodeTypeLabels[node.type]}</small><strong>{node.label}</strong><em>{node.summary}</em></span>
+          </button>
+          <div className="structure-node-citations" aria-label={`${node.label}的原文引用`}>{node.citations.map((citation, citationIndex) => <button key={`${citation.chunkId}-${citation.physicalPage}`} type="button" aria-label={`查看 ${node.label}的引用 ${citationIndex + 1}，PDF 第 ${citation.physicalPage} 页`} onClick={() => onOpenPage(citation.physicalPage)}>PDF {citation.physicalPage}<span className="mono">{citation.chunkId}</span></button>)}</div>
+        </li>)}
       </ol>
     </div>
   );

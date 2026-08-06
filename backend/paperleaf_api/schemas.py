@@ -259,8 +259,29 @@ class ArtifactCitation(BaseModel):
     physical_page: int
 
 
+class SummaryFact(BaseModel):
+    text: str
+    citations: list[ArtifactCitation]
+
+
+class SummarySection(BaseModel):
+    key: Literal[
+        "research_question",
+        "core_method",
+        "experimental_setup",
+        "main_results",
+        "limitations_scope",
+    ]
+    title: str
+    facts: list[SummaryFact]
+
+
 class SummaryResponse(BaseModel):
     paper_id: str
+    status: Literal["ready", "fallback", "stale", "failed"]
+    stale: bool = False
+    fallback_reason: Optional[str] = None
+    sections: list[SummarySection]
     content: str
     citations: list[ArtifactCitation]
     mode: Literal["model", "extractive"]
@@ -268,9 +289,10 @@ class SummaryResponse(BaseModel):
 
 class StructureNode(BaseModel):
     id: str
+    type: Literal["研究问题", "背景", "方法", "数据", "实验", "结果", "局限"]
     label: str
-    physical_page: int
-    chunk_id: str
+    summary: str
+    citations: list[ArtifactCitation]
 
 
 class StructureEdge(BaseModel):
@@ -280,9 +302,13 @@ class StructureEdge(BaseModel):
 
 class StructureGraphResponse(BaseModel):
     paper_id: str
+    status: Literal["ready", "failed", "stale"]
+    stale: bool = False
+    fallback_reason: Optional[str] = None
     nodes: list[StructureNode]
     edges: list[StructureEdge]
     mermaid: str
+    evidence_excerpt: str = ""
 
 
 class CollectionCreate(BaseModel):

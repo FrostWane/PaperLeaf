@@ -34,10 +34,12 @@ from .agent.graph import (
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .agent_execution import execute_agent_run
 from .artifacts import (
-    cited_chunk_ids,
+    generate_structure_artifact,
+    generate_summary_artifact,
     load_paper_evidence,
-    structure_graph,
-    summarize_evidence,
+    load_paper_source_revision,
+    validate_structure_payload,
+    validate_summary_payload,
 )
 from .arxiv_service import fetch_arxiv_pdf, get_arxiv_paper, search_arxiv
 from .config import Settings, settings
@@ -62,7 +64,6 @@ from .schemas import (
     AgentResumeRequest,
     AgentRunEventRead,
     AgentRunRead,
-    ArtifactCitation,
     ArxivImportRequest,
     ArxivSearchResponse,
     ChangePasswordRequest,
@@ -1046,6 +1047,7 @@ def create_app(
         paper_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
+        refresh: bool = False,
     ) -> SummaryResponse:
         await owned_paper(paper_id, user)
         if config.is_demo:
@@ -1058,21 +1060,50 @@ def create_app(
         )
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
-        content, mode = await summarize_evidence(
-            evidence, model_router=services.model_router, config=config
+        revision = await load_paper_source_revision(user.id, paper_id)
+        cached = await services.repository.get_owned_paper_artifact(
+            paper_id, user.id, "summary"
         )
-        evidence_by_chunk = {item.chunk_id: item for item in evidence}
+        cached_payload = dict(cached.structured_payload or {}) if cached else {}
+        validated_cached, _ = validate_summary_payload(cached_payload, evidence)
+        if (
+            not refresh
+            and cached
+            and cached.status == "ready"
+            and cached.source_revision == revision
+            and validated_cached is not None
+        ):
+            payload = validated_cached
+            artifact_status = cached.status
+            fallback_reason = cached.fallback_reason
+            content = cached.markdown
+        else:
+            generated = await generate_summary_artifact(
+                evidence, model_router=services.model_router, config=config
+            )
+            payload = generated.payload
+            artifact_status = generated.status
+            fallback_reason = generated.fallback_reason
+            content = generated.markdown
+            await services.repository.upsert_paper_artifact(
+                paper_id,
+                user.id,
+                "summary",
+                revision,
+                artifact_status,
+                fallback_reason,
+                payload,
+                content,
+            )
         return SummaryResponse(
             paper_id=paper_id,
+            status=artifact_status,
+            stale=False,
+            fallback_reason=fallback_reason,
+            sections=payload.get("sections", []),
             content=content,
-            citations=[
-                ArtifactCitation(
-                    chunk_id=chunk_id,
-                    physical_page=evidence_by_chunk[chunk_id].physical_page,
-                )
-                for chunk_id in cited_chunk_ids(content, evidence)
-            ],
-            mode=mode,
+            citations=payload.get("citations", []),
+            mode=payload.get("mode", "extractive"),
         )
 
     @app.post("/api/v1/papers/{paper_id}/structure-graph", response_model=StructureGraphResponse)
@@ -1080,15 +1111,62 @@ def create_app(
         paper_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
+        refresh: bool = False,
     ) -> StructureGraphResponse:
         await owned_paper(paper_id, user)
         if config.is_demo:
             raise HTTPException(status.HTTP_409_CONFLICT, "演示模式不处理真实 PDF")
-        evidence = await load_paper_evidence(user.id, paper_id, limit=16)
+        evidence = await load_paper_evidence(
+            user.id,
+            paper_id,
+            limit=config.max_pdf_pages,
+            first_chunk_per_page=True,
+        )
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
-        nodes, edges, mermaid = structure_graph(evidence)
-        return StructureGraphResponse(paper_id=paper_id, nodes=nodes, edges=edges, mermaid=mermaid)
+        revision = await load_paper_source_revision(user.id, paper_id)
+        cached = await services.repository.get_owned_paper_artifact(
+            paper_id, user.id, "structure"
+        )
+        cached_payload = dict(cached.structured_payload or {}) if cached else {}
+        validated_cached, _ = validate_structure_payload(cached_payload, evidence)
+        if (
+            not refresh
+            and cached
+            and cached.status == "ready"
+            and cached.source_revision == revision
+            and validated_cached is not None
+        ):
+            payload = validated_cached
+            artifact_status = cached.status
+            fallback_reason = cached.fallback_reason
+        else:
+            generated = await generate_structure_artifact(
+                evidence, model_router=services.model_router, config=config
+            )
+            payload = generated.payload
+            artifact_status = generated.status
+            fallback_reason = generated.fallback_reason
+            await services.repository.upsert_paper_artifact(
+                paper_id,
+                user.id,
+                "structure",
+                revision,
+                artifact_status,
+                fallback_reason,
+                payload,
+                generated.markdown,
+            )
+        return StructureGraphResponse(
+            paper_id=paper_id,
+            status=artifact_status,
+            stale=False,
+            fallback_reason=fallback_reason,
+            nodes=payload.get("nodes", []),
+            edges=payload.get("edges", []),
+            mermaid=payload.get("mermaid", ""),
+            evidence_excerpt=payload.get("evidence_excerpt", ""),
+        )
 
     @app.get("/api/v1/chat/sessions", response_model=list[ChatSessionRead])
     async def list_chat_sessions(

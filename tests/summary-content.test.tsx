@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SummaryContent } from "@/components/summary-content";
+import { StructuredSummary, SummaryContent } from "@/components/summary-content";
 import type { ArtifactCitation } from "@/lib/types";
 
 const citations: ArtifactCitation[] = [
@@ -66,5 +66,20 @@ describe("SummaryContent", () => {
 
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.getByText("尚未收录 [chunk:missing]，页码也未知 [物理页 99]。")).toBeInTheDocument();
+  });
+
+  it("结构化五节中的每条事实保留独立的多页引用", () => {
+    const onOpenPage = vi.fn();
+    render(<StructuredSummary sections={[
+      { key: "research_problem", title: "研究问题", facts: [{ text: "循环计算限制并行。", citations }] },
+      { key: "core_method", title: "核心方法", facts: [{ text: "以注意力替代循环。", citations: [citations[0]] }] },
+      { key: "experiment_setup", title: "实验设置", facts: [{ text: "比较翻译任务。", citations: [citations[1]] }] },
+      { key: "main_results", title: "主要结果", facts: [{ text: "训练更快。", citations: [citations[1]] }] },
+      { key: "limitations", title: "局限与适用范围", facts: [{ text: "长序列成本较高。", citations: [citations[0]] }] },
+    ]} onOpenPage={onOpenPage} />);
+
+    expect(screen.getAllByRole("region")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "查看 研究问题第 1 条事实的引用 2，PDF 第 7 页" }));
+    expect(onOpenPage).toHaveBeenCalledWith(7);
   });
 });

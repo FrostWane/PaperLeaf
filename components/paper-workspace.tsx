@@ -4,6 +4,7 @@ import { AlignLeft, ArrowLeft, ChevronLeft, ChevronRight, FileText, Focus, Info,
 import dynamic from "next/dynamic";
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
+import { artifactFailureMessage } from "@/lib/artifacts";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
 import { papers } from "@/lib/fixtures";
 import { demoCurrentUser, getCurrentUser, updateUserPreferences } from "@/lib/preferences-api";
@@ -12,7 +13,7 @@ import type { Paper, PaperStructureGraph, PaperSummary, PaperTranslation, PaperT
 import { ChatWorkspace } from "./chat-workspace";
 import { PaperDetailsDialog } from "./paper-details-dialog";
 import { StructureDiagram } from "./structure-diagram";
-import { SummaryContent } from "./summary-content";
+import { StructuredSummary, SummaryContent } from "./summary-content";
 import { TranslationConfirmDialog, translationLanguageLabel } from "./translation-confirm-dialog";
 
 const RealPdfDocument = dynamic(
@@ -232,19 +233,19 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     setMobilePane("pdf");
   }
 
-  async function generateSummary() {
+  async function generateSummary(refresh: boolean) {
     setBusy("summary");
     setArtifactMessage("");
-    try { setSummary(await dataSource.summarizePaper(paperId)); }
-    catch (error) { setArtifactMessage(error instanceof Error ? error.message : "论文总结生成失败"); }
+    try { setSummary(await dataSource.summarizePaper(paperId, { refresh })); }
+    catch (error) { setArtifactMessage(artifactFailureMessage(error instanceof Error ? error.message : "论文总结生成失败")); }
     finally { setBusy(null); }
   }
 
-  async function generateStructure() {
+  async function generateStructure(refresh: boolean) {
     setBusy("structure");
     setArtifactMessage("");
-    try { setStructure(await dataSource.buildStructureGraph(paperId)); }
-    catch (error) { setArtifactMessage(error instanceof Error ? error.message : "结构图生成失败"); }
+    try { setStructure(await dataSource.buildStructureGraph(paperId, { refresh })); }
+    catch (error) { setArtifactMessage(artifactFailureMessage(error instanceof Error ? error.message : "结构图生成失败")); }
     finally { setBusy(null); }
   }
 
@@ -343,7 +344,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
 
   const evidencePages = [...new Set([
     ...(summary?.citations.map((item) => item.physicalPage) ?? []),
-    ...(structure?.nodes.map((item) => item.physicalPage) ?? []),
+    ...(structure?.nodes.flatMap((item) => item.citations.map((citation) => citation.physicalPage)) ?? []),
   ])];
   const readyForArtifacts = paper.status === "ready" || paper.status === "partial";
 
@@ -413,17 +414,27 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} onOpenCitation={(citation) => openCitation(citation.page)} />;
 
   const summaryContent = <div className="artifact-panel">
-    <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>围绕研究问题、方法、结果与限制整理；不会补写证据中不存在的内容。</p></div><button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateSummary()}>{busy === "summary" ? "正在生成" : summary ? "重新生成" : "生成概览"}</button></div>
-    {!summary && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "生成后，点击页码可以回到对应 PDF 证据。" : "PDF 仍可阅读；总结功能会在索引就绪后开放。"}</p></div>}
-    {summary && <article className="summary-artifact"><div className="artifact-mode"><span>{summary.mode === "model" ? "模型归纳" : "原文保底摘录"}</span><em>{summary.citations.length} 个证据页</em></div>{summary.mode === "extractive" && <p className="artifact-fallback-note">AI 归纳本次未成功；当前展示的是从论文不同页面抽取的可回读原文，不是最终概览。你可以点击“重新生成”再试一次。</p>}<SummaryContent content={summary.content} citations={summary.citations} onOpenPage={openCitation} /><div className="artifact-citations">{summary.citations.map((citation, index) => <button key={citation.chunkId} onClick={() => openCitation(citation.physicalPage)}><span>{String(index + 1).padStart(2, "0")}</span>PDF {citation.physicalPage}<small className="mono">{citation.chunkId}</small></button>)}</div></article>}
-    {artifactMessage && <p className="field-error" role="alert">{artifactMessage}</p>}
+    <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>按研究问题、核心方法、实验设置、主要结果和局限整理，每条事实都能回到原文。</p></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在生成" : summary ? "重新生成" : "生成概览"}</button>}</div>
+    {!summary && !artifactMessage && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "生成后，每条事实都会附带可点击的物理页码。" : "PDF 仍可阅读；总结功能会在索引就绪后开放。"}</p></div>}
+    {summary?.status === "processing" && <div className="artifact-state" role="status"><strong>概览仍在生成</strong><p>完成后会显示经过页码核验的五部分总结。</p></div>}
+    {summary?.status === "failed" && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactFailureMessage(summary.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
+    {summary && summary.status !== "failed" && summary.status !== "processing" && <article className="summary-artifact">
+      <div className="artifact-mode"><span>{summary.mode === "model" ? "模型归纳" : "证据摘录"}</span><em>{summary.citations.length} 条页码证据</em></div>
+      {summary.stale && <p className="artifact-stale-note" role="status">这份概览基于论文上一次索引生成，当前已过期。重新生成后才会使用最新页面内容。</p>}
+      {summary.mode === "extractive" && <p className="artifact-fallback-note">{artifactFailureMessage(summary.fallbackReason)} 当前仅展示可回读的证据摘录，并明确区别于模型总结。</p>}
+      {summary.sections.length > 0 ? <StructuredSummary sections={summary.sections} onOpenPage={openCitation} /> : summary.mode === "extractive" && summary.content ? <SummaryContent content={summary.content} citations={summary.citations} onOpenPage={openCitation} /> : null}
+      <div className="artifact-citations" aria-label="概览全部证据页">{summary.citations.map((citation, index) => <button key={`${citation.chunkId}-${citation.physicalPage}`} onClick={() => openCitation(citation.physicalPage)}><span>{String(index + 1).padStart(2, "0")}</span>PDF {citation.physicalPage}<small className="mono">{citation.chunkId}</small></button>)}</div>
+    </article>}
+    {artifactMessage && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
   </div>;
 
   const structureContent = <div className="artifact-panel">
-    <div className="artifact-heading"><div><span className="eyebrow">证据结构图</span><h3>论文结构图</h3><p>结构节点保留原始 Chunk 和物理页，图形只表达已抽取证据之间的关系。</p></div><button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateStructure()}>{busy === "structure" ? "正在构建" : structure ? "重新构建" : "构建结构"}</button></div>
-    {!structure && <div className="artifact-empty"><Network size={20} /><strong>{readyForArtifacts ? "尚未构建结构图" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "结构图使用 Mermaid strict mode，并提供可键盘访问的证据目录。" : "索引完成后再提取论文结构。"}</p></div>}
-    {structure && <StructureDiagram key={structure.mermaid} graph={structure} onOpenPage={openCitation} />}
-    {artifactMessage && <p className="field-error" role="alert">{artifactMessage}</p>}
+    <div className="artifact-heading"><div><span className="eyebrow">研究逻辑脑图</span><h3>问题到局限的证据链</h3><p>由模型提炼问题、方法、实验、结果与局限；节点引用必须通过物理页校验。</p></div>{structure?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateStructure(Boolean(structure))}>{busy === "structure" ? "正在构建" : structure ? "重新构建" : "构建结构"}</button>}</div>
+    {!structure && !artifactMessage && <div className="artifact-empty"><Network size={20} /><strong>{readyForArtifacts ? "尚未构建研究脑图" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "研究逻辑与页码证据全部通过核验后才会显示。" : "索引完成后再提取论文研究逻辑。"}</p></div>}
+    {structure?.status === "processing" && <div className="artifact-state" role="status"><strong>研究脑图仍在生成</strong><p>节点与引用核验通过后才会显示。</p></div>}
+    {structure?.status === "failed" && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactFailureMessage(structure.fallbackReason)}</p>{structure.evidenceExcerpt && <p className="artifact-evidence-excerpt"><span>可用证据摘录</span>{structure.evidenceExcerpt.replace(/\s*\[chunk:[^\]]+\]/g, "")}</p>}<button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
+    {structure && structure.status !== "failed" && structure.status !== "processing" && <>{structure.stale && <p className="artifact-stale-note" role="status">这份研究脑图基于旧索引，重新构建后才会使用最新页面内容。</p>}<StructureDiagram key={structure.mermaid} graph={structure} onOpenPage={openCitation} /></>}
+    {artifactMessage && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
   </div>;
 
   const renderAskPane = (surface: "desktop" | "mobile") => <aside className={`workspace-assistant pane-view ${mobilePane === "ask" ? "mobile-active" : ""}`} aria-label="论文助手">

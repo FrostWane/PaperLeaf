@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from paperleaf_api import worker
 from paperleaf_api.db import Base
-from paperleaf_api.models import Job, JobStatus, Paper, PaperStatus, User
+from paperleaf_api.models import Job, JobStatus, Paper, PaperArtifact, PaperStatus, User
 from paperleaf_api.pdf_metadata import (
     PdfMetadata,
     backfill_pdf_metadata,
@@ -423,6 +423,19 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                     status=JobStatus.running,
                 )
             )
+            session.add(
+                PaperArtifact(
+                    id="artifact-before-reindex",
+                    paper_id="paper-1",
+                    owner_id="user-1",
+                    type="summary",
+                    source_revision="f" * 64,
+                    status="ready",
+                    fallback_reason=None,
+                    structured_payload={"sections": []},
+                    markdown="old summary",
+                )
+            )
             await session.commit()
 
         async def embeddings_unavailable(texts: list[str], router: object | None = None) -> None:
@@ -437,6 +450,7 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
             async with sessions() as session:
                 paper = await session.get(Paper, "paper-1")
                 job = await session.get(Job, "job-1")
+                artifact = await session.get(PaperArtifact, "artifact-before-reindex")
                 assert paper is not None
                 assert job is not None
                 assert paper.title == "Metadata Integration Paper"
@@ -446,6 +460,7 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                 assert paper.doi == "10.1093/bioinformatics/bty593"
                 assert paper.status == PaperStatus.ready
                 assert job.status == JobStatus.completed
+                assert artifact is not None and artifact.status == "stale"
         finally:
             await engine.dispose()
 

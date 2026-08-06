@@ -94,15 +94,19 @@ test("公开演示可以生成证据化概览和结构图", async ({ page }) => 
   await assistant.getByRole("button", { name: "概览" }).click();
   await assistant.getByRole("button", { name: "生成概览" }).click();
   await expect(assistant.getByText("模型归纳")).toBeVisible();
-  await assistant.getByRole("button", { name: /PDF 11/ }).click();
+  for (const section of ["研究问题", "核心方法", "实验设置", "主要结果", "局限与适用范围"]) await expect(assistant.getByRole("region", { name: section })).toBeVisible();
+  await assistant.getByRole("button", { name: /查看 主要结果第 1 条事实的引用 2，PDF 第 12 页/ }).click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
   const reader = mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader");
-  await expect(reader.getByText("11 / 15")).toBeVisible();
+  await expect(reader.getByText("12 / 15")).toBeVisible();
 
   if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
   await assistant.getByRole("button", { name: "结构" }).click();
   await assistant.getByRole("button", { name: "构建结构" }).click();
-  await expect(assistant.getByRole("button", { name: /循环结构限制并行与长程建模/ })).toBeVisible();
+  await expect(assistant.locator(".structure-outline > li")).toHaveCount(8);
+  await assistant.getByRole("button", { name: /方法：以多头自注意力替代循环，查看首条证据 PDF 第 4 页/ }).click();
+  if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
+  await expect((mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader")).getByText("4 / 15")).toBeVisible();
 });
 
 test("文献设置可以编辑元数据且删除需要二次确认", async ({ page }) => {

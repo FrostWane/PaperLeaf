@@ -60,20 +60,50 @@ export interface PaperUpdateInput {
 export interface ArtifactCitation {
   chunkId: string;
   physicalPage: number;
+  quote?: string;
+}
+
+export type PaperArtifactStatus = "ready" | "stale" | "failed" | "processing";
+
+export type PaperArtifactFallbackReason =
+  | "model_not_configured"
+  | "model_timeout"
+  | "citation_validation_failed"
+  | "invalid_output"
+  | string;
+
+export type SummarySectionKey = "research_problem" | "core_method" | "experiment_setup" | "main_results" | "limitations";
+
+export interface SummaryFact {
+  text: string;
+  citations: ArtifactCitation[];
+}
+
+export interface SummarySection {
+  key: SummarySectionKey;
+  title: string;
+  facts: SummaryFact[];
 }
 
 export interface PaperSummary {
   paperId: string;
-  content: string;
+  content?: string;
+  sections: SummarySection[];
   citations: ArtifactCitation[];
   mode: "model" | "extractive";
+  status: PaperArtifactStatus;
+  stale: boolean;
+  fallbackReason?: PaperArtifactFallbackReason;
 }
+
+export type StructureNodeType = "research_problem" | "background" | "method" | "data" | "experiment" | "result" | "limitation";
 
 export interface StructureNode {
   id: string;
+  type: StructureNodeType;
   label: string;
-  physicalPage: number;
-  chunkId: string;
+  summary: string;
+  citations: ArtifactCitation[];
 }
 
 export interface StructureEdge {
@@ -86,6 +116,10 @@ export interface PaperStructureGraph {
   nodes: StructureNode[];
   edges: StructureEdge[];
   mermaid: string;
+  status: PaperArtifactStatus;
+  stale: boolean;
+  fallbackReason?: PaperArtifactFallbackReason;
+  evidenceExcerpt?: string;
 }
 
 export interface Citation {

@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from paperleaf_api import db
-from paperleaf_api.models import AgentRun, ChatMessage, Job, UserRole
+from paperleaf_api.models import AgentRun, ChatMessage, Job, PaperStatus, UserRole
 from paperleaf_api.repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
+    PaperRecord,
     SQLAlchemyRepository,
 )
 
@@ -70,6 +71,7 @@ def test_postgres_0007_schema_and_persistent_event_contract() -> None:
                 "chat_sessions",
                 "chat_messages",
                 "agent_run_events",
+                "paper_artifacts",
             } <= schema["tables"]
             assert {
                 "cancel_requested",
@@ -91,6 +93,41 @@ def test_postgres_0007_schema_and_persistent_event_contract() -> None:
                 UserRole.user,
                 must_change_password=False,
             )
+            paper = await repository.create_paper(
+                PaperRecord(
+                    id="artifact-paper",
+                    owner_id=user.id,
+                    title="Artifact paper",
+                    authors=[],
+                    year=None,
+                    abstract=None,
+                    doi=None,
+                    arxiv_id=None,
+                    filename="artifact.pdf",
+                    storage_key=f"{user.id}/artifact.pdf",
+                    mime_type="application/pdf",
+                    size_bytes=100,
+                    sha256="d" * 64,
+                    page_count=1,
+                    status=PaperStatus.ready,
+                )
+            )
+            artifact = await repository.upsert_paper_artifact(
+                paper.id,
+                user.id,
+                "summary",
+                "e" * 64,
+                "ready",
+                None,
+                {"sections": []},
+                "## Summary",
+            )
+            assert artifact is not None and artifact.status == "ready"
+            await repository.mark_paper_artifacts_stale(paper.id)
+            stale_artifact = await repository.get_owned_paper_artifact(
+                paper.id, user.id, "summary"
+            )
+            assert stale_artifact is not None and stale_artifact.status == "stale"
             chat_session = await repository.create_chat_session(
                 user.id, "持久问答", "library", None, None
             )

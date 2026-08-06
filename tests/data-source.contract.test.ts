@@ -111,14 +111,53 @@ describe("真实 API 契约", () => {
     expect(tokens).toEqual(["manage-token", "manage-token", "manage-token"]);
   });
 
-  it("总结和结构图保留物理页与 Chunk 映射", async () => {
+  it("总结和结构图保留物理页与 Chunk 映射，并仅在明确刷新时绕过缓存", async () => {
     document.cookie = "paperleaf_csrf=artifact-token; path=/";
+    const citation = (chunk: string, page: number) => ({ chunk_id: chunk, physical_page: page });
+    const artifactQueries: string[] = [];
     server.use(
-      http.post(`${API_BASE_URL}/papers/p1/summary`, () => HttpResponse.json({ paper_id: "p1", content: "证据化总结", mode: "extractive", citations: [{ chunk_id: "p1:p2:c0", physical_page: 2 }] })),
-      http.post(`${API_BASE_URL}/papers/p1/structure-graph`, () => HttpResponse.json({ paper_id: "p1", mermaid: "flowchart TD\n n1 --> n2", nodes: [{ id: "n1", label: "问题", physical_page: 2, chunk_id: "p1:p2:c0" }], edges: [{ source: "n1", target: "n2" }] })),
+      http.post(`${API_BASE_URL}/papers/p1/summary`, ({ request }) => {
+        artifactQueries.push(new URL(request.url).search);
+        return HttpResponse.json({ paper_id: "p1", artifact_status: "ready", stale: false, mode: "model", sections: [
+        { key: "research_question", title: "研究问题", facts: [{ text: "问题事实", citations: [citation("p1:p2:c0", 2)] }] },
+        { key: "core_method", title: "核心方法", facts: [{ text: "方法事实", citations: [citation("p1:p4:c0", 4)] }] },
+        { key: "experimental_setup", title: "实验设置", facts: [{ text: "实验事实", citations: [citation("p1:p6:c0", 6)] }] },
+        { key: "main_results", title: "主要结果", facts: [{ text: "结果事实", citations: [citation("p1:p8:c0", 8)] }] },
+        { key: "limitations_scope", title: "局限与适用范围", facts: [{ text: "局限事实", citations: [citation("p1:p9:c0", 9)] }] },
+      ], citations: [citation("p1:p2:c0", 2)] });
+      }),
+      http.post(`${API_BASE_URL}/papers/p1/structure-graph`, ({ request }) => {
+        artifactQueries.push(new URL(request.url).search);
+        return HttpResponse.json({ paper_id: "p1", artifact_status: "ready", stale: false, mermaid: "flowchart TD\n n1 --> n2\n n2 --> n3\n n3 --> n4\n n4 --> n5", nodes: [
+        { id: "n1", type: "研究问题", label: "问题", summary: "问题说明", citations: [citation("p1:p2:c0", 2)] },
+        { id: "n2", type: "方法", label: "方法", summary: "方法说明", citations: [citation("p1:p4:c0", 4), citation("p1:p5:c0", 5)] },
+        { id: "n3", type: "数据", label: "数据", summary: "数据说明", citations: [citation("p1:p6:c0", 6)] },
+        { id: "n4", type: "结果", label: "结果", summary: "结果说明", citations: [citation("p1:p8:c0", 8)] },
+        { id: "n5", type: "局限", label: "局限", summary: "局限说明", citations: [citation("p1:p9:c0", 9)] },
+      ], edges: [{ source: "n1", target: "n2" }, { source: "n2", target: "n3" }, { source: "n3", target: "n4" }, { source: "n4", target: "n5" }] });
+      }),
     );
-    await expect(realDataSource.summarizePaper("p1")).resolves.toMatchObject({ paperId: "p1", mode: "extractive", citations: [{ chunkId: "p1:p2:c0", physicalPage: 2 }] });
-    await expect(realDataSource.buildStructureGraph("p1")).resolves.toMatchObject({ paperId: "p1", nodes: [{ label: "问题", physicalPage: 2 }], edges: [{ source: "n1", target: "n2" }] });
+    const summary = await realDataSource.summarizePaper("p1");
+    expect(summary).toMatchObject({ paperId: "p1", status: "ready" });
+    expect(summary.sections).toHaveLength(5);
+    expect(summary.sections[0]).toMatchObject({ key: "research_problem", facts: [{ citations: [{ chunkId: "p1:p2:c0", physicalPage: 2 }] }] });
+    const graph = await realDataSource.buildStructureGraph("p1");
+    expect(graph).toMatchObject({ paperId: "p1", status: "ready" });
+    expect(graph.nodes).toHaveLength(5);
+    expect(graph.nodes[0]).toMatchObject({ label: "问题", type: "research_problem", citations: [{ physicalPage: 2 }] });
+    expect(graph.nodes[1]).toMatchObject({ label: "方法", citations: [{ physicalPage: 4 }, { physicalPage: 5 }] });
+    await realDataSource.summarizePaper("p1", { refresh: true });
+    await realDataSource.buildStructureGraph("p1", { refresh: true });
+    expect(artifactQueries).toEqual(["", "", "?refresh=true", "?refresh=true"]);
+  });
+
+  it("拒绝旧式乱序 Chunk 图并把模型错误代码转换为中文", async () => {
+    server.use(
+      http.post(`${API_BASE_URL}/papers/p1/structure-graph`, () => HttpResponse.json({ paper_id: "p1", status: "failed", fallback_reason: "模型输出格式不合法", evidence_excerpt: "可回读证据 [chunk:c1]", mermaid: "", nodes: [], edges: [] })),
+      http.post(`${API_BASE_URL}/papers/p1/summary`, () => HttpResponse.json({ detail: { code: "model_timeout" } }, { status: 503 })),
+    );
+    await expect(realDataSource.buildStructureGraph("p1")).resolves.toMatchObject({ status: "failed", nodes: [], fallbackReason: "模型输出格式不合法", evidenceExcerpt: "可回读证据 [chunk:c1]" });
+    await expect(realDataSource.summarizePaper("p1")).rejects.toThrow("论文分析模型响应超时");
   });
 
   it("层级集合使用真实 API 字段并传递父集合", async () => {

@@ -219,6 +219,30 @@ class PaperChunk(Base):
     page: Mapped[PaperPage] = relationship(back_populates="chunks")
 
 
+class PaperArtifact(Base):
+    __tablename__ = "paper_artifacts"
+    __table_args__ = (
+        UniqueConstraint("paper_id", "type", name="uq_paper_artifact_type"),
+        Index("ix_paper_artifacts_paper_status", "paper_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), index=True
+    )
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    type: Mapped[str] = mapped_column(String(32))
+    source_revision: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="ready", index=True)
+    fallback_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    structured_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    markdown: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class PaperTranslation(Base):
     __tablename__ = "paper_translations"
     __table_args__ = (

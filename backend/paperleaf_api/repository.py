@@ -27,6 +27,7 @@ from .models import (
     Job,
     JobStatus,
     Paper,
+    PaperArtifact,
     PaperPage,
     PaperStatus,
     PaperTranslation,
@@ -150,6 +151,21 @@ class TranslationRecord:
     cancel_requested: bool = False
     error_code: str | None = None
     error_message: str | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class PaperArtifactRecord:
+    id: str
+    paper_id: str
+    owner_id: str
+    type: str
+    source_revision: str
+    status: str
+    fallback_reason: str | None
+    structured_payload: dict
+    markdown: str
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
 
@@ -394,6 +410,7 @@ class MemoryRepository:
         self.paper_pages: dict[str, dict[int, str]] = {}
         self.translations: dict[str, TranslationRecord] = {}
         self.translation_pages: dict[str, TranslationPageRecord] = {}
+        self.paper_artifacts: dict[str, PaperArtifactRecord] = {}
         self.chat_sessions: dict[str, ChatSessionRecord] = {}
         self.chat_messages: dict[str, ChatMessageRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
@@ -623,6 +640,64 @@ class MemoryRepository:
                 setattr(paper, key, changes[key])
         paper.updated_at = now()
         return paper
+
+    async def get_owned_paper_artifact(
+        self, paper_id: str, owner_id: str, artifact_type: str
+    ) -> PaperArtifactRecord | None:
+        return next(
+            (
+                item
+                for item in self.paper_artifacts.values()
+                if item.paper_id == paper_id
+                and item.owner_id == owner_id
+                and item.type == artifact_type
+            ),
+            None,
+        )
+
+    async def upsert_paper_artifact(
+        self,
+        paper_id: str,
+        owner_id: str,
+        artifact_type: str,
+        source_revision_value: str,
+        status: str,
+        fallback_reason: str | None,
+        structured_payload: dict,
+        markdown: str,
+    ) -> PaperArtifactRecord | None:
+        if not await self.get_owned_paper(paper_id, owner_id):
+            return None
+        record = await self.get_owned_paper_artifact(
+            paper_id, owner_id, artifact_type
+        )
+        if record is None:
+            record = PaperArtifactRecord(
+                id=str(uuid.uuid4()),
+                paper_id=paper_id,
+                owner_id=owner_id,
+                type=artifact_type,
+                source_revision=source_revision_value,
+                status=status,
+                fallback_reason=fallback_reason,
+                structured_payload=dict(structured_payload),
+                markdown=markdown,
+            )
+            self.paper_artifacts[record.id] = record
+        else:
+            record.source_revision = source_revision_value
+            record.status = status
+            record.fallback_reason = fallback_reason
+            record.structured_payload = dict(structured_payload)
+            record.markdown = markdown
+            record.updated_at = now()
+        return record
+
+    async def mark_paper_artifacts_stale(self, paper_id: str) -> None:
+        for record in self.paper_artifacts.values():
+            if record.paper_id == paper_id:
+                record.status = "stale"
+                record.updated_at = now()
 
     async def delete_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None:
         paper = await self.get_owned_paper(paper_id, owner_id)
@@ -1972,6 +2047,77 @@ class SQLAlchemyRepository:
             await session.commit()
             await session.refresh(paper)
             return paper
+
+    async def get_owned_paper_artifact(
+        self, paper_id: str, owner_id: str, artifact_type: str
+    ) -> PaperArtifact | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(PaperArtifact).where(
+                    PaperArtifact.paper_id == paper_id,
+                    PaperArtifact.owner_id == owner_id,
+                    PaperArtifact.type == artifact_type,
+                )
+            )
+
+    async def upsert_paper_artifact(
+        self,
+        paper_id: str,
+        owner_id: str,
+        artifact_type: str,
+        source_revision_value: str,
+        status: str,
+        fallback_reason: str | None,
+        structured_payload: dict,
+        markdown: str,
+    ) -> PaperArtifact | None:
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper)
+                .where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                .with_for_update()
+            )
+            if paper is None:
+                return None
+            record = await session.scalar(
+                select(PaperArtifact)
+                .where(
+                    PaperArtifact.paper_id == paper_id,
+                    PaperArtifact.type == artifact_type,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                record = PaperArtifact(
+                    paper_id=paper_id,
+                    owner_id=owner_id,
+                    type=artifact_type,
+                    source_revision=source_revision_value,
+                    status=status,
+                    fallback_reason=fallback_reason,
+                    structured_payload=dict(structured_payload),
+                    markdown=markdown,
+                )
+                session.add(record)
+            else:
+                record.source_revision = source_revision_value
+                record.status = status
+                record.fallback_reason = fallback_reason
+                record.structured_payload = dict(structured_payload)
+                record.markdown = markdown
+                record.updated_at = now()
+            await session.commit()
+            await session.refresh(record)
+            return record
+
+    async def mark_paper_artifacts_stale(self, paper_id: str) -> None:
+        async with get_session_factory()() as session:
+            await session.execute(
+                update(PaperArtifact)
+                .where(PaperArtifact.paper_id == paper_id)
+                .values(status="stale", updated_at=now())
+            )
+            await session.commit()
 
     async def requeue_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
         """原子地创建新的解析任务；可用于失败重试和已完成论文的重新识别。"""

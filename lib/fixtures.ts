@@ -38,29 +38,61 @@ export const groundedAnswer: AgentAnswer = {
 
 export const paperSummary: PaperSummary = {
   paperId: "attention",
+  status: "ready",
+  stale: false,
   mode: "model",
-  content: "这篇论文要解决的是序列建模对循环计算的依赖：RNN 难以并行，长距离信息需要经过较长路径。作者提出完全基于自注意力的 Transformer，以多头注意力同时建模不同位置之间的关系，并用位置编码保留顺序信息。\n\n实验表明，该架构在机器翻译任务上取得有竞争力的结果，同时显著缩短训练时间。论文也指出，自注意力在超长序列上的计算与内存成本仍会随序列长度平方增长。",
+  sections: [
+    { key: "research_problem", title: "研究问题", facts: [
+      { text: "循环神经网络的顺序计算限制训练并行度，且长距离信息需要经过更长的传播路径。", citations: [{ chunkId: "p2-c3", physicalPage: 2, quote: "sequential computation precludes parallelization" }] },
+    ] },
+    { key: "core_method", title: "核心方法", facts: [
+      { text: "Transformer 完全以多头自注意力替代循环与卷积，并使用位置编码保留序列顺序。", citations: [{ chunkId: "p4-c2", physicalPage: 4 }, { chunkId: "p5-c1", physicalPage: 5 }] },
+    ] },
+    { key: "experiment_setup", title: "实验设置", facts: [
+      { text: "论文在 WMT 2014 英德与英法翻译任务上比较模型质量、训练成本和并行效率。", citations: [{ chunkId: "p8-c1", physicalPage: 8 }] },
+    ] },
+    { key: "main_results", title: "主要结果", facts: [
+      { text: "模型取得有竞争力的翻译质量，同时显著缩短训练时间。", citations: [{ chunkId: "p11-c2", physicalPage: 11 }, { chunkId: "p12-c1", physicalPage: 12 }] },
+    ] },
+    { key: "limitations", title: "局限与适用范围", facts: [
+      { text: "标准自注意力的计算和内存开销随序列长度平方增长，超长序列仍需更高效的注意力机制。", citations: [{ chunkId: "p6-c3", physicalPage: 6 }] },
+    ] },
+  ],
   citations: [
     { chunkId: "p2-c3", physicalPage: 2 },
     { chunkId: "p4-c2", physicalPage: 4 },
+    { chunkId: "p5-c1", physicalPage: 5 },
+    { chunkId: "p8-c1", physicalPage: 8 },
     { chunkId: "p11-c2", physicalPage: 11 },
+    { chunkId: "p12-c1", physicalPage: 12 },
+    { chunkId: "p6-c3", physicalPage: 6 },
   ],
 };
 
 export const paperStructureGraph: PaperStructureGraph = {
   paperId: "attention",
+  status: "ready",
+  stale: false,
   nodes: [
-    { id: "problem", label: "循环结构限制并行与长程建模", physicalPage: 2, chunkId: "p2-c3" },
-    { id: "method", label: "以多头自注意力替代循环", physicalPage: 4, chunkId: "p4-c2" },
-    { id: "training", label: "位置编码与残差连接稳定训练", physicalPage: 5, chunkId: "p5-c1" },
-    { id: "result", label: "翻译质量与训练效率同步改善", physicalPage: 11, chunkId: "p11-c2" },
+    { id: "background", type: "background", label: "序列建模的并行瓶颈", summary: "循环网络依赖逐位置计算，长程信号传播路径较长。", citations: [{ chunkId: "p2-c2", physicalPage: 2 }] },
+    { id: "problem", type: "research_problem", label: "研究问题：能否移除循环结构", summary: "目标是在保持序列建模能力的同时提升并行度。", citations: [{ chunkId: "p2-c3", physicalPage: 2 }, { chunkId: "p6-c1", physicalPage: 6 }] },
+    { id: "method", type: "method", label: "以多头自注意力替代循环", summary: "编码器和解码器由注意力与前馈层组成。", citations: [{ chunkId: "p4-c2", physicalPage: 4 }] },
+    { id: "position", type: "method", label: "位置编码保留顺序信息", summary: "向输入表示加入位置编码，并配合残差与归一化。", citations: [{ chunkId: "p5-c1", physicalPage: 5 }] },
+    { id: "data", type: "data", label: "WMT 2014 机器翻译数据", summary: "使用英德和英法翻译任务验证模型。", citations: [{ chunkId: "p8-c1", physicalPage: 8 }] },
+    { id: "experiment", type: "experiment", label: "比较质量、成本与并行效率", summary: "以 BLEU、训练时长与复杂度进行对比。", citations: [{ chunkId: "p10-c1", physicalPage: 10 }] },
+    { id: "result", type: "result", label: "翻译质量与训练效率同步改善", summary: "在更短训练时间内取得有竞争力的翻译结果。", citations: [{ chunkId: "p11-c2", physicalPage: 11 }, { chunkId: "p12-c1", physicalPage: 12 }] },
+    { id: "limitation", type: "limitation", label: "长序列二次复杂度仍是限制", summary: "自注意力对序列长度的计算和内存成本为平方级。", citations: [{ chunkId: "p6-c3", physicalPage: 6 }] },
   ],
   edges: [
+    { source: "background", target: "problem" },
     { source: "problem", target: "method" },
-    { source: "method", target: "training" },
-    { source: "training", target: "result" },
+    { source: "method", target: "position" },
+    { source: "position", target: "data" },
+    { source: "data", target: "experiment" },
+    { source: "experiment", target: "result" },
+    { source: "result", target: "limitation" },
   ],
-  mermaid: "flowchart TD\n    problem[\"循环结构限制并行与长程建模\"]\n    method[\"以多头自注意力替代循环\"]\n    training[\"位置编码与残差连接稳定训练\"]\n    result[\"翻译质量与训练效率同步改善\"]\n    problem --> method\n    method --> training\n    training --> result",
+  mermaid: "flowchart TD\n    background[\"背景：序列计算瓶颈\"]\n    problem[\"问题：移除循环结构\"]\n    method[\"方法：多头自注意力\"]\n    position[\"方法：位置编码\"]\n    data[\"数据：WMT 2014\"]\n    experiment[\"实验：质量与效率对比\"]\n    result[\"结果：质量与效率提升\"]\n    limitation[\"局限：长序列二次复杂度\"]\n    background --> problem\n    problem --> method\n    method --> position\n    position --> data\n    data --> experiment\n    experiment --> result\n    result --> limitation",
 };
 
 export const arxivResults: ArxivResult[] = [

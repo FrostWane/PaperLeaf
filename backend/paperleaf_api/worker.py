@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent.graph import (
@@ -33,6 +33,7 @@ from .models import (
     Job,
     JobStatus,
     Paper,
+    PaperArtifact,
     PaperChunk,
     PaperPage,
     PaperStatus,
@@ -724,6 +725,11 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
         apply_crossref_publication(paper, crossref_enrichment)
         paper.status = PaperStatus.partial if empty_pages else PaperStatus.ready
         paper.updated_at = utcnow()
+        await session.execute(
+            update(PaperArtifact)
+            .where(PaperArtifact.paper_id == paper.id)
+            .values(status="stale", updated_at=utcnow())
+        )
         job.progress = 100
         job.status = JobStatus.completed
         job.updated_at = utcnow()

@@ -1,8 +1,16 @@
 import asyncio
+import json
 import re
 from types import SimpleNamespace
 
-from paperleaf_api.artifacts import cited_chunk_ids, extractive_summary, summarize_evidence
+from paperleaf_api.artifacts import (
+    artifact_source_revision,
+    cited_chunk_ids,
+    extractive_summary,
+    generate_structure_artifact,
+    generate_summary_artifact,
+    summarize_evidence,
+)
 from paperleaf_api.model_runtime import ModelRouter, ModelRuntimeError
 from paperleaf_api.rag.citations import Evidence
 
@@ -178,3 +186,177 @@ def test_extractive_summary_spreads_evidence_across_the_paper() -> None:
     assert cited[0] == "c1"
     assert cited[-1] == "c8"
     assert len(content) <= 1800
+
+
+def _summary_json() -> str:
+    rows = (
+        ("research_question", "研究可复核检索。", "c1", 2),
+        ("core_method", "方法采用页级检索。", "c1", 2),
+        ("experimental_setup", "实验检查引用定位。", "c2", 5),
+        ("main_results", "引用能够定位原文。", "c2", 5),
+        ("limitations_scope", "证据仅覆盖当前论文。", "c2", 5),
+    )
+    return json.dumps(
+        {
+            "sections": [
+                {
+                    "key": key,
+                    "facts": [
+                        {
+                            "text": text,
+                            "citations": [
+                                {"chunk_id": chunk_id, "physical_page": page}
+                            ],
+                        }
+                    ],
+                }
+                for key, text, chunk_id, page in rows
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def _structure_json(
+    *, cycle: bool = False, bad_type: bool = False, disconnected: bool = False
+) -> str:
+    types = ["研究问题", "方法", "实验", "结果", "局限"]
+    if bad_type:
+        types[2] = "非法类型"
+    nodes = [
+        {
+            "id": f"n{index}",
+            "type": node_type,
+            "label": f"节点 {index}",
+            "summary": f"节点 {index} 的可核验内容",
+            "citations": [
+                {
+                    "chunk_id": "c1" if index < 3 else "c2",
+                    "physical_page": 2 if index < 3 else 5,
+                }
+            ],
+        }
+        for index, node_type in enumerate(types, start=1)
+    ]
+    edges = [
+        {"source": f"n{index}", "target": f"n{index + 1}"}
+        for index in range(1, 5)
+    ]
+    if disconnected:
+        edges = [
+            {"source": "n1", "target": "n2"},
+            {"source": "n2", "target": "n3"},
+            {"source": "n4", "target": "n5"},
+        ]
+    if cycle:
+        edges.append({"source": "n5", "target": "n1"})
+    return json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False)
+
+
+def test_structured_summary_has_five_sections_and_fact_citations() -> None:
+    result = asyncio.run(
+        generate_summary_artifact(
+            _evidence(), model_router=FakeSummaryRouter(_summary_json())
+        )
+    )
+
+    assert result.status == "ready"
+    assert result.fallback_reason is None
+    assert [item["title"] for item in result.payload["sections"]] == [
+        "研究问题",
+        "核心方法",
+        "实验设置",
+        "主要结果",
+        "局限与适用范围",
+    ]
+    assert all(item["facts"][0]["citations"] for item in result.payload["sections"])
+    assert "## 研究问题" in result.markdown
+
+
+def test_structured_summary_retries_format_once_but_not_invalid_citation() -> None:
+    retried = SequenceSummaryRouter(["not-json", _summary_json()])
+    result = asyncio.run(generate_summary_artifact(_evidence(), model_router=retried))
+    assert retried.calls == 2
+    assert result.status == "ready"
+
+    invalid = json.loads(_summary_json())
+    invalid["sections"][0]["facts"][0]["citations"][0]["chunk_id"] = "forged"
+    router = SequenceSummaryRouter([json.dumps(invalid, ensure_ascii=False)])
+    result = asyncio.run(generate_summary_artifact(_evidence(), model_router=router))
+    assert router.calls == 1
+    assert result.status == "fallback"
+    assert result.fallback_reason == "模型引用未通过证据校验"
+    assert "提取式概览" in result.markdown
+
+
+def test_structured_summary_requires_a_fact_in_every_section() -> None:
+    invalid = json.loads(_summary_json())
+    invalid["sections"][2]["facts"] = []
+    raw = json.dumps(invalid, ensure_ascii=False)
+    router = SequenceSummaryRouter([raw, raw])
+
+    result = asyncio.run(generate_summary_artifact(_evidence(), model_router=router))
+
+    assert router.calls == 2
+    assert result.status == "fallback"
+    assert result.fallback_reason == "模型输出格式不合法"
+
+
+def test_structure_requires_valid_semantic_nodes_and_acyclic_edges() -> None:
+    result = asyncio.run(
+        generate_structure_artifact(
+            _evidence(), model_router=FakeSummaryRouter(_structure_json())
+        )
+    )
+    assert result.status == "ready"
+    assert len(result.payload["nodes"]) == 5
+    assert result.payload["mermaid"].startswith("flowchart TD")
+    assert all(item["citations"] for item in result.payload["nodes"])
+
+    invalid_router = SequenceSummaryRouter(
+        [_structure_json(bad_type=True), _structure_json(bad_type=True)]
+    )
+    invalid = asyncio.run(
+        generate_structure_artifact(_evidence(), model_router=invalid_router)
+    )
+    assert invalid_router.calls == 2
+    assert invalid.status == "failed"
+    assert invalid.payload["nodes"] == []
+    assert invalid.payload["mermaid"] == ""
+
+    cycle_router = SequenceSummaryRouter(
+        [_structure_json(cycle=True), _structure_json(cycle=True)]
+    )
+    cycle = asyncio.run(
+        generate_structure_artifact(_evidence(), model_router=cycle_router)
+    )
+    assert cycle.status == "failed"
+    assert cycle.fallback_reason == "模型结构图包含孤立节点或循环关系"
+    assert cycle.payload["nodes"] == []
+
+    disconnected_router = SequenceSummaryRouter(
+        [_structure_json(disconnected=True), _structure_json(disconnected=True)]
+    )
+    disconnected = asyncio.run(
+        generate_structure_artifact(_evidence(), model_router=disconnected_router)
+    )
+    assert disconnected_router.calls == 2
+    assert disconnected.status == "failed"
+    assert disconnected.fallback_reason == "模型结构图未形成从研究问题出发的完整有向链路"
+    assert disconnected.payload["nodes"] == []
+
+
+def test_structure_without_model_never_builds_sequential_chunk_graph() -> None:
+    result = asyncio.run(
+        generate_structure_artifact(_evidence(), model_router=ModelRouter([]))
+    )
+    assert result.status == "failed"
+    assert result.fallback_reason == "尚未配置可用的论文结构图模型"
+    assert result.payload["nodes"] == []
+    assert "[chunk:c1]" in result.payload["evidence_excerpt"]
+
+
+def test_artifact_source_revision_changes_with_page_evidence() -> None:
+    original = artifact_source_revision(_evidence())
+    changed = [*_evidence()[:-1], Evidence("c2", "p1", "测试论文", 5, "新结果")]
+    assert artifact_source_revision(changed) != original

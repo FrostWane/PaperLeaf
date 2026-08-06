@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { ArtifactCitation } from "@/lib/types";
+import type { ArtifactCitation, SummarySection } from "@/lib/types";
 
 export interface SummaryContentProps {
   content: string;
@@ -138,4 +138,20 @@ export function SummaryContent({ content, citations, onOpenPage }: SummaryConten
   }
 
   return <div className="summary-content">{blocks}</div>;
+}
+
+export function StructuredSummary({ sections, onOpenPage }: { sections: SummarySection[]; onOpenPage: (page: number) => void }) {
+  return <div className="summary-sections">
+    {sections.map((section, sectionIndex) => <section key={section.key} className="summary-section" aria-label={section.title}>
+      <div className="summary-section-heading"><span>{String(sectionIndex + 1).padStart(2, "0")}</span><h4>{section.title}</h4></div>
+      <ul>{section.facts.map((fact, factIndex) => <li key={`${section.key}-${factIndex}`}>
+        <p>{fact.text}</p>
+        <div className="summary-fact-citations" aria-label={`${section.title}第 ${factIndex + 1} 条事实的原文引用`}>
+          {fact.citations.map((citation, citationIndex) => <button key={`${citation.chunkId}-${citation.physicalPage}`} type="button" aria-label={`查看 ${section.title}第 ${factIndex + 1} 条事实的引用 ${citationIndex + 1}，PDF 第 ${citation.physicalPage} 页`} onClick={() => onOpenPage(citation.physicalPage)}>
+            PDF {citation.physicalPage}<span className="mono">{citation.chunkId}</span>
+          </button>)}
+        </div>
+      </li>)}</ul>
+    </section>)}
+  </div>;
 }

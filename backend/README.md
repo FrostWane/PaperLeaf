@@ -121,6 +121,13 @@ data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 先在内存中缓冲完整事实段落，校验其 Chunk 引用属于当次召回证据并通过支持检查，再把段落
 原子写入消息与事件表；未通过的段落不会成为用户可见内容。
 
+### 总结与研究结构图
+
+- `POST /api/v1/papers/{paper_id}/summary` 要求模型返回固定五节 JSON；每个事实都携带一个或多个合法 `chunk_id + physical_page`，服务端再生成稳定 Markdown。
+- `POST /api/v1/papers/{paper_id}/structure-graph` 要求 5～12 个语义节点，节点类型限制为研究问题、背景、方法、数据、实验、结果和局限。每个节点至少一个合法引用，边不得引用未知节点、形成自环/循环或留下孤立节点。
+- 未配置模型、超时、引用失败和格式错误使用不同中文原因。总结可退回带引用的原文摘录；结构图失败时不再生成顺序 Chunk 伪图。
+- 总结和结构图写入 `paper_artifacts`，以全部物理页文本的来源修订标识缓存。重新解析论文时旧产物标记为 `stale`，不会静默复用。
+
 `tool_finished.data.evidence_quality` 给出页级证据数量、检索通道、检索置信度、
 `retrieval_grade` 与可选的 `answer_support_grade`。这些字段是服务端质量门禁的公开摘要，
 不包含模型思维链。即使检索结果非空，只要相关度不足或证据没有直接支持所问事实，图仍会进入拒答节点。

@@ -1,7 +1,8 @@
 import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary } from "./fixtures";
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
-import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, BulkPaperActionInput, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, UserRecord } from "./types";
+import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
+import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperActionInput, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -95,6 +96,140 @@ function mapPaperTranslationPage(item: Record<string, unknown>, page: number): P
   };
 }
 
+function mapArtifactCitation(value: unknown): ArtifactCitation | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  const chunkId = String(item.chunk_id ?? item.chunkId ?? "");
+  const physicalPage = Number(item.physical_page ?? item.physicalPage ?? item.page ?? 0);
+  if (!chunkId || !Number.isInteger(physicalPage) || physicalPage < 1) return null;
+  return { chunkId, physicalPage, quote: item.quote || item.excerpt ? String(item.quote ?? item.excerpt) : undefined };
+}
+
+function artifactCitations(value: unknown): ArtifactCitation[] {
+  return uniqueArtifactCitations((Array.isArray(value) ? value : []).map(mapArtifactCitation).filter((item): item is ArtifactCitation => Boolean(item)));
+}
+
+function mapSummaryFacts(value: unknown): SummaryFact[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === "string") return [];
+    if (!entry || typeof entry !== "object") return [];
+    const item = entry as Record<string, unknown>;
+    const text = String(item.text ?? item.fact ?? item.content ?? "").trim();
+    const citations = artifactCitations(item.citations);
+    return text && citations.length > 0 ? [{ text, citations }] : [];
+  });
+}
+
+function mapSummarySections(value: unknown): SummarySection[] {
+  const raw = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? Object.entries(value as Record<string, unknown>).map(([key, facts]) => ({ key, facts }))
+      : [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const item = entry as Record<string, unknown>;
+    const rawKey = String(item.key ?? item.type ?? item.section ?? "");
+    const keyAliases: Record<string, SummarySectionKey> = { research_question: "research_problem", experimental_setup: "experiment_setup", limitations_scope: "limitations" };
+    const key = (keyAliases[rawKey] ?? rawKey) as SummarySectionKey;
+    if (!summarySectionKeys.has(key)) return [];
+    const facts = mapSummaryFacts(item.facts ?? item.items);
+    return facts.length > 0 ? [{ key, title: String(item.title ?? summarySectionTitles[key]), facts }] : [];
+  });
+}
+
+function mapPaperSummaryResponse(item: Record<string, unknown>, paperId: string): PaperSummary {
+  const stale = item.stale === true || item.status === "stale";
+  const mode = item.mode === "extractive" ? "extractive" : "model";
+  const sections = mapSummarySections(item.sections);
+  const canonicalKeys = new Set(sections.map((section) => section.key));
+  const structuredModelOutputValid = mode !== "model" || summarySectionKeys.size === canonicalKeys.size;
+  const fallbackReason = item.fallback_reason ?? item.failure_reason;
+  const explicitStatus = normalizeArtifactStatus(item.artifact_status ?? item.status, stale);
+  const status = explicitStatus === "ready" && !structuredModelOutputValid ? "failed" : explicitStatus;
+  const citations = uniqueArtifactCitations([
+    ...artifactCitations(item.citations),
+    ...sections.flatMap((section) => section.facts.flatMap((fact) => fact.citations)),
+  ]);
+  return {
+    paperId: String(item.paper_id ?? paperId),
+    content: item.content ? String(item.content) : undefined,
+    sections: status === "failed" && mode === "model" ? [] : sections,
+    citations,
+    mode,
+    status,
+    stale,
+    fallbackReason: String(fallbackReason ?? (!structuredModelOutputValid ? "invalid_output" : "")) || undefined,
+  };
+}
+
+function structureNodeType(value: unknown): StructureNodeType | null {
+  const aliases: Record<string, StructureNodeType> = {
+    problem: "research_problem", limitation: "limitation", limitations: "limitation", results: "result", methods: "method", experiments: "experiment",
+    "研究问题": "research_problem", "背景": "background", "方法": "method", "数据": "data", "实验": "experiment", "结果": "result", "局限": "limitation",
+  };
+  const raw = String(value ?? "");
+  const normalized = (aliases[raw] ?? raw) as StructureNodeType;
+  return structureNodeTypes.has(normalized) ? normalized : null;
+}
+
+function graphHasCycle(nodes: StructureNode[], edges: StructureEdge[]): boolean {
+  const adjacency = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  edges.forEach((edge) => adjacency.get(edge.source)?.push(edge.target));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    if ((adjacency.get(id) ?? []).some(visit)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  return nodes.some((node) => visit(node.id));
+}
+
+function mapPaperStructureResponse(item: Record<string, unknown>, paperId: string): PaperStructureGraph {
+  const stale = item.stale === true || item.status === "stale";
+  const explicitStatus = normalizeArtifactStatus(item.artifact_status ?? item.status, stale);
+  const nodes: StructureNode[] = (Array.isArray(item.nodes) ? item.nodes : []).flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const node = entry as Record<string, unknown>;
+    const type = structureNodeType(node.type ?? node.node_type);
+    const citations = artifactCitations(node.citations ?? (node.chunk_id ? [{ chunk_id: node.chunk_id, physical_page: node.physical_page }] : []));
+    const id = String(node.id ?? "").trim();
+    const label = String(node.label ?? node.title ?? "").trim();
+    const summary = String(node.summary ?? node.description ?? label).trim();
+    return id && label && summary && type && citations.length > 0 ? [{ id, type, label, summary, citations }] : [];
+  });
+  const edges: StructureEdge[] = (Array.isArray(item.edges) ? item.edges : []).flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const edge = entry as Record<string, unknown>;
+    const source = String(edge.source ?? "");
+    const target = String(edge.target ?? "");
+    return source && target ? [{ source, target }] : [];
+  });
+  const ids = new Set(nodes.map((node) => node.id));
+  const degree = new Map(nodes.map((node) => [node.id, 0]));
+  const validEdges = edges.every((edge) => ids.has(edge.source) && ids.has(edge.target) && edge.source !== edge.target);
+  edges.forEach((edge) => { degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1); degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1); });
+  const validGraph = nodes.length >= 5 && nodes.length <= 12 && ids.size === nodes.length && validEdges && nodes.every((node) => (degree.get(node.id) ?? 0) > 0) && !graphHasCycle(nodes, edges) && Boolean(String(item.mermaid ?? "").trim());
+  const status = explicitStatus === "ready" && !validGraph ? "failed" : explicitStatus;
+  const fallbackReason = item.fallback_reason ?? item.failure_reason;
+  return {
+    paperId: String(item.paper_id ?? paperId),
+    nodes: status === "failed" ? [] : nodes,
+    edges: status === "failed" ? [] : edges,
+    mermaid: status === "failed" ? "" : String(item.mermaid ?? ""),
+    status,
+    stale,
+    fallbackReason: String(fallbackReason ?? (!validGraph ? "invalid_output" : "")) || undefined,
+    evidenceExcerpt: item.evidence_excerpt ? String(item.evidence_excerpt) : undefined,
+  };
+}
+
 function mapEvidenceQuality(item: Record<string, unknown>): AgentEvidenceQuality {
   return {
     grade: item.grade === "sufficient" ? "sufficient" : "insufficient",
@@ -128,6 +263,21 @@ async function apiError(response: Response, fallback: string): Promise<Error> {
     }
   } catch {
     // 非 JSON 错误响应继续使用面向用户的本地兜底文案。
+  }
+  return new Error(fallback);
+}
+
+async function artifactApiError(response: Response, fallback: string): Promise<Error> {
+  try {
+    const payload = await response.json() as Record<string, unknown>;
+    const detail = payload.detail;
+    const detailObject = detail && typeof detail === "object" ? detail as Record<string, unknown> : undefined;
+    const reason = payload.fallback_reason ?? payload.failure_reason ?? detailObject?.reason_code ?? detailObject?.code ?? (typeof detail === "string" ? detail : undefined);
+    if (reason) return new Error(artifactFailureMessage(String(reason)));
+    const message = detailObject?.message;
+    if (typeof message === "string" && message.trim()) return new Error(message.trim());
+  } catch {
+    // 无结构化原因时使用本地兜底文案。
   }
   return new Error(fallback);
 }
@@ -440,8 +590,8 @@ export interface PaperLeafDataSource {
   updatePaper(paperId: string, input: PaperUpdateInput): Promise<Paper>;
   deletePaper(paperId: string): Promise<void>;
   retryPaper(paperId: string): Promise<Paper>;
-  summarizePaper(paperId: string): Promise<PaperSummary>;
-  buildStructureGraph(paperId: string): Promise<PaperStructureGraph>;
+  summarizePaper(paperId: string, options?: { refresh?: boolean }): Promise<PaperSummary>;
+  buildStructureGraph(paperId: string, options?: { refresh?: boolean }): Promise<PaperStructureGraph>;
   createPaperTranslation(paperId: string, targetLanguage: string, priorityPage: number): Promise<PaperTranslation>;
   getPaperTranslation(paperId: string, translationId: string): Promise<PaperTranslation>;
   getPaperTranslationPage(paperId: string, translationId: string, page: number): Promise<PaperTranslationPage>;
@@ -718,8 +868,8 @@ export const demoDataSource: PaperLeafDataSource = {
     demoPapers = demoPapers.map((paper) => paper.id === paperId ? updated : paper);
     return updated;
   },
-  async summarizePaper(paperId) { await wait(420); return { ...paperSummary, paperId }; },
-  async buildStructureGraph(paperId) { await wait(520); return { ...paperStructureGraph, paperId }; },
+  async summarizePaper(paperId, _options) { await wait(420); return { ...paperSummary, paperId }; },
+  async buildStructureGraph(paperId, _options) { await wait(520); return { ...paperStructureGraph, paperId }; },
   async createPaperTranslation(paperId, targetLanguage, priorityPage) {
     await wait(180);
     void priorityPage;
@@ -1020,22 +1170,17 @@ export const realDataSource: PaperLeafDataSource = {
     if (!r.ok) throw new Error(r.status === 409 ? "当前处理状态不能重试" : "重新处理失败");
     return mapPaper(await r.json() as Record<string, unknown>);
   },
-  async summarizePaper(paperId) {
-    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/summary`, { method: "POST", credentials: "include", headers: mutationHeaders() });
-    if (!r.ok) throw new Error(r.status === 409 ? "论文还没有完成索引" : "论文总结生成失败");
-    const item = await r.json() as Record<string, unknown>;
-    return { paperId: String(item.paper_id), content: String(item.content), mode: item.mode === "model" ? "model" : "extractive", citations: (item.citations as Array<Record<string, unknown>> ?? []).map((citation) => ({ chunkId: String(citation.chunk_id), physicalPage: Number(citation.physical_page) })) };
+  async summarizePaper(paperId, options) {
+    const query = options?.refresh ? "?refresh=true" : "";
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/summary${query}`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw await artifactApiError(r, r.status === 409 ? "论文还没有完成索引" : "论文总结生成失败，请稍后重试");
+    return mapPaperSummaryResponse(await r.json() as Record<string, unknown>, paperId);
   },
-  async buildStructureGraph(paperId) {
-    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/structure-graph`, { method: "POST", credentials: "include", headers: mutationHeaders() });
-    if (!r.ok) throw new Error(r.status === 409 ? "论文还没有完成索引" : "结构图生成失败");
-    const item = await r.json() as Record<string, unknown>;
-    return {
-      paperId: String(item.paper_id),
-      mermaid: String(item.mermaid),
-      nodes: (item.nodes as Array<Record<string, unknown>> ?? []).map((node) => ({ id: String(node.id), label: String(node.label), physicalPage: Number(node.physical_page), chunkId: String(node.chunk_id) })),
-      edges: (item.edges as Array<Record<string, unknown>> ?? []).map((edge) => ({ source: String(edge.source), target: String(edge.target) })),
-    };
+  async buildStructureGraph(paperId, options) {
+    const query = options?.refresh ? "?refresh=true" : "";
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/structure-graph${query}`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+    if (!r.ok) throw await artifactApiError(r, r.status === 409 ? "论文还没有完成索引" : "结构图生成失败，请稍后重试");
+    return mapPaperStructureResponse(await r.json() as Record<string, unknown>, paperId);
   },
   async listCollections() {
     const r = await fetch(`${API_BASE_URL}/collections`, { credentials: "include" });
