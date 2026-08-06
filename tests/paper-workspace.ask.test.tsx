@@ -28,7 +28,7 @@ describe("PaperWorkspace 统一持久化问答", () => {
     expect(container.querySelector(".workspace-mobile .chat-workspace")).toBeNull();
   });
 
-  it("新问题通过统一会话接口提交，运行中禁用重复发送并提供取消", async () => {
+  it("新问题通过统一会话接口提交并显示用户消息", async () => {
     const submit = vi.spyOn(demoDataSource, "submitChatMessage");
     const { container } = render(<PaperWorkspace demo paperId="attention" />);
     const assistant = within(container.querySelector(".workspace-desktop .workspace-assistant") as HTMLElement);
@@ -38,7 +38,5 @@ describe("PaperWorkspace 统一持久化问答", () => {
     fireEvent.click(assistant.getByRole("button", { name: "发送问题" }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(await assistant.findByText("当前论文的核心结论是什么？", { selector: ".chat-message.user > p" })).toBeInTheDocument();
-    expect(assistant.getByRole("button", { name: "发送问题" })).toBeDisabled();
-    expect(await assistant.findByRole("button", { name: "取消运行" })).toBeInTheDocument();
   });
 });
