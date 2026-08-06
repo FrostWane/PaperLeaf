@@ -78,7 +78,7 @@ describe("PaperWorkspace PDF 主视区", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalledWith("attention", "zh-CN", 2));
     const translationPane = await desktop.findByLabelText("简体中文译文，第 2 页");
-    expect(within(translationPane).getByText('<script>alert("x")</script>')).toBeVisible();
+    expect(await within(translationPane).findByText('<script>alert("x")</script>')).toBeVisible();
     expect(translationPane.querySelector("script")).toBeNull();
     fireEvent.click(within(translationPane).getByRole("button", { name: "取消后台翻译" }));
     expect(within(translationPane).getByRole("button", { name: "正在取消…" })).toBeDisabled();
