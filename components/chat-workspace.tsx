@@ -30,6 +30,27 @@ function getChatNarrow(): boolean {
   return typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 720px)").matches);
 }
 
+function useProgressiveAnswer(target: string, resetKey: string): string {
+  const [progress, setProgress] = useState({ key: resetKey, text: "" });
+  const visible = progress.key === resetKey && target.startsWith(progress.text) ? progress.text : "";
+
+  useEffect(() => {
+    if (!target || visible === target) return;
+    const reduceMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const timer = window.setTimeout(() => {
+      setProgress((current) => {
+        const currentText = current.key === resetKey && target.startsWith(current.text) ? current.text : "";
+        if (reduceMotion) return { key: resetKey, text: target };
+        const nextCharacter = Array.from(target.slice(currentText.length))[0];
+        return { key: resetKey, text: nextCharacter ? currentText + nextCharacter : target };
+      });
+    }, reduceMotion ? 0 : 14);
+    return () => window.clearTimeout(timer);
+  }, [resetKey, target, visible]);
+
+  return visible;
+}
+
 function inputFromBinding(binding: ChatBinding, title = "新对话"): ChatSessionInput {
   if (binding.type === "paper") return { type: "paper", paperId: binding.paperId, title };
   if (binding.type === "collection") return { type: "collection", collectionId: binding.collectionId, title };
@@ -160,6 +181,7 @@ export function ChatWorkspace({
   }, [selectedId, sessions, stableBinding]);
   const currentRun = selected && run?.sessionId === selected.id ? run : null;
   const active = submitting || (currentRun ? isActiveRun(currentRun) : isActiveSession(selected));
+  const progressiveAnswer = useProgressiveAnswer(liveAnswer, currentRun?.runId ?? selected?.id ?? "empty");
   const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === selected?.id && message.content.trim() && !(Boolean(currentRun && liveAnswer) && message.role === "assistant" && message.runId === currentRun?.runId)), [currentRun, liveAnswer, messages, selected?.id]);
   const visibleSessions = useMemo(() => sessions.filter((session) => belongsToWorkspace(session, stableBinding)), [sessions, stableBinding]);
 
@@ -251,8 +273,6 @@ export function ChatWorkspace({
             if (controller.signal.aborted || selectedIdRef.current !== nextRun.sessionId) return;
             setMessages(nextMessages);
             setSessions(nextSessions);
-            setLiveAnswer("");
-            setLiveCitations([]);
           }).catch((reason: unknown) => { if (!controller.signal.aborted && selectedIdRef.current === nextRun.sessionId) setError(reason instanceof Error ? reason.message : "完成后的回答同步失败"); });
         }
       },
@@ -261,6 +281,17 @@ export function ChatWorkspace({
     });
     return () => controller.abort();
   }, [currentRun?.runId, currentRun?.status, dataSource]);
+
+  useEffect(() => {
+    if (!currentRun || activeStatuses.has(currentRun.status) || !liveAnswer || progressiveAnswer !== liveAnswer) return;
+    const persisted = messages.some((message) => message.role === "assistant" && message.runId === currentRun.runId && message.content.trim());
+    if (!persisted) return;
+    const timer = window.setTimeout(() => {
+      setLiveAnswer("");
+      setLiveCitations([]);
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [currentRun, liveAnswer, messages, progressiveAnswer]);
 
   async function createSession() {
     setError("");
@@ -336,6 +367,8 @@ export function ChatWorkspace({
       setMessages((items) => items.some((item) => item.id === submission.messageId) ? items : [...items, { id: submission.messageId, sessionId: session!.id, role: "user", sequence: items.filter((item) => item.sessionId === session!.id).length + 1, status: "completed", content: question, citations: [], runId: submission.runId, createdAt: timestamp, updatedAt: timestamp }]);
       setSessions((items) => items.map((item) => item.id === session?.id ? { ...item, currentRunId: submission.runId, currentRunStatus: "pending", updatedAt: timestamp } : item));
       setRun(pendingRun);
+      setLiveAnswer("");
+      setLiveCitations([]);
       setDraft("");
       setActivities([]);
       try {
@@ -437,7 +470,7 @@ export function ChatWorkspace({
             {message.role === "assistant" ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p>{message.content}</p>}
             {message.role === "assistant" && message.citations.length > 0 && <div className="chat-citations" aria-label="回答引用">{message.citations.map((citation, index) => <button type="button" key={`${message.id}-${citation.chunkId}-${index}`} onClick={() => onOpenCitation?.(citation)}><span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em></button>)}</div>}
           </article>)}
-          {currentRun && liveAnswer && <article className="chat-message assistant live"><span>PaperLeaf · 已核验段落</span><SafeMarkdown content={liveAnswer} citations={liveCitations} onOpenCitation={onOpenCitation} />{liveCitations.length > 0 && <div className="chat-citations">{liveCitations.map((citation, index) => <button type="button" key={`${citation.chunkId}-${index}`} onClick={() => onOpenCitation?.(citation)}><span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em></button>)}</div>}</article>}
+          {currentRun && liveAnswer && <article className="chat-message assistant live" aria-label="PaperLeaf 正在逐字生成已核验回答"><span>PaperLeaf · 已核验内容正在生成</span><div className={progressiveAnswer === liveAnswer ? "progressive-answer" : "progressive-answer typing"}><SafeMarkdown content={progressiveAnswer} citations={liveCitations} onOpenCitation={onOpenCitation} /></div>{liveCitations.length > 0 && <div className="chat-citations">{liveCitations.map((citation, index) => <button type="button" key={`${citation.chunkId}-${index}`} onClick={() => onOpenCitation?.(citation)}><span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em></button>)}</div>}</article>}
           {currentRun && <div className={`chat-run-state ${currentRun.status}`} role="status">
             <div><span>{runStatusText(currentRun, connection)}</span>{isActiveRun(currentRun) && <button type="button" className="secondary-button" disabled={currentRun.cancelRequested} onClick={() => void cancelRun()}><Square size={13} />{currentRun.cancelRequested ? "正在取消" : "取消运行"}</button>}</div>
             {currentRun.pendingAction && <div className="chat-pending-action"><strong>需要你的确认</strong><p>{currentRun.pendingAction.riskMessage}</p>{currentRun.pendingAction.candidates.slice(0, 3).map((candidate) => <span key={candidate.arxivId ?? candidate.title}>{candidate.title ?? candidate.arxivId}</span>)}<div>{currentRun.pendingAction.allowedDecisions.includes("approve") && <button type="button" className="primary-button" onClick={() => void resumeRun("approve")}>确认导入并继续</button>}{currentRun.pendingAction.allowedDecisions.includes("reject") && <button type="button" className="secondary-button" onClick={() => void resumeRun("reject")}>不导入，继续回答</button>}</div></div>}

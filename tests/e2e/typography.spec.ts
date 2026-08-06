@@ -37,8 +37,8 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
   await page.goto("/settings");
   for (const option of [
     { name: /小\s*适合高密度/, mode: "small", body: 14, support: 12 },
-    { name: /标准\s*默认阅读/, mode: "standard", body: 15, support: 12 },
-    { name: /大\s*适合 2K/, mode: "large", body: 17, support: 14 },
+    { name: /标准\s*默认阅读/, mode: "standard", body: 15, support: 13 },
+    { name: /大\s*适合 2K/, mode: "large", body: 17, support: 15 },
   ]) {
     await page.getByRole("radio", { name: option.name }).click();
     const scale = await page.evaluate(() => ({
@@ -56,13 +56,48 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
     const size = await page.locator(selector).first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
     expect(size, selector).toBeGreaterThanOrEqual(12);
   }
-  await expect(page.locator(".metric-row strong").first()).toHaveCSS("font-size", "22px");
+  await expect(page.locator(".metric-row strong").first()).toHaveCSS("font-size", "24px");
+  const adminHierarchy = await page.evaluate(() => {
+    const sectionTitle = getComputedStyle(document.querySelector(".section-bar h2")!);
+    const itemTitle = getComputedStyle(document.querySelector(".admin-user strong")!);
+    const jobStatus = document.querySelector(".job-row > .mono") as HTMLElement;
+    const statusStyle = getComputedStyle(jobStatus);
+    return {
+      sectionSize: Number.parseFloat(sectionTitle.fontSize),
+      sectionWeight: Number.parseInt(sectionTitle.fontWeight, 10),
+      itemSize: Number.parseFloat(itemTitle.fontSize),
+      itemWeight: Number.parseInt(itemTitle.fontWeight, 10),
+      jobHeight: jobStatus.getBoundingClientRect().height,
+      jobLineHeight: Number.parseFloat(statusStyle.lineHeight),
+      jobWhiteSpace: statusStyle.whiteSpace,
+    };
+  });
+  expect(adminHierarchy.sectionSize).toBeGreaterThan(adminHierarchy.itemSize);
+  expect(adminHierarchy.sectionWeight).toBeGreaterThanOrEqual(adminHierarchy.itemWeight);
+  expect(adminHierarchy.jobWhiteSpace).toBe("nowrap");
+  expect(adminHierarchy.jobHeight).toBeLessThanOrEqual(adminHierarchy.jobLineHeight * 1.5);
 
   await page.goto("/library?demo=1");
   for (const selector of [".collection-tabs span", ".collection-tree-item small", ".data-table th"]) {
     const size = await page.locator(selector).first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
     expect(size, selector).toBeGreaterThanOrEqual(12);
   }
+  const libraryGeometry = await page.evaluate(() => {
+    const year = document.querySelector(".library-data-table th:nth-child(5) .sortable") as HTMLElement;
+    const header = document.querySelector(".library-data-table th") as HTMLElement;
+    const title = document.querySelector(".library-data-table .paper-cell strong") as HTMLElement;
+    return {
+      yearWidth: year.clientWidth,
+      yearScrollWidth: year.scrollWidth,
+      yearWhiteSpace: getComputedStyle(year).whiteSpace,
+      headerFont: getComputedStyle(header).fontFamily,
+      titleMaxWidth: getComputedStyle(title).maxWidth,
+    };
+  });
+  expect(libraryGeometry.yearWhiteSpace).toBe("nowrap");
+  expect(libraryGeometry.yearScrollWidth).toBeLessThanOrEqual(libraryGeometry.yearWidth);
+  expect(libraryGeometry.headerFont).toContain("PaperLeaf CJK");
+  expect(libraryGeometry.titleMaxWidth).toBe("100%");
   const finalLayout = await page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth }));
   expect(finalLayout.document).toBeLessThanOrEqual(finalLayout.viewport);
 });

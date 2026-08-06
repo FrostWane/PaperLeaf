@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "@/components/chat-workspace";
 import { demoDataSource } from "@/lib/data-source";
@@ -31,6 +31,33 @@ describe("ChatWorkspace", () => {
     expect(input).toHaveValue("比较这些论文所采用的方法与关键假设");
     expect(input).toHaveFocus();
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("已核验段落在界面中逐字呈现，而不是整段瞬间出现", async () => {
+    const session = activeSession();
+    let streamHandlers: Parameters<typeof demoDataSource.subscribeAgentRun>[1] | undefined;
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValue([session]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      getAgentRun: vi.fn().mockResolvedValue(activeRun("")),
+      subscribeAgentRun: vi.fn(async (_runId, handlers, options) => {
+        streamHandlers = handlers;
+        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      }),
+    };
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+    await waitFor(() => expect(streamHandlers).toBeDefined());
+    const answer = "这是逐字输出的已核验回答。";
+    act(() => streamHandlers?.onAnswerUpdate?.(answer));
+    const live = await screen.findByLabelText("PaperLeaf 正在逐字生成已核验回答");
+    expect(screen.queryByText(answer)).not.toBeInTheDocument();
+    await waitFor(() => {
+      const partial = live.querySelector(".safe-markdown")?.textContent ?? "";
+      expect(partial.length).toBeGreaterThan(0);
+      expect(partial.length).toBeLessThan(answer.length);
+    });
+    expect(await screen.findByText(answer)).toBeInTheDocument();
   });
 
   it("活跃 Run 恢复时合并为一个权威回答，重挂载与补发不会重复段落", async () => {

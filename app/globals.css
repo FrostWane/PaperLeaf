@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* 仅接管中日韩字形，拉丁字母和数字继续使用 Geist。
+   这样可避免 Geist 内部的 generic sans-serif 抢在中文字体之前回退。 */
+@font-face {
+  font-family: "PaperLeaf CJK";
+  src: local("Microsoft YaHei UI"), local("Microsoft YaHei"), local("PingFang SC"), local("Noto Sans CJK SC");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  unicode-range: U+2E80-2FFF, U+3000-303F, U+3040-30FF, U+31F0-31FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+
 :root {
   --canvas: #f7f8f6;
   --surface: #fff;
@@ -29,15 +40,15 @@
   --r-control: 6px;
   --r-panel: 10px;
   --r-layer: 14px;
-  --font-sans: var(--font-geist-sans), "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --font-sans: "PaperLeaf CJK", var(--font-geist-sans), sans-serif;
   --font-mono: var(--font-geist-mono), Consolas, monospace;
   --ui-body-font: 15px;
-  --ui-support-font: 12px;
+  --ui-support-font: 13px;
 }
 
 html[data-font-scale="small"] { --ui-body-font: 14px; --ui-support-font: 12px; }
-html[data-font-scale="standard"] { --ui-body-font: 15px; --ui-support-font: 12px; }
-html[data-font-scale="large"] { --ui-body-font: 17px; --ui-support-font: 14px; }
+html[data-font-scale="standard"] { --ui-body-font: 15px; --ui-support-font: 13px; }
+html[data-font-scale="large"] { --ui-body-font: 17px; --ui-support-font: 15px; }
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -561,10 +572,58 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .structure-outline .structure-index { padding-top: 1px; font-size: 12px; }
 .structure-node-citations { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 0 38px; }
 
-/* 应用区字号由个人偏好统一驱动；正文/辅助文字仍保留清晰层级。 */
-:is(.app-shell, .demo-page) { font-size: var(--ui-body-font); }
-:is(.app-shell, .demo-page) :is(p, li, td, dd, strong, span, input, textarea, select, button, label, a, q, output) { font-size: var(--ui-body-font); }
-:is(.app-shell, .demo-page) :is(small, dt, th, em, .eyebrow, .nav-current, .demo-badge, .table-muted, .result-count, .scope-chip, .run-note, .status-pill, .paper-index, .citation-no, .citation-page, .answer-run, .result-index, .reader-status, .reader-status span, .evidence-quality-strip, .evidence-quality-strip span, .metric-row span, .collection-tabs span, .organization-section > span, .collection-chip-list span, .agent-progress-heading span, .answer-sources > a > span:first-child, .pdf-running span) { font-size: var(--ui-support-font); }
+/* 应用区字体按语义分级。禁止再对所有 span/strong/button 强制同号，
+   否则标题、正文和辅助信息会被压成同一层级，并导致窄表头逐字换行。 */
+:is(.app-shell, .demo-page) { font-size: var(--ui-body-font); line-height: 1.55; }
+:is(.app-shell, .demo-page) :is(button, input, textarea, select) { font-family: var(--font-sans); }
+.app-shell .eyebrow { font-family: var(--font-sans); letter-spacing: .04em; text-transform: none; }
+
+/* 文献库：正文 15px、辅助信息 13px，中文表头使用无衬线字体。 */
+.page-lead p { font-size: max(14px, var(--ui-support-font)); line-height: 1.65; }
+.collection-tabs button, .library-tools :is(input, button), .organization-head,
+.collection-tree-item, .collection-tree-root { font-size: var(--ui-body-font); }
+.collection-tabs span, .result-count, .collection-tree-item small, .collection-tree-root small,
+.table-muted, .collection-chip-list :is(span, small) { font-size: var(--ui-support-font); }
+.library-tools { min-height: 64px; }
+.search-field { min-height: 44px; }
+.data-table th { height: 46px; color: var(--muted); font-family: var(--font-sans); font-size: var(--ui-support-font); font-weight: 650; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+.data-table td { min-height: 76px; padding-block: 15px; font-size: var(--ui-body-font); line-height: 1.55; }
+.data-table .sortable { white-space: nowrap; }
+.paper-cell strong { font-size: var(--ui-body-font); line-height: 1.45; }
+.library-data-table .paper-cell strong { max-width: 100%; }
+.paper-cell small { font-size: var(--ui-support-font); line-height: 1.55; }
+.status-pill { font-size: var(--ui-support-font); }
+.organization-head { height: 64px; letter-spacing: 0; }
+.collection-tree-item, .collection-tree-root { min-height: 46px; }
+.library-filter-panel :is(legend, button, label, select), .bulk-bar :is(strong, select),
+.library-message { font-size: var(--ui-support-font); }
+.library-data-table th:nth-child(5), .library-data-table td:nth-child(5) { width: 96px; text-align: center; white-space: nowrap; }
+.library-data-table th:nth-child(5) .sortable { width: 100%; justify-content: center; }
+.library-data-table th:nth-child(6), .library-data-table td:nth-child(6) { width: 118px; text-align: center; }
+.library-data-table td:nth-child(6) .status-pill { margin-inline: auto; }
+.library-data-table th:nth-child(7), .library-data-table td:nth-child(7) { width: 94px; }
+.sortable svg { flex: 0 0 auto; }
+.row-checkbox { width: 18px; height: 18px; }
+.row-open { width: 40px; height: 40px; }
+
+/* 管理页：名称、说明和状态保持稳定的三级字号，不再混用 7～12px。 */
+.admin-layout { font-size: var(--ui-body-font); }
+.metric-row span, .metric-row small, .section-bar > small, .admin-create label,
+.admin-user small, .runtime-empty small, .runtime-purposes small, .job-row small { font-size: var(--ui-support-font); line-height: 1.55; }
+.metric-row strong { font-size: 24px; font-weight: 620; line-height: 1.2; }
+.section-bar h2 { font-size: calc(var(--ui-body-font) + 2px); font-weight: 650; line-height: 1.35; }
+.section-bar > small, .runtime-purposes small { font-family: var(--font-sans); }
+.admin-message, .admin-create input, .admin-user strong, .runtime-empty strong,
+.runtime-provider-name strong, .runtime-purposes > span, .job-row strong { font-size: var(--ui-body-font); line-height: 1.5; }
+.admin-user strong, .runtime-empty strong, .runtime-provider-name strong,
+.runtime-purposes > span, .job-row strong { font-weight: 600; }
+.admin-create input { min-height: 44px; }
+.runtime-provider { min-height: 78px; grid-template-columns: 180px minmax(0, 1fr); }
+.runtime-purposes { gap: 12px 24px; }
+.runtime-purposes > span { grid-template-columns: 9px minmax(0, 1fr); row-gap: 2px; }
+.runtime-purposes i { width: 8px; height: 8px; }
+.job-row { min-height: 76px; grid-template-columns: 38px minmax(240px, 1fr) minmax(180px, 320px) minmax(76px, max-content) auto; }
+.job-row > .mono { min-width: 76px; font-size: var(--ui-support-font); text-align: center; white-space: nowrap; }
 
 /* 持久化问答工作台：保持连续面板，避免对话气泡和卡片墙。 */
 .persistent-ask-layout { grid-template-columns: 286px minmax(0, 1fr); }
@@ -607,6 +666,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .chat-message.user { margin-left: 12%; }
 .chat-message.user > p { margin: 0; padding-left: 13px; border-left: 2px solid var(--blue-line); color: var(--ink); font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
 .chat-message.assistant.live { border-left: 2px solid var(--sage-line); padding-left: 14px; }
+.progressive-answer.typing .safe-markdown > :last-child::after { width: 2px; height: 1em; display: inline-block; margin-left: 3px; background: var(--blue-ink); vertical-align: -.12em; animation: answer-caret .8s steps(1, end) infinite; content: ""; }
+@keyframes answer-caret { 50% { opacity: 0; } }
 .safe-markdown { min-width: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
 .safe-markdown > :first-child { margin-top: 0; }
 .safe-markdown > :last-child { margin-bottom: 0; }
@@ -689,9 +750,12 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .chat-run-state ol { grid-template-columns: 1fr; gap: 8px; }
   .chat-composer > div span:first-child { max-width: 72%; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .progressive-answer.typing .safe-markdown > :last-child::after { animation: none; }
+}
 :is(.app-shell, .demo-page) :is(.primary-button, .secondary-button, .icon-button, .save-settings, .session-logout) { min-height: 44px; }
 :is(.app-shell, .demo-page) .icon-button { width: 44px; }
-:is(.app-shell, .demo-page) .metric-row strong { font-size: 22px; }
+:is(.app-shell, .demo-page) .metric-row strong { font-size: 24px; }
 :is(.app-shell, .demo-page) .mock-paper > p:not(.pdf-authors) { font-size: var(--ui-body-font); }
 
 /* PDF 主视区：工具栏在窄阅读列中内部滚动，不把页面本身撑宽。 */
