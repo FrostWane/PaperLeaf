@@ -2,10 +2,13 @@
 
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { createColumnHelper, flexRender, getCoreRowModel, getSortedRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
-import { Archive, ArchiveRestore, ArrowUpDown, Check, ChevronRight, FileText, Folder, FolderCog, FolderPlus, Hash, Search, SlidersHorizontal, Tags, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUpDown, Check, ChevronRight, FileText, FolderCog, FolderPlus, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
-import type { BulkPaperAction, CollectionInput, Paper, TagInput } from "@/lib/types";
+import { collectionForest, findCollection, flattenCollections, formatIsoDate, recursivePaperIds } from "@/lib/collections";
+import type { BulkPaperAction, CollectionInput, Paper } from "@/lib/types";
+import { CollectionSelect } from "./collection-select";
+import { CollectionTree } from "./collection-tree";
 import { LibraryOrganizerDialog } from "./library-organizer-dialog";
 import { PaperCollectionsDialog } from "./paper-collections-dialog";
 
@@ -38,90 +41,86 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [yearFilter, setYearFilter] = useState("all");
   const [collectionFilter, setCollectionFilter] = useState("all");
-  const [tagFilter, setTagFilter] = useState("all");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [organizerOpen, setOrganizerOpen] = useState(false);
   const [organizingPaper, setOrganizingPaper] = useState<Paper | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCollectionId, setBulkCollectionId] = useState("");
-  const [bulkTagId, setBulkTagId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
-  const papersQuery = useQuery({ queryKey: ["papers", dataMode], queryFn: () => dataSource.listPapers(), refetchInterval: (state) => state.state.data?.some((paper) => paper.status === "indexing" || paper.status === "deleting") ? 3_000 : false });
+  const papersQuery = useQuery({ queryKey: ["papers", dataMode, "all"], queryFn: () => dataSource.listPapers(), refetchInterval: (state) => state.state.data?.some((paper) => paper.status === "indexing" || paper.status === "deleting") ? 3_000 : false });
   const collectionsQuery = useQuery({ queryKey: ["collections", dataMode], queryFn: () => dataSource.listCollections() });
-  const tagsQuery = useQuery({ queryKey: ["tags", dataMode], queryFn: () => dataSource.listTags() });
+  const usesServerCollectionScope = !demo && collectionFilter !== "all" && collectionFilter !== "unorganized";
+  const scopedPapersQuery = useQuery({ queryKey: ["papers", dataMode, "collection", collectionFilter], queryFn: () => dataSource.listPapers({ collectionId: collectionFilter }), enabled: usesServerCollectionScope });
   const papers = useMemo(() => papersQuery.data ?? [], [papersQuery.data]);
-  const collections = useMemo(() => collectionsQuery.data ?? [], [collectionsQuery.data]);
-  const tags = useMemo(() => tagsQuery.data ?? [], [tagsQuery.data]);
+  const collections = useMemo(() => collectionForest(collectionsQuery.data ?? []), [collectionsQuery.data]);
+  const flatCollections = useMemo(() => flattenCollections(collections).map(({ collection }) => collection), [collections]);
 
   useEffect(() => {
     const refresh = () => {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["papers", dataMode] }),
         queryClient.invalidateQueries({ queryKey: ["collections", dataMode] }),
-        queryClient.invalidateQueries({ queryKey: ["tags", dataMode] }),
       ]);
     };
     window.addEventListener("paperleaf:papers-changed", refresh);
     return () => window.removeEventListener("paperleaf:papers-changed", refresh);
   }, [dataMode]);
 
-  useEffect(() => { setSelectedIds(new Set()); setMessage(""); }, [scope, statusFilter, yearFilter, collectionFilter, tagFilter]);
-
-  const enrichedPapers = useMemo(() => papers.map((paper) => ({
-    ...paper,
-    tags: tags.filter((tag) => tag.paperIds.includes(paper.id)).map((tag) => tag.name),
-  })), [papers, tags]);
+  useEffect(() => { setSelectedIds(new Set()); setMessage(""); }, [scope, statusFilter, yearFilter, collectionFilter]);
 
   const collectionIdsByPaper = useMemo(() => {
     const result = new Map<string, string[]>();
-    for (const collection of collections) for (const paperId of collection.paperIds) result.set(paperId, [...(result.get(paperId) ?? []), collection.id]);
+    for (const collection of flatCollections) for (const paperId of collection.paperIds) result.set(paperId, [...(result.get(paperId) ?? []), collection.id]);
     return result;
-  }, [collections]);
+  }, [flatCollections]);
   const collectionNamesByPaper = useMemo(() => {
     const result = new Map<string, string[]>();
-    for (const collection of collections) for (const paperId of collection.paperIds) result.set(paperId, [...(result.get(paperId) ?? []), collection.name]);
+    for (const collection of flatCollections) for (const paperId of collection.paperIds) result.set(paperId, [...(result.get(paperId) ?? []), collection.name]);
     return result;
-  }, [collections]);
-  const tagIdsByPaper = useMemo(() => {
-    const result = new Map<string, string[]>();
-    for (const tag of tags) for (const paperId of tag.paperIds) result.set(paperId, [...(result.get(paperId) ?? []), tag.id]);
-    return result;
-  }, [tags]);
+  }, [flatCollections]);
+  const selectedCollectionPaperIds = useMemo(() => {
+    if (collectionFilter === "all" || collectionFilter === "unorganized") return null;
+    const selected = findCollection(collections, collectionFilter);
+    return new Set(selected ? recursivePaperIds(selected) : []);
+  }, [collectionFilter, collections]);
 
   const inScope = useCallback((paper: Paper, target: LibraryScope): boolean => {
     if (target === "archived") return Boolean(paper.archivedAt);
     if (paper.archivedAt) return false;
     if (target === "recent") return Boolean(paper.lastOpenedAt);
-    if (target === "unorganized") return !(collectionIdsByPaper.get(paper.id)?.length) || !(tagIdsByPaper.get(paper.id)?.length);
+    if (target === "unorganized") return !(collectionIdsByPaper.get(paper.id)?.length);
     return true;
-  }, [collectionIdsByPaper, tagIdsByPaper]);
+  }, [collectionIdsByPaper]);
 
   const scopeCounts = useMemo(() => ({
-    all: enrichedPapers.filter((paper) => inScope(paper, "all")).length,
-    recent: enrichedPapers.filter((paper) => inScope(paper, "recent")).length,
-    unorganized: enrichedPapers.filter((paper) => inScope(paper, "unorganized")).length,
-    archived: enrichedPapers.filter((paper) => inScope(paper, "archived")).length,
-  }), [enrichedPapers, inScope]);
+    all: papers.filter((paper) => inScope(paper, "all")).length,
+    recent: papers.filter((paper) => inScope(paper, "recent")).length,
+    unorganized: papers.filter((paper) => inScope(paper, "unorganized")).length,
+    archived: papers.filter((paper) => inScope(paper, "archived")).length,
+  }), [papers, inScope]);
 
-  const filteredPapers = useMemo(() => enrichedPapers.filter((paper) => {
+  const filteredPapers = useMemo(() => {
+    const candidatePapers = usesServerCollectionScope ? (scopedPapersQuery.data ?? []) : papers;
+    return candidatePapers.filter((paper) => {
     if (!inScope(paper, scope)) return false;
     const normalized = query.trim().toLocaleLowerCase();
-    if (normalized && !`${paper.title} ${paper.authors} ${paper.venue} ${paper.tags.join(" ")}`.toLocaleLowerCase().includes(normalized)) return false;
+    if (normalized && !`${paper.title} ${paper.authors} ${paper.publication}`.toLocaleLowerCase().includes(normalized)) return false;
     if (statusFilter === "ready" && paper.status !== "ready") return false;
     if (statusFilter === "processing" && paper.status !== "indexing") return false;
     if (statusFilter === "attention" && paper.status !== "partial" && paper.status !== "failed") return false;
     if (yearFilter !== "all" && paper.year !== Number(yearFilter)) return false;
-    if (collectionFilter !== "all" && !collectionIdsByPaper.get(paper.id)?.includes(collectionFilter)) return false;
-    if (tagFilter !== "all" && !tagIdsByPaper.get(paper.id)?.includes(tagFilter)) return false;
-    return true;
-  }), [collectionFilter, collectionIdsByPaper, enrichedPapers, inScope, query, scope, statusFilter, tagFilter, tagIdsByPaper, yearFilter]);
+    if (collectionFilter === "unorganized" && collectionIdsByPaper.get(paper.id)?.length) return false;
+    if (demo && selectedCollectionPaperIds && !selectedCollectionPaperIds.has(paper.id)) return false;
+      return true;
+    });
+  }, [collectionFilter, collectionIdsByPaper, demo, inScope, papers, query, scope, scopedPapersQuery.data, selectedCollectionPaperIds, statusFilter, usesServerCollectionScope, yearFilter]);
 
   const visibleIds = useMemo(() => filteredPapers.map((paper) => paper.id), [filteredPapers]);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
   const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id)) && !allVisibleSelected;
-  const years = Array.from(new Set(enrichedPapers.map((paper) => paper.year))).sort((a, b) => b - a);
+  const years = Array.from(new Set(papers.map((paper) => paper.year))).sort((a, b) => b - a);
 
   const toggleSelected = useCallback((id: string, checked: boolean) => {
     setSelectedIds((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; });
@@ -132,7 +131,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
   }, [visibleIds]);
 
   async function refreshOrganization() {
-    const [, collectionResult] = await Promise.all([papersQuery.refetch(), collectionsQuery.refetch(), tagsQuery.refetch()]);
+    const [, collectionResult] = await Promise.all([papersQuery.refetch(), collectionsQuery.refetch(), usesServerCollectionScope ? scopedPapersQuery.refetch() : Promise.resolve(null)]);
     return collectionResult.data ?? [];
   }
 
@@ -153,7 +152,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
 
   async function mutateOrganizer(task: () => Promise<unknown>) {
     await task();
-    await Promise.all([collectionsQuery.refetch(), tagsQuery.refetch(), papersQuery.refetch()]);
+    await Promise.all([collectionsQuery.refetch(), papersQuery.refetch(), usesServerCollectionScope ? scopedPapersQuery.refetch() : Promise.resolve(null)]);
   }
 
   async function savePaperCollections(paperId: string, nextIds: string[]) {
@@ -166,8 +165,8 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
     ];
     const results = await Promise.allSettled(operations.map(({ action, targetId }) => dataSource.bulkPapers({ paperIds: [paperId], action, targetId })));
     const refreshedCollections = await refreshOrganization();
-    const failed = results.flatMap((result, index) => result.status === "rejected" ? [collections.find((item) => item.id === operations[index].targetId)?.name ?? "未知集合"] : []);
-    const selectedIds = refreshedCollections.filter((collection) => collection.paperIds.includes(paperId)).map((collection) => collection.id);
+    const failed = results.flatMap((result, index) => result.status === "rejected" ? [flatCollections.find((item) => item.id === operations[index].targetId)?.name ?? "未知集合"] : []);
+    const selectedIds = flattenCollections(refreshedCollections).filter(({ collection }) => collection.paperIds.includes(paperId)).map(({ collection }) => collection.id);
     if (failed.length > 0) return { selectedIds, error: `部分集合保存失败：${failed.join("、")}。已重新读取服务器中的实际结果。` };
     setMessage(`已更新《${papers.find((paper) => paper.id === paperId)?.title ?? "论文"}》的集合。`);
     return { selectedIds };
@@ -175,44 +174,40 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
 
   const columns = useMemo(() => [
     helper.display({ id: "select", header: () => <SelectionBox checked={allVisibleSelected} indeterminate={someVisibleSelected} label="选择当前筛选中的全部文献" onChange={toggleAll} />, cell: ({ row }) => <SelectionBox checked={selectedIds.has(row.original.id)} label={`选择 ${row.original.title}`} onChange={(checked) => toggleSelected(row.original.id, checked)} /> }),
-    helper.accessor("title", { header: "论文", cell: ({ row }) => <a className="paper-cell" href={`/library/${row.original.id}${demo ? "?demo=1" : ""}`}><span className="paper-icon"><FileText size={16} /></span><span><strong>{row.original.title}</strong><small>{row.original.authors} · {row.original.venue}{row.original.lastOpenedAt ? ` · 最近阅读 ${new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(row.original.lastOpenedAt))}` : ""}</small><span className="mobile-paper-state"><PaperState paper={row.original} /></span></span></a> }),
+    helper.accessor("title", { header: "论文", cell: ({ row }) => <a className="paper-cell" href={`/library/${row.original.id}${demo ? "?demo=1" : ""}`}><span className="paper-icon"><FileText size={16} /></span><span><strong>{row.original.title}</strong><small>{row.original.authors}{row.original.lastOpenedAt ? ` · 最近阅读 ${formatIsoDate(row.original.lastOpenedAt)}` : ""}</small><span className="mobile-paper-state"><PaperState paper={row.original} /></span></span></a> }),
     helper.display({ id: "collections", header: "集合", cell: ({ row }) => { const names = collectionNamesByPaper.get(row.original.id) ?? []; return names.length ? <div className="collection-chip-list">{names.slice(0, 2).map((name) => <span key={name}>{name}</span>)}{names.length > 2 && <small>+{names.length - 2}</small>}</div> : <span className="table-muted">未归类</span>; } }),
-    helper.accessor("tags", { header: "标签", enableSorting: false, cell: (info) => info.getValue().length ? <div className="tag-list">{info.getValue().slice(0, 2).map((tag) => <span key={tag}>{tag}</span>)}</div> : <span className="table-muted">未标记</span> }),
+    helper.accessor("publication", { header: "出版物", cell: (info) => info.getValue() ? <span>{info.getValue()}</span> : <span className="table-muted">待识别</span> }),
     helper.accessor("year", { header: "年份", cell: (info) => <span className="mono">{info.getValue()}</span> }),
     helper.accessor("status", { header: "状态", enableSorting: false, cell: ({ row }) => <PaperState paper={row.original} /> }),
     helper.display({ id: "open", header: "", cell: ({ row }) => <div className="row-actions"><button className="row-open" aria-label={`管理 ${row.original.title} 的集合`} title="管理集合" onClick={() => setOrganizingPaper(row.original)}><FolderCog size={15} /></button><a className="row-open" aria-label={`打开 ${row.original.title}`} href={`/library/${row.original.id}${demo ? "?demo=1" : ""}`}><ChevronRight size={17} /></a></div> }),
   ], [allVisibleSelected, collectionNamesByPaper, demo, selectedIds, someVisibleSelected, toggleAll, toggleSelected]);
   const table = useReactTable({ data: filteredPapers, columns, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() });
-  const loading = papersQuery.isPending || collectionsQuery.isPending || tagsQuery.isPending;
-  const error = papersQuery.isError || collectionsQuery.isError || tagsQuery.isError;
+  const loading = papersQuery.isPending || collectionsQuery.isPending || (usesServerCollectionScope && scopedPapersQuery.isPending);
+  const error = papersQuery.isError || collectionsQuery.isError || (usesServerCollectionScope && scopedPapersQuery.isError);
 
   return (
     <>
       <div className="page-lead library-lead">
-        <div><h2>你的研究文献</h2><p>用集合建立主题边界，用标签记录阅读语境；所有数量都来自当前文献库。</p></div>
+        <div><h2>你的研究文献</h2><p>用层级集合建立研究主题边界；父集合会包含全部子集合中的文献。</p></div>
         <div className="collection-tabs" role="tablist" aria-label="文献范围">
           {([ ["all", "全部文献"], ["recent", "最近阅读"], ["unorganized", "待整理"], ["archived", "已归档"] ] as const).map(([id, label]) => <button role="tab" aria-selected={scope === id} className={scope === id ? "active" : ""} key={id} onClick={() => setScope(id)}>{label}<span>{scopeCounts[id]}</span></button>)}
         </div>
       </div>
       <section className="library-frame" aria-label="文献库">
-        <aside className="organization-rail" aria-label="集合和标签">
-          <div className="organization-head"><span>组织</span><button className="icon-button" aria-label="管理集合和标签" onClick={() => setOrganizerOpen(true)}><FolderCog size={15} /></button></div>
-          <div className="organization-section"><span>集合</span><button className={collectionFilter === "all" ? "active" : ""} onClick={() => setCollectionFilter("all")}><Folder size={14} /><span>全部集合</span></button>{collections.map((item) => <button className={collectionFilter === item.id ? "active" : ""} key={item.id} onClick={() => setCollectionFilter(item.id)}><Folder size={14} /><span>{item.name}</span><small>{item.paperIds.length}</small></button>)}</div>
-          <div className="organization-section tag-section"><span>标签</span><button className={tagFilter === "all" ? "active" : ""} onClick={() => setTagFilter("all")}><Hash size={14} /><span>全部标签</span></button>{tags.map((item) => <button className={tagFilter === item.id ? "active" : ""} key={item.id} onClick={() => setTagFilter(item.id)}><i style={{ backgroundColor: item.color ?? "#AFC3CE" }} aria-hidden="true" /><span>{item.name}</span><small>{item.paperIds.length}</small></button>)}</div>
+        <aside className="organization-rail" aria-label="集合">
+          <div className="organization-head"><span>集合</span><button className="icon-button" aria-label="管理集合" onClick={() => setOrganizerOpen(true)}><FolderCog size={15} /></button></div>
+          <CollectionTree collections={collections} selectedId={collectionFilter} onSelect={setCollectionFilter} allCount={scopeCounts.all} unorganizedCount={scopeCounts.unorganized} includeUnorganized />
         </aside>
         <div className="library-surface organization-table">
           <div className="library-tools">
-            <label className="search-field"><Search size={16} /><span className="sr-only">搜索文献</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、作者或标签" /></label>
+            <label className="search-field"><Search size={16} /><span className="sr-only">搜索文献</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、作者或出版物" /></label>
             <button className={filtersOpen ? "secondary-button active" : "secondary-button"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((value) => !value)}><SlidersHorizontal size={15} />筛选</button>
             <button className="secondary-button mobile-organizer-button" onClick={() => setOrganizerOpen(true)}><FolderCog size={15} />组织</button>
             <span className="result-count">{filteredPapers.length} 篇文献</span>
           </div>
-          <div className="mobile-organization-filters">
-            <label><span>集合</span><select value={collectionFilter} onChange={(event) => setCollectionFilter(event.target.value)}><option value="all">全部集合</option>{collections.map((item) => <option key={item.id} value={item.id}>{item.name}（{item.paperIds.length}）</option>)}</select></label>
-            <label><span>标签</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">全部标签</option>{tags.map((item) => <option key={item.id} value={item.id}>{item.name}（{item.paperIds.length}）</option>)}</select></label>
-          </div>
-          {filtersOpen && <div className="library-filter-panel"><fieldset><legend>处理状态</legend>{([ ["all", "全部"], ["ready", "可提问"], ["processing", "处理中"], ["attention", "需关注"] ] as const).map(([id, label]) => <button className={statusFilter === id ? "active" : ""} key={id} onClick={() => setStatusFilter(id)}><Check size={12} />{label}</button>)}</fieldset><label><span>年份</span><select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="all">全部年份</option>{years.map((year) => <option value={year} key={year}>{year}</option>)}</select></label><button className="text-button" onClick={() => { setStatusFilter("all"); setYearFilter("all"); setCollectionFilter("all"); setTagFilter("all"); }}>清除筛选</button></div>}
-          {selectedIds.size > 0 && <div className="bulk-bar" role="region" aria-label="批量整理"><strong>{selectedIds.size} 篇已选</strong><label><span className="sr-only">选择集合</span><select value={bulkCollectionId} onChange={(event) => setBulkCollectionId(event.target.value)}><option value="">选择集合…</option>{collections.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><button className="secondary-button" disabled={!bulkCollectionId || busy} onClick={() => void runBulk("add_collection", bulkCollectionId)}><FolderPlus size={14} />加入集合</button><label><span className="sr-only">选择标签</span><select value={bulkTagId} onChange={(event) => setBulkTagId(event.target.value)}><option value="">选择标签…</option>{tags.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><button className="secondary-button" disabled={!bulkTagId || busy} onClick={() => void runBulk("add_tag", bulkTagId)}><Tags size={14} />添加标签</button>{collectionFilter !== "all" && <button className="text-button" disabled={busy} onClick={() => void runBulk("remove_collection", collectionFilter)}>移出当前集合</button>}{tagFilter !== "all" && <button className="text-button" disabled={busy} onClick={() => void runBulk("remove_tag", tagFilter)}>移除当前标签</button>}<button className="secondary-button archive-action" disabled={busy} onClick={() => void runBulk(scope === "archived" ? "unarchive" : "archive")}>{scope === "archived" ? <ArchiveRestore size={14} /> : <Archive size={14} />}{scope === "archived" ? "恢复" : "归档"}</button><button className="icon-button" aria-label="清除选择" onClick={() => setSelectedIds(new Set())}><X size={15} /></button></div>}
+          <div className="mobile-organization-filters"><CollectionSelect collections={collections} value={collectionFilter === "all" || collectionFilter === "unorganized" ? "" : collectionFilter} onChange={(value) => setCollectionFilter(value || "all")} label="集合" placeholder="全部文献" /></div>
+          {filtersOpen && <div className="library-filter-panel"><fieldset><legend>处理状态</legend>{([ ["all", "全部"], ["ready", "可提问"], ["processing", "处理中"], ["attention", "需关注"] ] as const).map(([id, label]) => <button className={statusFilter === id ? "active" : ""} key={id} onClick={() => setStatusFilter(id)}><Check size={12} />{label}</button>)}</fieldset><label><span>年份</span><select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="all">全部年份</option>{years.map((year) => <option value={year} key={year}>{year}</option>)}</select></label><button className="text-button" onClick={() => { setStatusFilter("all"); setYearFilter("all"); setCollectionFilter("all"); }}>清除筛选</button></div>}
+          {selectedIds.size > 0 && <div className="bulk-bar" role="region" aria-label="批量整理"><strong>{selectedIds.size} 篇已选</strong><CollectionSelect collections={collections} value={bulkCollectionId} onChange={setBulkCollectionId} label="选择集合" /><button className="secondary-button" disabled={!bulkCollectionId || busy} onClick={() => void runBulk("add_collection", bulkCollectionId)}><FolderPlus size={14} />加入集合</button>{collectionFilter !== "all" && collectionFilter !== "unorganized" && <button className="text-button" disabled={busy} onClick={() => void runBulk("remove_collection", collectionFilter)}>移出当前集合</button>}<button className="secondary-button archive-action" disabled={busy} onClick={() => void runBulk(scope === "archived" ? "unarchive" : "archive")}>{scope === "archived" ? <ArchiveRestore size={14} /> : <Archive size={14} />}{scope === "archived" ? "恢复" : "归档"}</button><button className="icon-button" aria-label="清除选择" onClick={() => setSelectedIds(new Set())}><X size={15} /></button></div>}
           {message && <p className="library-message" role="status">{message}</p>}
           {loading && <div className="table-message" role="status">正在整理文献…</div>}
           {error && <div className="table-message error" role="alert">文献与组织信息暂时无法读取，请稍后重试。</div>}
@@ -220,7 +215,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
           {!loading && !error && table.getRowModel().rows.length > 0 && <div className="table-scroll"><table className="data-table library-data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{header.column.getCanSort() ? <button className="sortable" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}<ArrowUpDown size={12} /></button> : flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr className={selectedIds.has(row.original.id) ? "selected" : ""} key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>}
         </div>
       </section>
-      <LibraryOrganizerDialog open={organizerOpen} onOpenChange={setOrganizerOpen} collections={collections} tags={tags} onCreateCollection={(input: CollectionInput) => mutateOrganizer(() => dataSource.createCollection(input))} onUpdateCollection={(id: string, input: CollectionInput) => mutateOrganizer(() => dataSource.updateCollection(id, input))} onDeleteCollection={(id: string) => mutateOrganizer(() => dataSource.deleteCollection(id))} onCreateTag={(input: TagInput) => mutateOrganizer(() => dataSource.createTag(input))} onUpdateTag={(id: string, input: TagInput) => mutateOrganizer(() => dataSource.updateTag(id, input))} onDeleteTag={(id: string) => mutateOrganizer(() => dataSource.deleteTag(id))} />
+      <LibraryOrganizerDialog open={organizerOpen} onOpenChange={setOrganizerOpen} collections={collections} onCreateCollection={(input: CollectionInput) => mutateOrganizer(() => dataSource.createCollection(input))} onUpdateCollection={(id: string, input: CollectionInput) => mutateOrganizer(() => dataSource.updateCollection(id, input))} onDeleteCollection={(id: string) => mutateOrganizer(() => dataSource.deleteCollection(id))} />
       {organizingPaper && <PaperCollectionsDialog paper={organizingPaper} collections={collections} open onOpenChange={(next) => { if (!next) setOrganizingPaper(null); }} onSave={savePaperCollections} />}
     </>
   );

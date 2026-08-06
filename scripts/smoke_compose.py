@@ -205,7 +205,6 @@ def run_smoke(config: SmokeConfig) -> None:
     client = PaperLeafClient(config)
     paper_id = None
     collection_id = None
-    tag_id = None
     deleted = False
 
     print("[1/8] 等待 API ready")
@@ -274,49 +273,55 @@ def run_smoke(config: SmokeConfig) -> None:
             csrf=True,
             expected={201},
         )
-        _, tag, _ = client.json(
+        _, child_collection, _ = client.json(
             "POST",
-            "/api/v1/tags",
-            payload={"name": f"Smoke tag {marker}", "color": "#AFC3CE"},
+            "/api/v1/collections",
+            payload={"name": f"Smoke child {marker}", "parent_id": collection.get("id")},
             csrf=True,
             expected={201},
         )
-        if not isinstance(collection, dict) or not isinstance(tag, dict):
-            raise SmokeFailure("集合或标签创建响应不合法")
+        if not isinstance(collection, dict) or not isinstance(child_collection, dict):
+            raise SmokeFailure("父子集合创建响应不合法")
         collection_id = collection.get("id")
-        tag_id = tag.get("id")
-        if not collection_id or not tag_id:
-            raise SmokeFailure("集合或标签响应缺少 id")
+        child_collection_id = child_collection.get("id")
+        if not collection_id or not child_collection_id:
+            raise SmokeFailure("父子集合响应缺少 id")
 
-        for action, target_id in (
-            ("add_collection", collection_id),
-            ("add_tag", tag_id),
-        ):
-            _, bulk_result, _ = client.json(
-                "POST",
-                "/api/v1/papers/bulk",
-                payload={
-                    "paper_ids": [paper_id],
-                    "action": action,
-                    "target_id": target_id,
-                },
-                csrf=True,
-            )
-            if not isinstance(bulk_result, dict) or bulk_result.get("affected") != 1:
-                raise SmokeFailure(f"批量整理 {action} 没有更新目标文献")
+        _, bulk_result, _ = client.json(
+            "POST",
+            "/api/v1/papers/bulk",
+            payload={
+                "paper_ids": [paper_id],
+                "action": "add_collection",
+                "target_id": child_collection_id,
+            },
+            csrf=True,
+        )
+        if not isinstance(bulk_result, dict) or bulk_result.get("affected") != 1:
+            raise SmokeFailure("批量加入子集合没有更新目标文献")
 
         _, collections, _ = client.json("GET", "/api/v1/collections")
-        _, tags, _ = client.json("GET", "/api/v1/tags")
-        collection_members = next(
-            (item.get("paper_ids") for item in collections if item.get("id") == collection_id),
-            None,
-        ) if isinstance(collections, list) else None
-        tag_members = next(
-            (item.get("paper_ids") for item in tags if item.get("id") == tag_id),
-            None,
-        ) if isinstance(tags, list) else None
-        if collection_members != [paper_id] or tag_members != [paper_id]:
-            raise SmokeFailure("集合或标签列表没有返回真实文献归属")
+        root_collection = (
+            next(
+                (item for item in collections if item.get("id") == collection_id),
+                None,
+            )
+            if isinstance(collections, list)
+            else None
+        )
+        child_members = (
+            root_collection.get("children", [{}])[0].get("paper_ids")
+            if isinstance(root_collection, dict) and root_collection.get("children")
+            else None
+        )
+        if child_members != [paper_id] or root_collection.get("recursive_paper_count") != 1:
+            raise SmokeFailure("父集合递归数量或子集合真实归属不正确")
+
+        _, scoped_papers, _ = client.json("GET", f"/api/v1/papers?collection_id={collection_id}")
+        if not isinstance(scoped_papers, list) or [
+            item.get("id") for item in scoped_papers
+        ] != [paper_id]:
+            raise SmokeFailure("父集合没有递归返回子集合论文")
 
         client.json(
             "POST",
@@ -382,7 +387,7 @@ def run_smoke(config: SmokeConfig) -> None:
                 )
             except Exception:
                 print("清理提示：临时论文未能自动删除，请按 paper id 从管理员作业中检查。")
-        for resource, resource_id in (("collections", collection_id), ("tags", tag_id)):
+        for resource, resource_id in (("collections", collection_id),):
             if not resource_id:
                 continue
             try:

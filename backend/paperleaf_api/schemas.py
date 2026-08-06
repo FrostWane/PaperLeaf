@@ -75,6 +75,7 @@ class PaperUpdate(BaseModel):
     year: Optional[int] = Field(default=None, ge=1400, le=2200)
     abstract: Optional[str] = Field(default=None, max_length=50_000)
     doi: Optional[str] = Field(default=None, max_length=255)
+    publication: Optional[str] = Field(default=None, max_length=1000)
 
 
 class PaperRead(BaseModel):
@@ -87,6 +88,7 @@ class PaperRead(BaseModel):
     year: Optional[int]
     abstract: Optional[str]
     doi: Optional[str]
+    publication: Optional[str]
     arxiv_id: Optional[str]
     filename: str
     mime_type: str
@@ -107,8 +109,6 @@ class PaperBulkActionRequest(BaseModel):
         "unarchive",
         "add_collection",
         "remove_collection",
-        "add_tag",
-        "remove_tag",
     ]
     target_id: Optional[str] = None
 
@@ -121,8 +121,9 @@ class PaperBulkActionResponse(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=12_000)
-    scope: Literal["paper", "selection", "library"] = "library"
+    scope: Literal["paper", "selection", "collection", "library"] = "library"
     selected_paper_ids: list[str] = Field(default_factory=list, max_length=50)
+    selected_collection_id: Optional[str] = None
     web_enabled: bool = False
 
 
@@ -191,11 +192,13 @@ class StructureGraphResponse(BaseModel):
 class CollectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=2000)
+    parent_id: Optional[str] = None
 
 
 class CollectionUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=2000)
+    parent_id: Optional[str] = None
 
 
 class CollectionRead(BaseModel):
@@ -203,31 +206,12 @@ class CollectionRead(BaseModel):
 
     id: str
     owner_id: str
+    parent_id: Optional[str]
     name: str
     description: Optional[str]
     paper_ids: list[str] = Field(default_factory=list)
-    created_at: datetime
-    updated_at: datetime
-
-
-class TagCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
-
-
-class TagUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
-
-
-class TagRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    owner_id: str
-    name: str
-    color: Optional[str]
-    paper_ids: list[str] = Field(default_factory=list)
+    recursive_paper_count: int = 0
+    children: list[CollectionRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

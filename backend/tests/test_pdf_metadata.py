@@ -10,8 +10,12 @@ from paperleaf_api.pdf_metadata import (
     PdfMetadata,
     backfill_pdf_metadata,
     extract_first_page_authors,
+    extract_first_page_doi,
+    extract_first_page_publication,
     extract_first_page_year,
     extract_pdf_metadata,
+    extract_pdf_publication,
+    normalize_doi,
 )
 from paperleaf_api.storage import LocalObjectStorage
 
@@ -36,6 +40,144 @@ def test_pdf_creation_date_is_not_treated_as_publication_year() -> None:
     metadata = extract_pdf_metadata({"creationDate": "D:20250309121500Z"})
 
     assert metadata.year is None
+
+
+def test_extracts_embedded_publication_and_normalizes_doi() -> None:
+    metadata = extract_pdf_metadata(
+        {
+            "journal": " Journal of Machine Learning Research, Vol. 25 ",
+            "identifier": "https://doi.org/10.5555/ABC.123.",
+        }
+    )
+
+    assert metadata.publication == "Journal of Machine Learning Research"
+    assert metadata.doi == "10.5555/abc.123"
+
+
+def test_first_page_extracts_journal_header_and_explicit_doi() -> None:
+    text = """Bioinformatics, 34, 2018, i821–i829
+doi: 10.1093/bioinformatics/bty593.
+DeepDTA: deep drug–target binding affinity prediction
+"""
+
+    assert extract_first_page_publication(text) == "Bioinformatics"
+    assert extract_first_page_doi(text) == "10.1093/bioinformatics/bty593"
+
+
+def test_publication_extraction_accepts_proceedings_but_rejects_false_candidates() -> None:
+    assert (
+        extract_first_page_publication(
+            "Published in: Proceedings of the 41st International Conference on Machine Learning"
+        )
+        == "Proceedings of the 41st International Conference on Machine Learning"
+    )
+    assert extract_pdf_publication({"subject": "Drug-target interaction prediction"}) is None
+    assert extract_first_page_publication("arXiv:2506.06962v3 [cs.CV] 14 Jun 2025") is None
+    affiliation = "Department of Computer Science, Example University"
+    assert extract_first_page_publication(affiliation) is None
+    assert extract_first_page_publication("Local file: document.pdf") is None
+    abstract_citation = "Abstract\nCompared with Proceedings of Fake Venue, our method..."
+    assert extract_first_page_publication(abstract_citation) is None
+
+
+def test_doi_normalization_rejects_non_doi_and_first_page_ambiguous_numbers() -> None:
+    assert normalize_doi("doi: 10.1000/example(2024)") == "10.1000/example(2024)"
+    assert normalize_doi("https://example.org/10.1000/not-allowed") is None
+    assert normalize_doi("11.1000/not-a-doi") is None
+    ambiguous = "The baseline cites 10.1000/reference without a DOI label."
+    assert extract_first_page_doi(ambiguous) is None
+    assert extract_first_page_doi("Abstract\nPrior work doi: 10.1000/cited") is None
+
+
+def test_worker_enrichment_prefers_local_publication_and_uses_crossref_as_fallback() -> None:
+    class FakeCrossref:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def lookup_publication(self, doi: str) -> str:
+            self.calls.append(doi)
+            return "Journal of Crossref Results"
+
+    async def scenario() -> None:
+        client = FakeCrossref()
+        local = PdfMetadata(
+            publication="Bioinformatics",
+            doi="10.1093/bioinformatics/bty593",
+        )
+        assert (
+            await worker.lookup_crossref_publication(
+                local,
+                latest_doi=None,
+                latest_publication=None,
+                client=client,
+            )
+            is None
+        )
+        assert client.calls == []
+
+        missing = PdfMetadata(doi="10.1000/crossref-fallback")
+        enrichment = await worker.lookup_crossref_publication(
+            missing,
+            latest_doi=None,
+            latest_publication=None,
+            client=client,
+        )
+        assert enrichment is not None
+        assert enrichment.publication == "Journal of Crossref Results"
+        assert enrichment.queried_doi == "10.1000/crossref-fallback"
+        assert client.calls == ["10.1000/crossref-fallback"]
+
+        # 用户已填入非标准值时也不回退查询 PDF 里的旧 DOI，避免错配和额外外发。
+        assert (
+            await worker.lookup_crossref_publication(
+                missing,
+                latest_doi="用户待核对",
+                latest_publication=None,
+                client=client,
+            )
+            is None
+        )
+        assert client.calls == ["10.1000/crossref-fallback"]
+
+    asyncio.run(scenario())
+
+
+def test_worker_crossref_failure_never_fails_pdf_enrichment() -> None:
+    class FailingCrossref:
+        async def lookup_publication(self, _doi: str) -> None:
+            raise TimeoutError("Crossref timeout")
+
+    metadata = PdfMetadata(doi="10.1000/timeout")
+    enrichment = asyncio.run(
+        worker.lookup_crossref_publication(
+            metadata,
+            latest_doi=None,
+            latest_publication=None,
+            client=FailingCrossref(),
+        )
+    )
+    assert enrichment is None
+
+
+def test_crossref_result_is_not_applied_after_user_changes_doi_or_publication() -> None:
+    enrichment = worker.CrossrefPublicationEnrichment(
+        queried_doi="10.1000/original",
+        publication="Original DOI Journal",
+    )
+    changed_doi = SimpleNamespace(doi="10.1000/user-edited", publication=None)
+    assert worker.apply_crossref_publication(changed_doi, enrichment) is False
+    assert changed_doi.publication is None
+
+    filled_publication = SimpleNamespace(
+        doi="10.1000/original",
+        publication="用户填写的出版物",
+    )
+    assert worker.apply_crossref_publication(filled_publication, enrichment) is False
+    assert filled_publication.publication == "用户填写的出版物"
+
+    unchanged = SimpleNamespace(doi="10.1000/original", publication=None)
+    assert worker.apply_crossref_publication(unchanged, enrichment) is True
+    assert unchanged.publication == "Original DOI Journal"
 
 
 def test_extract_pdf_metadata_keeps_ambiguous_surname_comma_as_one_author() -> None:
@@ -92,6 +234,38 @@ def test_backfill_never_overwrites_user_metadata() -> None:
         ["用户编辑的作者"],
         2025,
     )
+
+
+def test_backfill_publication_and_doi_only_when_missing() -> None:
+    paper = SimpleNamespace(
+        title="用户标题",
+        authors=[],
+        year=None,
+        publication=None,
+        doi=None,
+        filename="paper.pdf",
+        arxiv_id=None,
+    )
+
+    changed = backfill_pdf_metadata(
+        paper,
+        PdfMetadata(
+            publication="Bioinformatics",
+            doi="10.1093/bioinformatics/bty593",
+        ),
+    )
+
+    assert changed is True
+    assert paper.publication == "Bioinformatics"
+    assert paper.doi == "10.1093/bioinformatics/bty593"
+
+    changed_again = backfill_pdf_metadata(
+        paper,
+        PdfMetadata(publication="Other Journal", doi="10.1000/other"),
+    )
+    assert changed_again is False
+    assert paper.publication == "Bioinformatics"
+    assert paper.doi == "10.1093/bioinformatics/bty593"
 
 
 def test_backfill_replaces_arxiv_import_placeholder_title() -> None:
@@ -189,7 +363,11 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
         page = document.new_page()
         page.insert_text(
             (72, 72),
-            "Published 2024. PaperLeaf metadata integration test contains enough text.",
+            (
+                "Bioinformatics, 34, 2018, i821-i829\n"
+                "doi: 10.1093/bioinformatics/bty593\n"
+                "Published 2024. PaperLeaf metadata integration test contains enough text."
+            ),
         )
         document.set_metadata(
             {
@@ -264,6 +442,8 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                 assert paper.title == "Metadata Integration Paper"
                 assert paper.authors == ["Ada Lovelace", "Alan Turing"]
                 assert paper.year == 2024
+                assert paper.publication == "Bioinformatics"
+                assert paper.doi == "10.1093/bioinformatics/bty593"
                 assert paper.status == PaperStatus.ready
                 assert job.status == JobStatus.completed
         finally:

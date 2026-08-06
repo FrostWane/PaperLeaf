@@ -54,7 +54,7 @@ def test_deactivating_user_revokes_session() -> None:
     asyncio.run(scenario())
 
 
-def test_collection_and_tag_membership_are_owner_scoped() -> None:
+def test_collection_membership_is_owner_scoped() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("test-secret")
         alice = await repository.create_user(
@@ -80,14 +80,10 @@ def test_collection_and_tag_membership_are_owner_scoped() -> None:
         )
         await repository.create_paper(paper)
         collection = await repository.create_collection(alice.id, "方法", None)
-        tag = await repository.create_tag(alice.id, "已读", "#AFC3CE")
 
         assert await repository.set_paper_collection(collection.id, paper.id, alice.id, True)
-        assert await repository.set_paper_tag(tag.id, paper.id, alice.id, True)
         assert not await repository.set_paper_collection(collection.id, paper.id, bob.id, True)
-        assert not await repository.set_paper_tag(tag.id, paper.id, bob.id, True)
         assert await repository.update_collection(collection.id, bob.id, name="越权") is None
-        assert await repository.update_tag(tag.id, bob.id, name="越权") is None
 
     asyncio.run(scenario())
 

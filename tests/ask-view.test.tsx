@@ -16,8 +16,10 @@ describe("AskView 真实问答状态", () => {
         { id: "p2", title: "论文乙", authors: ["作者乙"], year: 2024, page_count: 8, status: "indexing" },
       ])),
       http.get(`${API_BASE_URL}/collections`, () => HttpResponse.json([
-        { id: "core", name: "核心方法", paper_ids: ["p1", "p2"] },
-        { id: "empty", name: "待整理", paper_ids: [] },
+        { id: "core", name: "核心方法", parent_id: null, paper_ids: [], recursive_paper_count: 1, children: [
+          { id: "child", name: "证据定位", parent_id: "core", paper_ids: ["p1"], recursive_paper_count: 1, children: [] },
+        ] },
+        { id: "empty", name: "空集合", parent_id: null, paper_ids: [], recursive_paper_count: 0, children: [] },
       ])),
     );
   });
@@ -94,7 +96,7 @@ describe("AskView 真实问答状态", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("网络连接失败");
   });
 
-  it("将最近阅读或集合的真实文献 ID 传给问答接口", async () => {
+  it("提交集合 ID 由服务端递归解析文献范围", async () => {
     let payload: Record<string, unknown> | undefined;
     server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, async ({ request }) => {
       payload = await request.json() as Record<string, unknown>;
@@ -105,14 +107,13 @@ describe("AskView 真实问答状态", () => {
     }));
 
     render(<AskView />);
-    const collectionButton = await screen.findByRole("button", { name: /核心方法.*1 篇/ });
-    expect(collectionButton).toBeEnabled();
-    expect(screen.getByRole("button", { name: /待整理.*0 篇/ })).toBeDisabled();
+    const collectionButton = await screen.findByRole("treeitem", { name: /核心方法.*1/ });
     fireEvent.click(collectionButton);
     fireEvent.change(screen.getByPlaceholderText(/这些论文如何解释/), { target: { value: question } });
     fireEvent.click(screen.getByRole("button", { name: "开始提问" }));
 
-    await waitFor(() => expect(payload).toMatchObject({ scope: "paper", selected_paper_ids: ["p1"] }));
+    await waitFor(() => expect(payload).toMatchObject({ scope: "collection", selected_collection_id: "core", selected_paper_ids: [] }));
+    expect(screen.queryByText("最近阅读")).not.toBeInTheDocument();
   });
 
   it("点击示例问题会写入输入框", async () => {

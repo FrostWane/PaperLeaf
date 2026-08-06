@@ -84,7 +84,8 @@ def _is_scoped_overview_query(query: str) -> bool:
 class LibrarySearchInput(BaseModel):
     user_id: str
     query: str = Field(min_length=1, max_length=4000)
-    paper_ids: list[str] = Field(default_factory=list, max_length=50)
+    # 客户端显式选择仍由 API 限制为 50；集合范围由服务端递归解析，可能超过 50。
+    paper_ids: list[str] = Field(default_factory=list)
     limit: int = Field(default=8, ge=1, le=20)
 
 

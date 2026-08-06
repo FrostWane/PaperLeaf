@@ -1,8 +1,8 @@
-"""保守提取并回填 PDF 内置元数据。
+"""保守提取并回填 PDF 内置元数据与首页出版信息。
 
-本模块只读取 PDF 自带的 metadata 字典，不根据首页正文猜测标题或作者。提取和
-回填分开实现，使 Worker 可以在最终提交前依据数据库中的最新值决定是否回填，
-从而避免覆盖解析期间发生的用户编辑。
+标题优先读取 PDF 自带的 metadata 字典；作者、年份、DOI 与出版物另有保守的首页
+后备规则。提取和回填分开实现，使 Worker 可以在最终提交前依据数据库中的最新值
+决定是否回填，从而避免覆盖解析期间发生的用户编辑。
 """
 
 from __future__ import annotations
@@ -43,6 +43,39 @@ _PUBLICATION_YEAR_PATTERNS = (
     re.compile(r"(?:©|copyright|the author\(s\))\s*\b((?:19|20)\d{2})\b", re.IGNORECASE),
     re.compile(r"\bpublished\b[^\n]{0,80}?\b((?:19|20)\d{2})\b", re.IGNORECASE),
 )
+_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
+_DOI_PREFIX_RE = re.compile(
+    r"^\s*(?:doi\s*:\s*|https?://(?:dx\.)?doi\.org/)", re.IGNORECASE
+)
+_DOI_CONTEXT_RE = re.compile(r"(?:\bdoi\s*:|https?://(?:dx\.)?doi\.org/)", re.IGNORECASE)
+_PUBLICATION_LABEL_RE = re.compile(
+    r"^\s*(?:published\s+in|publication|journal|venue)\s*[:\-–—]\s*(?P<value>.+)$",
+    re.IGNORECASE,
+)
+_PROCEEDINGS_RE = re.compile(
+    r"\b(?:in\s+)?proceedings\s+of\s+(?:the\s+)?[^\n]{4,240}", re.IGNORECASE
+)
+_NAMED_VENUE_RE = re.compile(
+    r"(?:\bjournal\s+of\b|\btransactions\s+on\b|\bproceedings\s+of\b|"
+    r"\bconference\s+on\b|\bsymposium\s+on\b|\bworkshop\s+on\b)",
+    re.IGNORECASE,
+)
+_VOLUME_HEADER_RE = re.compile(
+    r"^(?P<venue>[A-Z][^\n]{2,160}?),\s*"
+    r"(?:vol(?:ume)?\.?\s*)?\d{1,4}(?:\s*\(\s*\d+\s*\))?\s*,\s*"
+    r"(?:19|20)\d{2}(?:\s*[,;:]|$)",
+)
+_PUBLICATION_TRAILER_RE = re.compile(
+    r"\s*(?:[,;|]\s*)?(?:vol(?:ume)?\.?\s*\d|issue\s*\d|no\.?\s*\d|"
+    r"pp?\.?\s*\d|pages?\s+\d|(?:19|20)\d{2}\b|doi\s*:).*$",
+    re.IGNORECASE,
+)
+_NON_PUBLICATION_RE = re.compile(
+    r"(?:\barxiv\b|\bpreprint\b|\bdownloaded\s+from\b|\blocal\s+(?:file|document)\b|"
+    r"\bdepartment\b|\buniversity\b|\binstitute\b|\blaboratory\b|\bschool\b|"
+    r"\bcollege\b|\bhospital\b|\bcorrespondence\b|@)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -52,12 +85,16 @@ class PdfMetadata:
     title: str | None = None
     authors: tuple[str, ...] = ()
     year: int | None = None
+    publication: str | None = None
+    doi: str | None = None
 
 
 class PaperMetadataTarget(Protocol):
     title: str
     authors: list[str]
     year: int | None
+    publication: str | None
+    doi: str | None
     filename: str
     arxiv_id: str | None
 
@@ -93,6 +130,102 @@ def _clean_title(value: object) -> str | None:
     ):
         return None
     return title
+
+
+def normalize_doi(value: object) -> str | None:
+    """规范化 DOI；拒绝空白、URL 参数和非 ``10.`` 注册前缀。"""
+
+    cleaned = _clean_text(value, max_length=500)
+    if not cleaned:
+        return None
+    cleaned = _DOI_PREFIX_RE.sub("", cleaned, count=1)
+    cleaned = cleaned.split("?", 1)[0].split("#", 1)[0].strip()
+    if len(cleaned) > 255:
+        return None
+    match = _DOI_RE.fullmatch(cleaned)
+    if not match:
+        return None
+    doi = match.group(0).rstrip(".,;:")
+    # 句末右括号经常紧跟 DOI；仅删除没有配对的结束括号。
+    while doi.endswith(")") and doi.count(")") > doi.count("("):
+        doi = doi[:-1]
+    return doi.casefold() if _DOI_RE.fullmatch(doi) else None
+
+
+def extract_first_page_doi(text: str) -> str | None:
+    """只从带 ``doi:`` 或 ``doi.org`` 明确信号的首页行提取 DOI。"""
+
+    for raw_line in text.splitlines()[:80]:
+        line = _clean_text(raw_line, max_length=1000)
+        if not line:
+            continue
+        if _ABSTRACT_RE.match(line) or re.match(
+            r"^\s*(?:1\.?\s+)?introduction\b", line, re.IGNORECASE
+        ):
+            break
+        if not _DOI_CONTEXT_RE.search(line):
+            continue
+        match = _DOI_RE.search(line)
+        if match and (doi := normalize_doi(match.group(0))):
+            return doi
+    return None
+
+
+def _clean_publication(value: object) -> str | None:
+    publication = _clean_text(value, max_length=300)
+    if not publication or _NON_PUBLICATION_RE.search(publication):
+        return None
+    publication = _PUBLICATION_TRAILER_RE.sub("", publication).strip(" ,;:|.-–—")
+    if not publication or len(publication) < 4:
+        return None
+    return publication
+
+
+def extract_first_page_publication(text: str) -> str | None:
+    """从首页提取高置信出版物候选，宁可留空也不把单位或 arXiv 当期刊。"""
+
+    lines = [
+        line
+        for raw in text.splitlines()[:80]
+        if (line := _clean_text(raw, max_length=500))
+    ]
+    for line in lines:
+        if _ABSTRACT_RE.match(line) or re.match(
+            r"^\s*(?:1\.?\s+)?introduction\b", line, re.IGNORECASE
+        ):
+            break
+        if _NON_PUBLICATION_RE.search(line):
+            continue
+        if match := _PUBLICATION_LABEL_RE.match(line):
+            if publication := _clean_publication(match.group("value")):
+                return publication
+        if match := _VOLUME_HEADER_RE.match(line):
+            if publication := _clean_publication(match.group("venue")):
+                return publication
+        if match := _PROCEEDINGS_RE.search(line):
+            if publication := _clean_publication(match.group(0)):
+                return publication
+        if _NAMED_VENUE_RE.search(line):
+            if publication := _clean_publication(line):
+                return publication
+    return None
+
+
+def extract_pdf_publication(metadata: Mapping[str, object] | None) -> str | None:
+    """读取 PDF 内置的明确出版物字段；普通 subject 不会被无条件采用。"""
+
+    if not metadata:
+        return None
+    for key in ("publication", "journal", "journal_title", "container-title"):
+        if publication := _clean_publication(_metadata_value(metadata, key)):
+            return publication
+    subject = _clean_text(_metadata_value(metadata, "subject"), max_length=500)
+    if subject:
+        if match := _PUBLICATION_LABEL_RE.match(subject):
+            return _clean_publication(match.group("value"))
+        if _NAMED_VENUE_RE.search(subject):
+            return _clean_publication(subject)
+    return None
 
 
 def _looks_like_complete_name(value: str) -> bool:
@@ -140,12 +273,21 @@ def extract_pdf_metadata(metadata: Mapping[str, object] | None) -> PdfMetadata:
 
     if not metadata:
         return PdfMetadata()
+    doi = None
+    for key in ("doi", "identifier"):
+        if doi := normalize_doi(_metadata_value(metadata, key)):
+            break
+    if doi is None:
+        subject = _clean_text(_metadata_value(metadata, "subject"), max_length=500)
+        doi = extract_first_page_doi(subject or "")
     return PdfMetadata(
         title=_clean_title(_metadata_value(metadata, "title")),
         authors=_split_authors(_metadata_value(metadata, "author")),
         # PDF CreationDate 表示文件被创建/导出的时间，并不等于论文发表年份。
         # 发表年份只从首页带明确出版语义的文本中提取，宁可留空也不写入伪元数据。
         year=None,
+        publication=extract_pdf_publication(metadata),
+        doi=doi,
     )
 
 
@@ -264,5 +406,11 @@ def backfill_pdf_metadata(paper: PaperMetadataTarget, metadata: PdfMetadata) -> 
         changed = True
     if metadata.year is not None and paper.year is None:
         paper.year = metadata.year
+        changed = True
+    if metadata.publication and not getattr(paper, "publication", None):
+        paper.publication = metadata.publication
+        changed = True
+    if metadata.doi and not getattr(paper, "doi", None):
+        paper.doi = metadata.doi
         changed = True
     return changed

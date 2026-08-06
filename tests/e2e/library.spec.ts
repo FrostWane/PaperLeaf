@@ -4,49 +4,50 @@ import AxeBuilder from "@axe-core/playwright";
 test("文献组织数量来自真实状态且支持批量整理、归档与恢复", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/library?demo=1");
+  const compact = page.viewportSize()!.width < 901;
   await expect(page.getByRole("heading", { name: "你的研究文献" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /全部文献\s*4/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /最近阅读\s*3/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /待整理\s*1/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /已归档\s*1/ })).toBeVisible();
+  if (!compact) await expect(page.getByRole("columnheader", { name: "出版物" })).toBeVisible();
+  await expect(page.getByText("最近阅读 2026-07-28")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   expect(await page.locator(".table-scroll").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-  const compact = page.viewportSize()!.width < 901;
 
   await page.getByRole("tab", { name: /待整理/ }).click();
   await expect(page.locator(".paper-cell").filter({ hasText: "LoRA" })).toBeVisible();
   await expect(page.locator(".paper-cell").filter({ hasText: "Attention Is All You Need" })).toBeHidden();
 
+  if (!compact) {
+    const tree = page.getByRole("tree", { name: "集合树" });
+    await expect(tree.getByRole("treeitem", { name: /全部文献\s*4/ })).toHaveAttribute("aria-level", "1");
+    await expect(tree.getByRole("treeitem", { name: /核心方法\s*3/ })).toHaveAttribute("aria-level", "2");
+    await tree.getByRole("treeitem", { name: /核心方法\s*3/ }).press("ArrowRight");
+    await expect(tree.getByRole("treeitem", { name: /Transformer\s*1/ })).toBeVisible();
+    await tree.getByRole("treeitem", { name: /全部文献\s*4/ }).press("ArrowLeft");
+    await expect(tree.getByRole("treeitem", { name: /核心方法/ })).toBeHidden();
+    await tree.getByRole("treeitem", { name: /全部文献/ }).press("ArrowRight");
+  }
+
   if (compact) await page.getByRole("button", { name: "组织" }).click();
-  else await page.getByLabel("管理集合和标签").click();
-  const dialog = page.getByRole("dialog", { name: "管理文献组织" });
+  else await page.getByLabel("管理集合").click();
+  const dialog = page.getByRole("dialog", { name: "管理集合" });
   await dialog.getByLabel("名称").fill("批量精读");
   await dialog.getByLabel("说明（可选）").fill("本周需要完成的论文");
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
   await expect(dialog.getByText("集合已创建。")).toBeVisible();
-
-  await dialog.getByRole("tab", { name: "标签" }).click();
-  await dialog.getByLabel("名称").fill("方法综述");
-  await dialog.getByRole("button", { name: "创建", exact: true }).click();
-  await expect(dialog.getByText("标签已创建。")).toBeVisible();
-  await dialog.getByLabel("编辑 方法综述").click();
-  await dialog.getByLabel("名称").fill("综述必读");
-  await dialog.getByRole("button", { name: "保存修改" }).click();
-  await expect(dialog.getByText("综述必读")).toBeVisible();
-  await dialog.getByLabel("删除 综述必读").click();
-  await dialog.getByLabel("确认删除 综述必读").click();
-  await expect(dialog.getByText("标签已删除，文献本身仍保留。")).toBeVisible();
   await dialog.getByLabel("关闭").click();
 
   await page.getByRole("tab", { name: /全部文献/ }).click();
   const ragRow = page.getByRole("row").filter({ hasText: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" });
   await ragRow.getByRole("checkbox").check();
-  await page.getByLabel("选择集合").selectOption({ label: "批量精读" });
+  await page.getByLabel("选择集合").selectOption({ label: "批量精读（0）" });
   await page.getByRole("button", { name: "加入集合" }).click();
   await expect(page.getByText("已整理 1 篇文献。")).toBeVisible();
 
   if (compact) await page.locator(".mobile-organization-filters").getByLabel("集合").selectOption({ label: "批量精读（1）" });
-  else await page.getByRole("complementary", { name: "集合和标签" }).getByRole("button", { name: /批量精读/ }).click();
+  else await page.getByRole("complementary", { name: "集合" }).getByRole("treeitem", { name: /批量精读.*1/ }).click();
   await expect(page.locator(".paper-cell").filter({ hasText: "Retrieval-Augmented Generation" })).toBeVisible();
   await expect(page.locator(".paper-cell").filter({ hasText: "Attention Is All You Need" })).toBeHidden();
 
@@ -54,8 +55,8 @@ test("文献组织数量来自真实状态且支持批量整理、归档与恢�
   await page.getByRole("button", { name: "移出当前集合" }).click();
   await expect(page.getByText("没有匹配的论文")).toBeVisible();
 
-  if (compact) await page.locator(".mobile-organization-filters").getByLabel("集合").selectOption("all");
-  else await page.getByRole("complementary", { name: "集合和标签" }).getByRole("button", { name: "全部集合" }).click();
+  if (compact) await page.locator(".mobile-organization-filters").getByLabel("集合").selectOption("");
+  else await page.getByRole("complementary", { name: "集合" }).getByRole("treeitem", { name: /全部文献/ }).click();
   const attentionRow = page.getByRole("row").filter({ hasText: "Attention Is All You Need" });
   await attentionRow.getByRole("checkbox").check();
   await page.getByRole("button", { name: "归档", exact: true }).click();

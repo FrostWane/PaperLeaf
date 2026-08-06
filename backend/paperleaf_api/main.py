@@ -38,7 +38,7 @@ from .artifacts import (
     structure_graph,
     summarize_evidence,
 )
-from .arxiv_service import fetch_arxiv_pdf, search_arxiv
+from .arxiv_service import fetch_arxiv_pdf, get_arxiv_paper, search_arxiv
 from .config import Settings, settings
 from .model_runtime import build_model_router, collect_model_attempts
 from .models import PaperStatus, UserRole
@@ -74,9 +74,6 @@ from .schemas import (
     SSEEvent,
     StructureGraphResponse,
     SummaryResponse,
-    TagCreate,
-    TagRead,
-    TagUpdate,
     UserCreate,
     UserPreferences,
     UserPreferencesRead,
@@ -177,6 +174,41 @@ def _user_read(user: UserRecord) -> UserRead:
 def _user_preferences_read(user: UserRecord) -> UserPreferencesRead:
     preferences = UserPreferences.model_validate(user.preferences or {})
     return UserPreferencesRead(display_name=user.display_name, **preferences.model_dump())
+
+
+def _collection_tree(
+    records: list[Any], memberships: dict[str, list[str]]
+) -> list[CollectionRead]:
+    """把用户集合构造成树，并对后代论文去重计数。"""
+
+    owned_ids = {item.id for item in records}
+    children_by_parent: dict[str | None, list[Any]] = {}
+    for item in records:
+        parent_id = item.parent_id if item.parent_id in owned_ids else None
+        children_by_parent.setdefault(parent_id, []).append(item)
+    for children in children_by_parent.values():
+        children.sort(key=lambda item: (item.name.casefold(), item.id))
+
+    def build(record: Any, ancestors: set[str]) -> tuple[CollectionRead, set[str]]:
+        if record.id in ancestors:  # 数据库约束之外的防御，避免损坏数据导致无限递归。
+            raise RuntimeError("集合层级存在循环")
+        next_ancestors = ancestors | {record.id}
+        child_nodes: list[CollectionRead] = []
+        recursive_paper_ids = set(memberships.get(record.id, []))
+        for child in children_by_parent.get(record.id, []):
+            child_node, child_paper_ids = build(child, next_ancestors)
+            child_nodes.append(child_node)
+            recursive_paper_ids.update(child_paper_ids)
+        node = CollectionRead.model_validate(record).model_copy(
+            update={
+                "paper_ids": memberships.get(record.id, []),
+                "recursive_paper_count": len(recursive_paper_ids),
+                "children": child_nodes,
+            }
+        )
+        return node, recursive_paper_ids
+
+    return [build(record, set())[0] for record in children_by_parent.get(None, [])]
 
 
 def _citation_dicts(
@@ -452,12 +484,7 @@ def create_app(
     ) -> list[CollectionRead]:
         records = await services.repository.list_collections(user.id)
         memberships = await services.repository.list_collection_memberships(user.id)
-        return [
-            CollectionRead.model_validate(item).model_copy(
-                update={"paper_ids": memberships.get(item.id, [])}
-            )
-            for item in records
-        ]
+        return _collection_tree(records, memberships)
 
     @app.post(
         "/api/v1/collections", response_model=CollectionRead, status_code=status.HTTP_201_CREATED
@@ -469,7 +496,7 @@ def create_app(
     ) -> CollectionRead:
         try:
             record = await services.repository.create_collection(
-                user.id, payload.name, payload.description
+                user.id, payload.name, payload.description, payload.parent_id
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
@@ -498,7 +525,11 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> dict[str, str]:
-        if not await services.repository.delete_collection(collection_id, user.id):
+        try:
+            deleted = await services.repository.delete_collection(collection_id, user.id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        if not deleted:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "集合不存在")
         return {"status": "deleted"}
 
@@ -530,85 +561,23 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "集合或文献不存在")
         return {"assigned": False}
 
-    @app.get("/api/v1/tags", response_model=list[TagRead])
-    async def list_tags(
-        user: Annotated[UserRecord, Depends(current_user)],
-    ) -> list[TagRead]:
-        records = await services.repository.list_tags(user.id)
-        memberships = await services.repository.list_tag_memberships(user.id)
-        return [
-            TagRead.model_validate(item).model_copy(
-                update={"paper_ids": memberships.get(item.id, [])}
-            )
-            for item in records
-        ]
-
-    @app.post("/api/v1/tags", response_model=TagRead, status_code=status.HTTP_201_CREATED)
-    async def create_tag(
-        payload: TagCreate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> TagRead:
-        try:
-            record = await services.repository.create_tag(user.id, payload.name, payload.color)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-        return TagRead.model_validate(record)
-
-    @app.patch("/api/v1/tags/{tag_id}", response_model=TagRead)
-    async def update_tag(
-        tag_id: str,
-        payload: TagUpdate,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> TagRead:
-        try:
-            record = await services.repository.update_tag(
-                tag_id, user.id, **payload.model_dump(exclude_unset=True)
-            )
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-        if not record:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "标签不存在")
-        return TagRead.model_validate(record)
-
-    @app.delete("/api/v1/tags/{tag_id}")
-    async def delete_tag(
-        tag_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, str]:
-        if not await services.repository.delete_tag(tag_id, user.id):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "标签不存在")
-        return {"status": "deleted"}
-
-    @app.post("/api/v1/tags/{tag_id}/papers/{paper_id}")
-    async def add_paper_tag(
-        tag_id: str,
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, bool]:
-        assigned = await services.repository.set_paper_tag(tag_id, paper_id, user.id, True)
-        if not assigned:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "标签或文献不存在")
-        return {"assigned": True}
-
-    @app.delete("/api/v1/tags/{tag_id}/papers/{paper_id}")
-    async def remove_paper_tag(
-        tag_id: str,
-        paper_id: str,
-        user: Annotated[UserRecord, Depends(current_user)],
-        _: Annotated[None, Depends(csrf_protected)],
-    ) -> dict[str, bool]:
-        assigned = await services.repository.set_paper_tag(tag_id, paper_id, user.id, False)
-        if not assigned:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "标签或文献不存在")
-        return {"assigned": False}
-
     @app.get("/api/v1/papers", response_model=list[PaperRead])
-    async def list_papers(user: Annotated[UserRecord, Depends(current_user)]) -> list[PaperRead]:
-        return [_paper_read(item) for item in await services.repository.list_papers(user.id)]
+    async def list_papers(
+        user: Annotated[UserRecord, Depends(current_user)],
+        collection_id: str | None = None,
+        unfiled: bool = False,
+    ) -> list[PaperRead]:
+        if collection_id is not None and unfiled:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "collection_id 与 unfiled 不能同时使用",
+            )
+        records = await services.repository.list_papers(
+            user.id,
+            collection_id=collection_id,
+            unfiled=unfiled,
+        )
+        return [_paper_read(item) for item in records]
 
     @app.post("/api/v1/papers/bulk", response_model=PaperBulkActionResponse)
     async def bulk_paper_action(
@@ -632,16 +601,11 @@ def create_app(
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "整理操作缺少目标")
             assigned = payload.action.startswith("add_")
             for paper_id in paper_ids:
-                if payload.action.endswith("collection"):
-                    ok = await services.repository.set_paper_collection(
-                        payload.target_id, paper_id, user.id, assigned
-                    )
-                else:
-                    ok = await services.repository.set_paper_tag(
-                        payload.target_id, paper_id, user.id, assigned
-                    )
+                ok = await services.repository.set_paper_collection(
+                    payload.target_id, paper_id, user.id, assigned
+                )
                 if not ok:
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, "集合、标签或文献不存在")
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, "集合或文献不存在")
             affected_ids = paper_ids
 
         return PaperBulkActionResponse(
@@ -829,13 +793,25 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> PaperRead:
+        content_result, metadata_result = await asyncio.gather(
+            fetch_arxiv_pdf(payload.arxiv_id, config.max_pdf_bytes),
+            get_arxiv_paper(payload.arxiv_id),
+            return_exceptions=True,
+        )
+        if isinstance(content_result, ValueError):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, str(content_result)
+            ) from content_result
+        if isinstance(content_result, Exception):
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, "arXiv PDF 下载失败"
+            ) from content_result
+        content = content_result
+        metadata = metadata_result if not isinstance(metadata_result, Exception) else None
         try:
-            content = await fetch_arxiv_pdf(payload.arxiv_id, config.max_pdf_bytes)
             validate_pdf(content, f"{payload.arxiv_id}.pdf", config.max_pdf_bytes)
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv PDF 下载失败") from exc
         sha256 = hashlib.sha256(content).hexdigest()
         paper_id = str(uuid.uuid4())
         storage_key = f"{user.id}/{paper_id}/{sha256}.pdf"
@@ -843,11 +819,16 @@ def create_app(
         record = PaperRecord(
             id=paper_id,
             owner_id=user.id,
-            title=f"arXiv {payload.arxiv_id}",
-            authors=[],
-            year=None,
-            abstract=None,
+            title=(getattr(metadata, "title", None) or f"arXiv {payload.arxiv_id}"),
+            authors=list(getattr(metadata, "authors", None) or []),
+            year=(
+                int(metadata.published[:4])
+                if getattr(metadata, "published", "")[:4].isdigit()
+                else None
+            ),
+            abstract=getattr(metadata, "abstract", None),
             doi=None,
+            publication=getattr(metadata, "journal_ref", None),
             arxiv_id=payload.arxiv_id,
             filename=f"{payload.arxiv_id}.pdf",
             storage_key=storage_key,
@@ -922,6 +903,26 @@ def create_app(
     ) -> StreamingResponse:
         if not 1 <= len(session_id) <= 100:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "会话 ID 长度无效")
+        selected_paper_ids = payload.selected_paper_ids
+        if payload.scope == "collection":
+            if not payload.selected_collection_id:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "集合范围提问缺少 selected_collection_id",
+                )
+            resolved = await services.repository.resolve_collection_paper_ids(
+                payload.selected_collection_id,
+                user.id,
+                ready_only=True,
+            )
+            if resolved is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "集合不存在")
+            if not resolved:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "集合中暂无已完成索引、可提问的文献",
+                )
+            selected_paper_ids = resolved
         run_id = str(uuid.uuid4())
         thread_id = f"{user.id}:{session_id}:{run_id}"
         initial = {
@@ -930,7 +931,7 @@ def create_app(
             "user_id": user.id,
             "query": payload.content,
             "scope": payload.scope,
-            "selected_paper_ids": payload.selected_paper_ids,
+            "selected_paper_ids": selected_paper_ids,
             "web_enabled": payload.web_enabled,
             "tool_steps": 0,
             "status": "pending",

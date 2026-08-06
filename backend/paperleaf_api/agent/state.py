@@ -15,7 +15,7 @@ class AgentState(TypedDict, total=False):
     messages: list[dict[str, Any]]
     message_ids: list[str]
     intent: str
-    scope: Literal["paper", "selection", "library"]
+    scope: Literal["paper", "selection", "collection", "library"]
     selected_paper_ids: list[str]
     web_enabled: bool
     retrieved_evidence: list[Evidence]

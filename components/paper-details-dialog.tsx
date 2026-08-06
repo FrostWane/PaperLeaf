@@ -26,6 +26,7 @@ function OpenPaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete, o
   const [authors, setAuthors] = useState(paper.authors);
   const [year, setYear] = useState(paper.year > 0 ? String(paper.year) : "");
   const [doi, setDoi] = useState(paper.doi ?? "");
+  const [publication, setPublication] = useState(paper.publication);
   const [abstract, setAbstract] = useState(paper.abstract);
   const [busy, setBusy] = useState<"save" | "delete" | "retry" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -52,6 +53,7 @@ function OpenPaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete, o
         authors: authors.split(/[、,，;；\n]/).map((item) => item.trim()).filter(Boolean),
         year: parsedYear,
         doi: doi.trim() || undefined,
+        publication: publication.trim() || undefined,
         abstract: abstract.trim() || undefined,
       });
       setMessage("文献信息已保存。");
@@ -90,6 +92,7 @@ function OpenPaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete, o
             <label className="paper-form-wide"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
             <label><span>作者</span><input value={authors} onChange={(event) => setAuthors(event.target.value)} placeholder="多位作者用逗号分隔" /></label>
             <label><span>年份</span><input inputMode="numeric" value={year} onChange={(event) => setYear(event.target.value)} placeholder="待识别" /></label>
+            <label className="paper-form-wide"><span>出版物</span><input value={publication} onChange={(event) => setPublication(event.target.value)} placeholder="期刊、会议或预印本平台" /></label>
             <label className="paper-form-wide"><span>DOI</span><input className="mono" value={doi} onChange={(event) => setDoi(event.target.value)} placeholder="10.xxxx/xxxxx" /></label>
             <label className="paper-form-wide"><span>摘要</span><textarea rows={5} value={abstract} onChange={(event) => setAbstract(event.target.value)} /></label>
           </div>

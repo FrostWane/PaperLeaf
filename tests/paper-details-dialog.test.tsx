@@ -29,6 +29,7 @@ describe("PaperDetailsDialog", () => {
       title: "解析后的论文标题",
       authors: "Ada Lovelace、Alan Turing",
       year: 2024,
+      publication: "Bioinformatics",
     };
     view.rerender(
       <PaperDetailsDialog paper={parsed} open={false} {...callbacks} />,
@@ -41,6 +42,7 @@ describe("PaperDetailsDialog", () => {
       expect(screen.getByLabelText("标题")).toHaveValue("解析后的论文标题");
       expect(screen.getByLabelText("作者")).toHaveValue("Ada Lovelace、Alan Turing");
       expect(screen.getByLabelText("年份")).toHaveValue("2024");
+      expect(screen.getByLabelText("出版物")).toHaveValue("Bioinformatics");
     });
   });
 });

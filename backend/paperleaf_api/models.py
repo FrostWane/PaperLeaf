@@ -73,14 +73,6 @@ paper_collections = Table(
     Column("collection_id", ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True),
 )
 
-paper_tags = Table(
-    "paper_tags",
-    Base.metadata,
-    Column("paper_id", ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True),
-    Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
-)
-
-
 class User(Base):
     __tablename__ = "users"
 
@@ -122,6 +114,7 @@ class Paper(Base):
     year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     abstract: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     doi: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    publication: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     arxiv_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     filename: Mapped[str] = mapped_column(String(500))
     storage_key: Mapped[str] = mapped_column(String(1000))
@@ -144,15 +137,31 @@ class Paper(Base):
     collections: Mapped[list[Collection]] = relationship(
         secondary=paper_collections, back_populates="papers"
     )
-    tags: Mapped[list[Tag]] = relationship(secondary=paper_tags, back_populates="papers")
 
 
 class Collection(Base):
     __tablename__ = "collections"
-    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_collection_owner_name"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "parent_id",
+            "name",
+            name="uq_collection_owner_parent_name",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    parent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey(
+            "collections.id",
+            name="fk_collections_parent_id_collections",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -161,20 +170,6 @@ class Collection(Base):
     papers: Mapped[list[Paper]] = relationship(
         secondary=paper_collections, back_populates="collections"
     )
-
-
-class Tag(Base):
-    __tablename__ = "tags"
-    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_tag_owner_name"),)
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    name: Mapped[str] = mapped_column(String(100))
-    color: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-    papers: Mapped[list[Paper]] = relationship(secondary=paper_tags, back_populates="tags")
 
 
 class PaperPage(Base):

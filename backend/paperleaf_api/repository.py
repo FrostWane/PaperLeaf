@@ -23,12 +23,10 @@ from .models import (
     JobStatus,
     Paper,
     PaperStatus,
-    Tag,
     User,
     UserRole,
     UserSession,
     paper_collections,
-    paper_tags,
 )
 from .security import digest_session_token, hash_password, verify_password
 
@@ -66,6 +64,7 @@ class PaperRecord:
     size_bytes: int
     sha256: str
     page_count: int | None
+    publication: str | None = None
     status: PaperStatus = PaperStatus.uploaded
     archived_at: datetime | None = None
     last_opened_at: datetime | None = None
@@ -79,16 +78,7 @@ class CollectionRecord:
     owner_id: str
     name: str
     description: str | None = None
-    created_at: datetime = field(default_factory=now)
-    updated_at: datetime = field(default_factory=now)
-
-
-@dataclass
-class TagRecord:
-    id: str
-    owner_id: str
-    name: str
-    color: str | None = None
+    parent_id: str | None = None
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
 
@@ -137,6 +127,70 @@ class LastAdminProtectionError(ValueError):
     """变更会移除最后一名活跃管理员。"""
 
 
+MAX_COLLECTION_DEPTH = 5
+
+
+def _validate_collection_change(
+    records: list[CollectionRecord | Collection],
+    *,
+    owner_id: str,
+    name: str,
+    parent_id: str | None,
+    collection_id: str | None = None,
+) -> None:
+    """验证同级名称、父节点、循环和移动后整棵子树的深度。"""
+
+    owned = {item.id: item for item in records if item.owner_id == owner_id}
+    if parent_id is not None and parent_id not in owned:
+        raise ValueError("父集合不存在")
+    if collection_id is not None and parent_id == collection_id:
+        raise ValueError("集合不能移动到自身或其子集合")
+
+    descendants: set[str] = set()
+    if collection_id is not None:
+        pending = [collection_id]
+        while pending:
+            current = pending.pop()
+            for item in owned.values():
+                if item.parent_id == current and item.id not in descendants:
+                    descendants.add(item.id)
+                    pending.append(item.id)
+        if parent_id in descendants:
+            raise ValueError("集合不能移动到自身或其子集合")
+
+    if any(
+        item.id != collection_id
+        and item.parent_id == parent_id
+        and item.name.casefold() == name.casefold()
+        for item in owned.values()
+    ):
+        raise ValueError("同级集合名称已存在")
+
+    parent_depth = 0
+    cursor = parent_id
+    visited: set[str] = set()
+    while cursor is not None:
+        if cursor in visited:
+            raise ValueError("集合层级存在循环")
+        visited.add(cursor)
+        parent_depth += 1
+        cursor = owned[cursor].parent_id
+
+    subtree_height = 1
+    if collection_id is not None:
+        levels = [(collection_id, 1)]
+        while levels:
+            current, height = levels.pop()
+            subtree_height = max(subtree_height, height)
+            levels.extend(
+                (item.id, height + 1)
+                for item in owned.values()
+                if item.parent_id == current
+            )
+    if parent_depth + subtree_height > MAX_COLLECTION_DEPTH:
+        raise ValueError(f"集合最多支持 {MAX_COLLECTION_DEPTH} 层")
+
+
 class Repository(Protocol):
     async def find_user_by_email(self, email: str) -> UserRecord | None: ...
     async def get_user(self, user_id: str) -> UserRecord | None: ...
@@ -153,7 +207,12 @@ class Repository(Protocol):
     async def delete_session(self, token: str) -> None: ...
     async def set_password(self, user_id: str, password: str) -> UserRecord: ...
     async def create_paper(self, paper: PaperRecord) -> PaperRecord: ...
-    async def list_papers(self, owner_id: str) -> list[PaperRecord]: ...
+    async def list_papers(
+        self,
+        owner_id: str,
+        collection_id: str | None = None,
+        unfiled: bool = False,
+    ) -> list[PaperRecord]: ...
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
@@ -167,7 +226,9 @@ class Repository(Protocol):
         self, paper_ids: list[str], owner_id: str, archived: bool
     ) -> list[str] | None: ...
     async def list_collection_memberships(self, owner_id: str) -> dict[str, list[str]]: ...
-    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]: ...
+    async def resolve_collection_paper_ids(
+        self, collection_id: str, owner_id: str, *, ready_only: bool = False
+    ) -> list[str] | None: ...
 
 
 class MemoryRepository:
@@ -178,9 +239,7 @@ class MemoryRepository:
         self.papers: dict[str, PaperRecord] = {}
         self.sessions: dict[str, tuple[str, datetime]] = {}
         self.collections: dict[str, CollectionRecord] = {}
-        self.tags: dict[str, TagRecord] = {}
         self.paper_collections: set[tuple[str, str]] = set()
-        self.paper_tags: set[tuple[str, str]] = set()
         self.jobs: dict[str, JobRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
         self.session_secret = session_secret
@@ -310,12 +369,29 @@ class MemoryRepository:
         self.jobs[job.id] = job
         return paper
 
-    async def list_papers(self, owner_id: str) -> list[PaperRecord]:
+    async def list_papers(
+        self,
+        owner_id: str,
+        collection_id: str | None = None,
+        unfiled: bool = False,
+    ) -> list[PaperRecord]:
+        allowed_ids: set[str] | None = None
+        if collection_id is not None:
+            resolved = await self.resolve_collection_paper_ids(collection_id, owner_id)
+            if resolved is None:
+                return []
+            allowed_ids = set(resolved)
+        filed_ids = (
+            {paper_id for paper_id, _ in self.paper_collections} if unfiled else set()
+        )
         return sorted(
             (
                 paper
                 for paper in self.papers.values()
-                if paper.owner_id == owner_id and paper.status != PaperStatus.deleting
+                if paper.owner_id == owner_id
+                and paper.status != PaperStatus.deleting
+                and (allowed_ids is None or paper.id in allowed_ids)
+                and (not unfiled or paper.id not in filed_ids)
             ),
             key=lambda paper: paper.created_at,
             reverse=True,
@@ -355,7 +431,15 @@ class MemoryRepository:
         paper = await self.get_owned_paper(paper_id, owner_id)
         if not paper:
             return None
-        for key in ("title", "authors", "year", "abstract", "doi", "status"):
+        for key in (
+            "title",
+            "authors",
+            "year",
+            "abstract",
+            "doi",
+            "publication",
+            "status",
+        ):
             if key in changes and changes[key] is not None:
                 setattr(paper, key, changes[key])
         paper.updated_at = now()
@@ -406,17 +490,28 @@ class MemoryRepository:
         return sum(1 for user in self.users.values() if user.active and user.role == UserRole.admin)
 
     async def create_collection(
-        self, owner_id: str, name: str, description: str | None
+        self,
+        owner_id: str,
+        name: str,
+        description: str | None,
+        parent_id: str | None = None,
     ) -> CollectionRecord:
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("集合名称不能为空")
-        if any(
-            item.owner_id == owner_id and item.name.casefold() == normalized_name.casefold()
-            for item in self.collections.values()
-        ):
-            raise ValueError("集合名称已存在")
-        record = CollectionRecord(str(uuid.uuid4()), owner_id, normalized_name, description)
+        _validate_collection_change(
+            list(self.collections.values()),
+            owner_id=owner_id,
+            name=normalized_name,
+            parent_id=parent_id,
+        )
+        record = CollectionRecord(
+            id=str(uuid.uuid4()),
+            owner_id=owner_id,
+            name=normalized_name,
+            description=description,
+            parent_id=parent_id,
+        )
         self.collections[record.id] = record
         return record
 
@@ -431,6 +526,40 @@ class MemoryRepository:
                 memberships[collection_id].append(paper_id)
         return memberships
 
+    async def resolve_collection_paper_ids(
+        self, collection_id: str, owner_id: str, *, ready_only: bool = False
+    ) -> list[str] | None:
+        root = self.collections.get(collection_id)
+        if not root or root.owner_id != owner_id:
+            return None
+        descendants = {collection_id}
+        pending = [collection_id]
+        while pending:
+            current = pending.pop()
+            child_ids = [
+                item.id
+                for item in self.collections.values()
+                if item.owner_id == owner_id
+                and item.parent_id == current
+                and item.id not in descendants
+            ]
+            descendants.update(child_ids)
+            pending.extend(child_ids)
+        paper_ids = {
+            paper_id
+            for paper_id, assigned_collection_id in self.paper_collections
+            if assigned_collection_id in descendants
+        }
+        if ready_only:
+            paper_ids = {
+                paper_id
+                for paper_id in paper_ids
+                if (paper := self.papers.get(paper_id))
+                and paper.owner_id == owner_id
+                and paper.status == PaperStatus.ready
+            }
+        return sorted(paper_ids)
+
     async def update_collection(
         self, collection_id: str, owner_id: str, **changes: object
     ) -> CollectionRecord | None:
@@ -441,15 +570,21 @@ class MemoryRepository:
             normalized_name = str(changes["name"]).strip()
             if not normalized_name:
                 raise ValueError("集合名称不能为空")
-            if any(
-                item.id != record.id
-                and item.owner_id == owner_id
-                and item.name.casefold() == normalized_name.casefold()
-                for item in self.collections.values()
-            ):
-                raise ValueError("集合名称已存在")
             changes["name"] = normalized_name
-        for key in ("name", "description"):
+        proposed_name = str(changes.get("name", record.name))
+        proposed_parent_id = (
+            changes["parent_id"] if "parent_id" in changes else record.parent_id
+        )
+        if proposed_parent_id is not None and not isinstance(proposed_parent_id, str):
+            raise ValueError("父集合无效")
+        _validate_collection_change(
+            list(self.collections.values()),
+            owner_id=owner_id,
+            name=proposed_name,
+            parent_id=proposed_parent_id,
+            collection_id=record.id,
+        )
+        for key in ("name", "description", "parent_id"):
             if key in changes:
                 setattr(record, key, changes[key])
         record.updated_at = now()
@@ -459,6 +594,27 @@ class MemoryRepository:
         record = self.collections.get(collection_id)
         if not record or record.owner_id != owner_id:
             return False
+        children = [
+            item
+            for item in self.collections.values()
+            if item.owner_id == owner_id and item.parent_id == collection_id
+        ]
+        siblings = [
+            item
+            for item in self.collections.values()
+            if item.owner_id == owner_id
+            and item.parent_id == record.parent_id
+            and item.id != record.id
+        ]
+        if any(
+            child.name.casefold() == sibling.name.casefold()
+            for child in children
+            for sibling in siblings
+        ):
+            raise ValueError("子集合提升后会与同级集合重名，请先重命名")
+        for child in children:
+            child.parent_id = record.parent_id
+            child.updated_at = now()
         del self.collections[collection_id]
         self.paper_collections = {
             pair for pair in self.paper_collections if pair[1] != collection_id
@@ -474,73 +630,6 @@ class MemoryRepository:
             return False
         pair = (paper_id, collection_id)
         self.paper_collections.add(pair) if assigned else self.paper_collections.discard(pair)
-        return True
-
-    async def create_tag(self, owner_id: str, name: str, color: str | None) -> TagRecord:
-        normalized_name = name.strip()
-        if not normalized_name:
-            raise ValueError("标签名称不能为空")
-        if any(
-            item.owner_id == owner_id and item.name.casefold() == normalized_name.casefold()
-            for item in self.tags.values()
-        ):
-            raise ValueError("标签名称已存在")
-        record = TagRecord(str(uuid.uuid4()), owner_id, normalized_name, color)
-        self.tags[record.id] = record
-        return record
-
-    async def list_tags(self, owner_id: str) -> list[TagRecord]:
-        return [item for item in self.tags.values() if item.owner_id == owner_id]
-
-    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]:
-        owned = {item.id for item in self.tags.values() if item.owner_id == owner_id}
-        memberships = {tag_id: [] for tag_id in owned}
-        for paper_id, tag_id in sorted(self.paper_tags):
-            if tag_id in owned:
-                memberships[tag_id].append(paper_id)
-        return memberships
-
-    async def update_tag(
-        self, tag_id: str, owner_id: str, **changes: object
-    ) -> TagRecord | None:
-        record = self.tags.get(tag_id)
-        if not record or record.owner_id != owner_id:
-            return None
-        if "name" in changes:
-            normalized_name = str(changes["name"]).strip()
-            if not normalized_name:
-                raise ValueError("标签名称不能为空")
-            if any(
-                item.id != record.id
-                and item.owner_id == owner_id
-                and item.name.casefold() == normalized_name.casefold()
-                for item in self.tags.values()
-            ):
-                raise ValueError("标签名称已存在")
-            changes["name"] = normalized_name
-        for key in ("name", "color"):
-            if key in changes:
-                setattr(record, key, changes[key])
-        record.updated_at = now()
-        return record
-
-    async def delete_tag(self, tag_id: str, owner_id: str) -> bool:
-        record = self.tags.get(tag_id)
-        if not record or record.owner_id != owner_id:
-            return False
-        del self.tags[tag_id]
-        self.paper_tags = {pair for pair in self.paper_tags if pair[1] != tag_id}
-        return True
-
-    async def set_paper_tag(
-        self, tag_id: str, paper_id: str, owner_id: str, assigned: bool
-    ) -> bool:
-        tag = self.tags.get(tag_id)
-        paper = await self.get_owned_paper(paper_id, owner_id)
-        if not tag or tag.owner_id != owner_id or not paper:
-            return False
-        pair = (paper_id, tag_id)
-        self.paper_tags.add(pair) if assigned else self.paper_tags.discard(pair)
         return True
 
     async def list_jobs(self) -> list[JobRecord]:
@@ -784,13 +873,31 @@ class SQLAlchemyRepository:
             await session.refresh(record)
             return record
 
-    async def list_papers(self, owner_id: str) -> list[Paper]:
+    async def list_papers(
+        self,
+        owner_id: str,
+        collection_id: str | None = None,
+        unfiled: bool = False,
+    ) -> list[Paper]:
+        allowed_ids: list[str] | None = None
+        if collection_id is not None:
+            allowed_ids = await self.resolve_collection_paper_ids(collection_id, owner_id)
+            if allowed_ids is None:
+                return []
         async with get_session_factory()() as session:
-            result = await session.scalars(
-                select(Paper)
-                .where(Paper.owner_id == owner_id, Paper.status != PaperStatus.deleting)
-                .order_by(Paper.created_at.desc())
+            statement = select(Paper).where(
+                Paper.owner_id == owner_id,
+                Paper.status != PaperStatus.deleting,
             )
+            if allowed_ids is not None:
+                if not allowed_ids:
+                    return []
+                statement = statement.where(Paper.id.in_(allowed_ids))
+            if unfiled:
+                statement = statement.where(
+                    ~Paper.id.in_(select(paper_collections.c.paper_id))
+                )
+            result = await session.scalars(statement.order_by(Paper.created_at.desc()))
             return list(result)
 
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
@@ -808,7 +915,15 @@ class SQLAlchemyRepository:
             )
             if not paper:
                 return None
-            for key in ("title", "authors", "year", "abstract", "doi", "status"):
+            for key in (
+                "title",
+                "authors",
+                "year",
+                "abstract",
+                "doi",
+                "publication",
+                "status",
+            ):
                 if key in changes and changes[key] is not None:
                     setattr(paper, key, changes[key])
             paper.updated_at = now()
@@ -920,19 +1035,39 @@ class SQLAlchemyRepository:
             return int(value or 0)
 
     async def create_collection(
-        self, owner_id: str, name: str, description: str | None
+        self,
+        owner_id: str,
+        name: str,
+        description: str | None,
+        parent_id: str | None = None,
     ) -> Collection:
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("集合名称不能为空")
-        record = Collection(owner_id=owner_id, name=normalized_name, description=description)
         async with get_session_factory()() as session:
+            records = list(
+                await session.scalars(
+                    select(Collection).where(Collection.owner_id == owner_id)
+                )
+            )
+            _validate_collection_change(
+                records,
+                owner_id=owner_id,
+                name=normalized_name,
+                parent_id=parent_id,
+            )
+            record = Collection(
+                owner_id=owner_id,
+                parent_id=parent_id,
+                name=normalized_name,
+                description=description,
+            )
             session.add(record)
             try:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
-                raise ValueError("集合名称已存在") from exc
+                raise ValueError("同级集合名称已存在") from exc
             await session.refresh(record)
             return record
 
@@ -963,15 +1098,55 @@ class SQLAlchemyRepository:
                 memberships.setdefault(collection_id, []).append(paper_id)
             return memberships
 
+    async def resolve_collection_paper_ids(
+        self, collection_id: str, owner_id: str, *, ready_only: bool = False
+    ) -> list[str] | None:
+        async with get_session_factory()() as session:
+            records = list(
+                await session.scalars(
+                    select(Collection).where(Collection.owner_id == owner_id)
+                )
+            )
+            if collection_id not in {item.id for item in records}:
+                return None
+            descendants = {collection_id}
+            pending = [collection_id]
+            while pending:
+                current = pending.pop()
+                child_ids = [
+                    item.id
+                    for item in records
+                    if item.parent_id == current and item.id not in descendants
+                ]
+                descendants.update(child_ids)
+                pending.extend(child_ids)
+            statement = (
+                select(paper_collections.c.paper_id)
+                .join(Paper, Paper.id == paper_collections.c.paper_id)
+                .where(
+                    paper_collections.c.collection_id.in_(descendants),
+                    Paper.owner_id == owner_id,
+                )
+                .distinct()
+                .order_by(paper_collections.c.paper_id)
+            )
+            if ready_only:
+                statement = statement.where(Paper.status == PaperStatus.ready)
+            return list(await session.scalars(statement))
+
     async def update_collection(
         self, collection_id: str, owner_id: str, **changes: object
     ) -> Collection | None:
         async with get_session_factory()() as session:
-            record = await session.scalar(
-                select(Collection).where(
-                    Collection.id == collection_id, Collection.owner_id == owner_id
+            records = list(
+                await session.scalars(
+                    select(Collection)
+                    .where(Collection.owner_id == owner_id)
+                    .order_by(Collection.id)
+                    .with_for_update()
                 )
             )
+            record = next((item for item in records if item.id == collection_id), None)
             if not record:
                 return None
             if "name" in changes:
@@ -979,7 +1154,20 @@ class SQLAlchemyRepository:
                 if not normalized_name:
                     raise ValueError("集合名称不能为空")
                 changes["name"] = normalized_name
-            for key in ("name", "description"):
+            proposed_name = str(changes.get("name", record.name))
+            proposed_parent_id = (
+                changes["parent_id"] if "parent_id" in changes else record.parent_id
+            )
+            if proposed_parent_id is not None and not isinstance(proposed_parent_id, str):
+                raise ValueError("父集合无效")
+            _validate_collection_change(
+                records,
+                owner_id=owner_id,
+                name=proposed_name,
+                parent_id=proposed_parent_id,
+                collection_id=record.id,
+            )
+            for key in ("name", "description", "parent_id"):
                 if key in changes:
                     setattr(record, key, changes[key])
             record.updated_at = now()
@@ -987,19 +1175,45 @@ class SQLAlchemyRepository:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
-                raise ValueError("集合名称已存在") from exc
+                raise ValueError("同级集合名称已存在") from exc
             await session.refresh(record)
             return record
 
     async def delete_collection(self, collection_id: str, owner_id: str) -> bool:
         async with get_session_factory()() as session:
-            result = await session.execute(
-                delete(Collection).where(
-                    Collection.id == collection_id, Collection.owner_id == owner_id
+            records = list(
+                await session.scalars(
+                    select(Collection)
+                    .where(Collection.owner_id == owner_id)
+                    .order_by(Collection.id)
+                    .with_for_update()
                 )
             )
-            await session.commit()
-            return bool(result.rowcount)
+            record = next((item for item in records if item.id == collection_id), None)
+            if not record:
+                return False
+            children = [item for item in records if item.parent_id == collection_id]
+            siblings = [
+                item
+                for item in records
+                if item.parent_id == record.parent_id and item.id != record.id
+            ]
+            if any(
+                child.name.casefold() == sibling.name.casefold()
+                for child in children
+                for sibling in siblings
+            ):
+                raise ValueError("子集合提升后会与同级集合重名，请先重命名")
+            for child in children:
+                child.parent_id = record.parent_id
+                child.updated_at = now()
+            await session.delete(record)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("子集合提升后会与同级集合重名，请先重命名") from exc
+            return True
 
     async def set_paper_collection(
         self, collection_id: str, paper_id: str, owner_id: str, assigned: bool
@@ -1032,105 +1246,6 @@ class SQLAlchemyRepository:
                     delete(paper_collections).where(
                         paper_collections.c.paper_id == paper_id,
                         paper_collections.c.collection_id == collection_id,
-                    )
-                )
-            await session.commit()
-            return True
-
-    async def create_tag(self, owner_id: str, name: str, color: str | None) -> Tag:
-        normalized_name = name.strip()
-        if not normalized_name:
-            raise ValueError("标签名称不能为空")
-        record = Tag(owner_id=owner_id, name=normalized_name, color=color)
-        async with get_session_factory()() as session:
-            session.add(record)
-            try:
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
-                raise ValueError("标签名称已存在") from exc
-            await session.refresh(record)
-            return record
-
-    async def list_tags(self, owner_id: str) -> list[Tag]:
-        async with get_session_factory()() as session:
-            result = await session.scalars(
-                select(Tag).where(Tag.owner_id == owner_id).order_by(Tag.name)
-            )
-            return list(result)
-
-    async def list_tag_memberships(self, owner_id: str) -> dict[str, list[str]]:
-        async with get_session_factory()() as session:
-            rows = (
-                await session.execute(
-                    select(Tag.id, paper_tags.c.paper_id)
-                    .join(paper_tags, paper_tags.c.tag_id == Tag.id)
-                    .where(Tag.owner_id == owner_id)
-                    .order_by(Tag.id, paper_tags.c.paper_id)
-                )
-            ).all()
-            memberships: dict[str, list[str]] = {}
-            for tag_id, paper_id in rows:
-                memberships.setdefault(tag_id, []).append(paper_id)
-            return memberships
-
-    async def update_tag(
-        self, tag_id: str, owner_id: str, **changes: object
-    ) -> Tag | None:
-        async with get_session_factory()() as session:
-            record = await session.scalar(
-                select(Tag).where(Tag.id == tag_id, Tag.owner_id == owner_id)
-            )
-            if not record:
-                return None
-            if "name" in changes:
-                normalized_name = str(changes["name"]).strip()
-                if not normalized_name:
-                    raise ValueError("标签名称不能为空")
-                changes["name"] = normalized_name
-            for key in ("name", "color"):
-                if key in changes:
-                    setattr(record, key, changes[key])
-            record.updated_at = now()
-            try:
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
-                raise ValueError("标签名称已存在") from exc
-            await session.refresh(record)
-            return record
-
-    async def delete_tag(self, tag_id: str, owner_id: str) -> bool:
-        async with get_session_factory()() as session:
-            result = await session.execute(
-                delete(Tag).where(Tag.id == tag_id, Tag.owner_id == owner_id)
-            )
-            await session.commit()
-            return bool(result.rowcount)
-
-    async def set_paper_tag(
-        self, tag_id: str, paper_id: str, owner_id: str, assigned: bool
-    ) -> bool:
-        async with get_session_factory()() as session:
-            tag = await session.scalar(
-                select(Tag.id).where(Tag.id == tag_id, Tag.owner_id == owner_id)
-            )
-            paper = await session.scalar(
-                select(Paper.id).where(Paper.id == paper_id, Paper.owner_id == owner_id)
-            )
-            if not tag or not paper:
-                return False
-            exists = await session.scalar(
-                select(paper_tags.c.paper_id).where(
-                    paper_tags.c.paper_id == paper_id, paper_tags.c.tag_id == tag_id
-                )
-            )
-            if assigned and not exists:
-                await session.execute(insert(paper_tags).values(paper_id=paper_id, tag_id=tag_id))
-            elif not assigned and exists:
-                await session.execute(
-                    delete(paper_tags).where(
-                        paper_tags.c.paper_id == paper_id, paper_tags.c.tag_id == tag_id
                     )
                 )
             await session.commit()

@@ -59,7 +59,7 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
   await expect(page.locator(".metric-row strong").first()).toHaveCSS("font-size", "22px");
 
   await page.goto("/library?demo=1");
-  for (const selector of [".collection-tabs span", ".organization-section > span", ".data-table th"]) {
+  for (const selector of [".collection-tabs span", ".collection-tree-item small", ".data-table th"]) {
     const size = await page.locator(selector).first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
     expect(size, selector).toBeGreaterThanOrEqual(12);
   }

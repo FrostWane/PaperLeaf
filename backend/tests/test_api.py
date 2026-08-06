@@ -3,6 +3,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -123,7 +124,7 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
         assert isolated_bulk.status_code == 404
 
 
-def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes) -> None:
+def test_collection_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes) -> None:
     config = replace(
         settings,
         mode="test",
@@ -146,14 +147,8 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
             headers={"X-CSRF-Token": csrf},
             json={"name": "RAG", "description": "检索增强生成"},
         )
-        tag = client.post(
-            "/api/v1/tags",
-            headers={"X-CSRF-Token": csrf},
-            json={"name": "待读", "color": "#AFC3CE"},
-        )
         assert collection.status_code == 201
-        assert tag.status_code == 201
-        collection_id, tag_id = collection.json()["id"], tag.json()["id"]
+        collection_id = collection.json()["id"]
         assert (
             client.post(
                 f"/api/v1/collections/{collection_id}/papers/{paper['id']}",
@@ -161,17 +156,11 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
             ).json()["assigned"]
             is True
         )
-        assert (
-            client.post(
-                f"/api/v1/tags/{tag_id}/papers/{paper['id']}",
-                headers={"X-CSRF-Token": csrf},
-            ).json()["assigned"]
-            is True
-        )
         collections = client.get("/api/v1/collections").json()
-        tags = client.get("/api/v1/tags").json()
         assert collections[0]["paper_ids"] == [paper["id"]]
-        assert tags[0]["paper_ids"] == [paper["id"]]
+        assert collections[0]["recursive_paper_count"] == 1
+        assert collections[0]["children"] == []
+        assert client.get("/api/v1/tags").status_code == 404
 
         opened = client.post(
             f"/api/v1/papers/{paper['id']}/opened",
@@ -193,17 +182,16 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
         }
         assert client.get(f"/api/v1/papers/{paper['id']}").json()["archived_at"] is not None
 
-        organized = client.post(
+        invalid_tag_action = client.post(
             "/api/v1/papers/bulk",
             headers={"X-CSRF-Token": csrf},
             json={
                 "paper_ids": [paper["id"]],
                 "action": "remove_tag",
-                "target_id": tag_id,
+                "target_id": "removed-tag",
             },
         )
-        assert organized.status_code == 200
-        assert client.get("/api/v1/tags").json()[0]["paper_ids"] == []
+        assert invalid_tag_action.status_code == 422
 
         job = next(iter(repository.jobs.values()))
         job.status = JobStatus.failed
@@ -216,6 +204,51 @@ def test_collection_tag_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes)
         retried = client.post(f"/api/v1/admin/jobs/{job.id}/retry", headers={"X-CSRF-Token": csrf})
         assert retried.status_code == 200
         assert retried.json()["status"] == "queued"
+
+
+def test_arxiv_import_persists_exact_metadata_publication(
+    tmp_path, valid_pdf_bytes: bytes, monkeypatch
+) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+    )
+    repository = MemoryRepository(config.session_secret)
+
+    async def fake_pdf(_arxiv_id: str, _max_bytes: int) -> bytes:
+        return valid_pdf_bytes
+
+    async def fake_metadata(_arxiv_id: str):
+        return SimpleNamespace(
+            title="Exact arXiv paper",
+            authors=["Alice", "Bob"],
+            abstract="摘要",
+            published="2025-02-03T00:00:00Z",
+            journal_ref="Journal of Reliable Systems 12 (2025) 1-9",
+        )
+
+    monkeypatch.setattr("paperleaf_api.main.fetch_arxiv_pdf", fake_pdf)
+    monkeypatch.setattr("paperleaf_api.main.get_arxiv_paper", fake_metadata)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+    with TestClient(app) as client:
+        csrf = _login(client, "admin@example.com", "admin-password-123")
+        imported = client.post(
+            "/api/v1/discover/arxiv/import",
+            headers={"X-CSRF-Token": csrf},
+            json={"arxiv_id": "2401.01234"},
+        )
+        assert imported.status_code == 201, imported.text
+        assert imported.json()["title"] == "Exact arXiv paper"
+        assert imported.json()["authors"] == ["Alice", "Bob"]
+        assert imported.json()["year"] == 2025
+        assert imported.json()["abstract"] == "摘要"
+        assert (
+            imported.json()["publication"]
+            == "Journal of Reliable Systems 12 (2025) 1-9"
+        )
 
 
 def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_path) -> None:

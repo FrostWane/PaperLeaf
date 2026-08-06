@@ -8,11 +8,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from typing import Protocol
 
 from sqlalchemy import delete, select
 
 from .config import settings
+from .crossref_service import crossref_client
 from .db import get_session_factory
 from .model_runtime import ModelProvider, ModelRouter, ModelRuntimeError, build_model_router
 from .models import Job, JobStatus, Paper, PaperChunk, PaperPage, PaperStatus
@@ -20,14 +23,27 @@ from .pdf_metadata import (
     PdfMetadata,
     backfill_pdf_metadata,
     extract_first_page_authors,
+    extract_first_page_doi,
+    extract_first_page_publication,
     extract_first_page_year,
     extract_pdf_metadata,
+    normalize_doi,
 )
 from .rag.chunking import PageText, chunk_pages
 from .storage import create_storage
 
 logger = logging.getLogger("paperleaf.worker")
 model_router = build_model_router(settings)
+
+
+class PublicationLookup(Protocol):
+    async def lookup_publication(self, doi: str) -> str | None: ...
+
+
+@dataclass(frozen=True)
+class CrossrefPublicationEnrichment:
+    queried_doi: str
+    publication: str
 
 
 def utcnow() -> datetime:
@@ -120,6 +136,45 @@ async def embed_texts(
         return None
 
 
+async def lookup_crossref_publication(
+    metadata: PdfMetadata,
+    *,
+    latest_doi: str | None,
+    latest_publication: str | None,
+    client: PublicationLookup | None = None,
+) -> CrossrefPublicationEnrichment | None:
+    """仅在本地出版物缺失时查询最新 DOI，并记录查询依据供最终事务核对。"""
+
+    lookup_doi = normalize_doi(latest_doi) if latest_doi else metadata.doi
+    if latest_publication or metadata.publication or not lookup_doi:
+        return None
+    lookup_client = client or crossref_client
+    try:
+        publication = await lookup_client.lookup_publication(lookup_doi)
+    except Exception:
+        return None
+    if not publication:
+        return None
+    return CrossrefPublicationEnrichment(
+        queried_doi=lookup_doi,
+        publication=publication,
+    )
+
+
+def apply_crossref_publication(
+    paper: Paper,
+    enrichment: CrossrefPublicationEnrichment | None,
+) -> bool:
+    """仅在 DOI 未变化且出版物仍为空时应用 Crossref 结果。"""
+
+    if not enrichment or getattr(paper, "publication", None):
+        return False
+    if normalize_doi(paper.doi) != enrichment.queried_doi:
+        return False
+    paper.publication = enrichment.publication
+    return True
+
+
 async def process_parse_job(job_id: str) -> None:
     storage = create_storage(settings)
     async with get_session_factory()() as session:
@@ -173,16 +228,18 @@ async def process_parse_job(job_id: str) -> None:
                     pages[0].text, pdf_metadata.title or paper.title
                 )
                 if first_page_authors:
-                    pdf_metadata = PdfMetadata(
-                        title=pdf_metadata.title,
-                        authors=first_page_authors,
-                        year=pdf_metadata.year,
-                    )
+                    pdf_metadata = replace(pdf_metadata, authors=first_page_authors)
             if pages and (first_page_year := extract_first_page_year(pages[0].text)):
-                pdf_metadata = PdfMetadata(
-                    title=pdf_metadata.title,
-                    authors=pdf_metadata.authors,
-                    year=first_page_year,
+                pdf_metadata = replace(pdf_metadata, year=first_page_year)
+            if pages and not pdf_metadata.publication:
+                pdf_metadata = replace(
+                    pdf_metadata,
+                    publication=extract_first_page_publication(pages[0].text),
+                )
+            if pages and not pdf_metadata.doi:
+                pdf_metadata = replace(
+                    pdf_metadata,
+                    doi=extract_first_page_doi(pages[0].text),
                 )
     except Exception as exc:
         raise RuntimeError("PDF_PARSE_FAILED") from exc
@@ -196,9 +253,33 @@ async def process_parse_job(job_id: str) -> None:
         {chunk.id: vector for chunk, vector in zip(chunks, embeddings)} if embeddings else {}
     )
 
+    # 查询前用短事务重读用户最新值；关闭事务后再访问 Crossref，避免持锁等待网络。
+    async with get_session_factory()() as session:
+        current_job = await session.get(Job, job_id)
+        current_paper = (
+            await session.get(Paper, current_job.paper_id)
+            if current_job and current_job.paper_id
+            else None
+        )
+        latest_doi = current_paper.doi if current_paper else None
+        latest_publication = (
+            getattr(current_paper, "publication", None) if current_paper else None
+        )
+    crossref_enrichment = await lookup_crossref_publication(
+        pdf_metadata,
+        latest_doi=latest_doi,
+        latest_publication=latest_publication,
+    )
+
     async with get_session_factory()() as session:
         job = await session.get(Job, job_id)
-        paper = await session.get(Paper, job.paper_id) if job and job.paper_id else None
+        paper = (
+            await session.scalar(
+                select(Paper).where(Paper.id == job.paper_id).with_for_update()
+            )
+            if job and job.paper_id
+            else None
+        )
         if not job or not paper:
             return
         await session.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper.id))
@@ -231,6 +312,7 @@ async def process_parse_job(job_id: str) -> None:
         paper.page_count = len(pages)
         # 使用最终事务内重新加载的最新字段做条件回填，避免覆盖解析期间的用户编辑。
         backfill_pdf_metadata(paper, pdf_metadata)
+        apply_crossref_publication(paper, crossref_enrichment)
         paper.status = PaperStatus.partial if empty_pages else PaperStatus.ready
         paper.updated_at = utcnow()
         job.progress = 100

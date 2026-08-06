@@ -4,6 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Save, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Paper, PaperCollection } from "@/lib/types";
+import { flattenCollections } from "@/lib/collections";
 import { PaperCollectionPicker } from "./paper-collection-picker";
 
 interface PaperCollectionsDialogProps {
@@ -16,7 +17,7 @@ interface PaperCollectionsDialogProps {
 
 export function PaperCollectionsDialog({ paper, collections, open, onOpenChange, onSave }: PaperCollectionsDialogProps) {
   const currentIds = useMemo(
-    () => paper ? collections.filter((collection) => collection.paperIds.includes(paper.id)).map((collection) => collection.id) : [],
+    () => paper ? flattenCollections(collections).filter(({ collection }) => collection.paperIds.includes(paper.id)).map(({ collection }) => collection.id) : [],
     [collections, paper],
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(currentIds);

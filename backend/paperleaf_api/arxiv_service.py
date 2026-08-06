@@ -11,7 +11,10 @@ import httpx
 
 _ARXIV_ID = re.compile(r"^[0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?$")
 _ALLOWED_HOSTS = {"arxiv.org", "export.arxiv.org"}
-_ATOM = {"a": "http://www.w3.org/2005/Atom"}
+_ATOM = {
+    "a": "http://www.w3.org/2005/Atom",
+    "arxiv": "http://arxiv.org/schemas/atom",
+}
 
 
 @dataclass(frozen=True)
@@ -22,10 +25,20 @@ class ArxivPaper:
     abstract: str
     published: str
     pdf_url: str
+    journal_ref: str | None = None
 
 
 def _normalize(value: str | None) -> str:
     return " ".join((value or "").split())
+
+
+def _same_arxiv_id(requested: str, returned: str) -> bool:
+    """无版本请求接受同一基础 ID 的版本化结果；显式版本必须精确一致。"""
+
+    if "v" in requested:
+        return requested == returned
+    version = returned[len(requested) + 1 :] if returned.startswith(f"{requested}v") else ""
+    return returned == requested or version.isdigit()
 
 
 def _assert_allowed(url: str) -> None:
@@ -42,7 +55,12 @@ async def search_arxiv(query: str, limit: int = 10) -> list[ArxivPaper]:
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         response = await client.get(url, headers={"User-Agent": "PaperLeaf/0.1"})
         response.raise_for_status()
-    root = ET.fromstring(response.content)
+    _assert_allowed(str(response.url))
+    return _parse_arxiv_feed(response.content)
+
+
+def _parse_arxiv_feed(content: bytes) -> list[ArxivPaper]:
+    root = ET.fromstring(content)
     results: list[ArxivPaper] = []
     for entry in root.findall("a:entry", _ATOM):
         entry_id = _normalize(entry.findtext("a:id", namespaces=_ATOM)).rsplit("/", 1)[-1]
@@ -61,9 +79,38 @@ async def search_arxiv(query: str, limit: int = 10) -> list[ArxivPaper]:
                 abstract=_normalize(entry.findtext("a:summary", namespaces=_ATOM)),
                 published=_normalize(entry.findtext("a:published", namespaces=_ATOM)),
                 pdf_url=pdf_url,
+                journal_ref=(
+                    _normalize(entry.findtext("arxiv:journal_ref", namespaces=_ATOM)) or None
+                ),
             )
         )
     return results
+
+
+async def get_arxiv_paper(
+    arxiv_id: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> ArxivPaper | None:
+    """使用 Atom ``id_list`` 精确查询单篇论文，拒绝宽泛搜索结果。"""
+
+    if not _ARXIV_ID.fullmatch(arxiv_id):
+        raise ValueError("arXiv ID 格式错误")
+    parameters = urlencode({"id_list": arxiv_id, "start": 0, "max_results": 1})
+    url = f"https://export.arxiv.org/api/query?{parameters}"
+    _assert_allowed(url)
+    async with httpx.AsyncClient(
+        timeout=15,
+        follow_redirects=True,
+        transport=transport,
+    ) as client:
+        response = await client.get(url, headers={"User-Agent": "PaperLeaf/1.0"})
+        response.raise_for_status()
+    _assert_allowed(str(response.url))
+    for paper in _parse_arxiv_feed(response.content):
+        if _same_arxiv_id(arxiv_id, paper.arxiv_id):
+            return paper
+    return None
 
 
 async def fetch_arxiv_pdf(arxiv_id: str, max_bytes: int) -> bytes:

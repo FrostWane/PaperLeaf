@@ -5,6 +5,7 @@ import { FileUp, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
 import type { PaperCollection } from "@/lib/types";
+import { flattenCollections } from "@/lib/collections";
 import { PaperCollectionPicker } from "./paper-collection-picker";
 
 export function UploadDialog({ onUploaded, demo = false }: { onUploaded?: () => void; demo?: boolean }) {
@@ -59,7 +60,8 @@ export function UploadDialog({ onUploaded, demo = false }: { onUploaded?: () => 
       let closeDelay = 800;
       if (selectedCollectionIds.length > 0) {
         const results = await Promise.allSettled(selectedCollectionIds.map((targetId) => source.bulkPapers({ paperIds: [paper.id], action: "add_collection", targetId })));
-        const failedNames = results.flatMap((result, index) => result.status === "rejected" ? [collections.find((item) => item.id === selectedCollectionIds[index])?.name ?? "未知集合"] : []);
+        const flatCollections = flattenCollections(collections).map(({ collection }) => collection);
+        const failedNames = results.flatMap((result, index) => result.status === "rejected" ? [flatCollections.find((item) => item.id === selectedCollectionIds[index])?.name ?? "未知集合"] : []);
         if (failedNames.length === 0) {
           setMessage(`上传完成，已加入 ${selectedCollectionIds.length} 个集合和解析队列`);
         } else {

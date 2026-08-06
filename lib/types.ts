@@ -6,10 +6,10 @@ export interface Paper {
   authors: string;
   year: number;
   venue: string;
+  publication: string;
   pages: number;
   status: PaperStatus;
   progress?: number;
-  tags: string[];
   abstract: string;
   arxivId?: string;
   doi?: string;
@@ -24,33 +24,23 @@ export interface PaperCollection {
   id: string;
   name: string;
   description?: string;
+  parentId: string | null;
   paperIds: string[];
-}
-
-export interface PaperTag {
-  id: string;
-  name: string;
-  color?: string;
-  paperIds: string[];
+  recursivePaperCount: number;
+  children: PaperCollection[];
 }
 
 export interface CollectionInput {
   name: string;
   description?: string;
-}
-
-export interface TagInput {
-  name: string;
-  color?: string;
+  parentId?: string | null;
 }
 
 export type BulkPaperAction =
   | "archive"
   | "unarchive"
   | "add_collection"
-  | "remove_collection"
-  | "add_tag"
-  | "remove_tag";
+  | "remove_collection";
 
 export interface BulkPaperActionInput {
   paperIds: string[];
@@ -64,6 +54,7 @@ export interface PaperUpdateInput {
   year?: number;
   abstract?: string;
   doi?: string;
+  publication?: string;
 }
 
 export interface ArtifactCitation {

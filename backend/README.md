@@ -113,18 +113,19 @@ data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 引用持久化在业务数据库中。API 重启后的查询、恢复和取消都会先按当前用户查找 Run，其他
 用户统一得到 `404`，且内部 `thread_id` 不通过公开 API 返回。
 
-### 集合、标签与作业
+### 层级集合、出版物与作业
 
-- `/api/v1/collections` 和 `/api/v1/tags` 提供用户隔离的 CRUD。
-- 集合与标签列表返回各自的 `paper_ids`，作为刷新后筛选与数量统计的事实来源。
+- `/api/v1/collections` 提供用户隔离的层级集合 CRUD；同级名称唯一、最多五层，父集合不能跨用户或形成循环。
+- 集合列表返回 `parent_id`、直接 `paper_ids`、去重后的 `recursive_paper_count` 与嵌套 `children`。
+- `GET /api/v1/papers?collection_id=...` 由服务端递归解析后代集合；`unfiled=true` 返回未加入任何集合的论文。
 - `POST/DELETE /api/v1/collections/{id}/papers/{paper_id}` 管理集合归属。
-- `POST/DELETE /api/v1/tags/{id}/papers/{paper_id}` 管理论文标签。
-- `POST /api/v1/papers/bulk` 在最多 100 篇当前用户文献上执行归档、恢复、集合和标签动作。
+- `POST /api/v1/papers/bulk` 在最多 100 篇当前用户文献上执行归档、恢复和集合动作。
+- 文献 `publication` 优先来自 PDF 本地元数据或首页；仍缺失且有 DOI 时，Worker 只向 Crossref 发送 DOI 并缓存成功或失败结果。
 - `POST /api/v1/papers/{paper_id}/opened` 记录最近阅读时间；它不影响 PDF 或索引内容。
 - 管理员可通过 `GET /api/v1/admin/jobs` 查看作业状态，并通过
   `POST /api/v1/admin/jobs/{id}/retry` 重试失败作业。返回值不包含论文正文、Chunk 或聊天内容。
 
 删除论文会创建幂等 `delete_paper` 作业。Worker 先删除私有原件，再级联清理页面、Chunk、
-集合/标签关系及其他关联作业；任一步失败后都可以安全重试。
+集合关系及其他关联作业；任一步失败后都可以安全重试。
 
 RAG 离线评测命令和 JSONL 协议见 `evaluation/README.md`。仓库不附带虚构数据或成绩。
