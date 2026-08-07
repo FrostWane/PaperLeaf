@@ -57,7 +57,7 @@ from .pdf_metadata import (
     normalize_doi,
 )
 from .rag.answer_quality import AnswerQualityPolicy
-from .rag.chunking import PageText, chunk_pages
+from .rag.chunking import PageText, chunk_pages, chunk_pages_fixed_window
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import SQLAlchemyRepository
 from .storage import create_storage
@@ -749,8 +749,22 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
     except Exception as exc:
         raise RuntimeError("PDF_PARSE_FAILED") from exc
 
+    chunking_strategy = "structure_aware_v2"
     chunks_by_page: dict[int, list] = {}
-    chunks = chunk_pages(pages)
+    try:
+        chunks = chunk_pages(
+            pages,
+            target_tokens=settings.chunk_target_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+            max_unit_tokens=settings.chunk_semantic_unit_tokens,
+        )
+    except (RuntimeError, UnicodeError):
+        chunks = chunk_pages_fixed_window(
+            pages,
+            target_tokens=settings.chunk_target_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+        )
+        chunking_strategy = "fixed_window_v1_fallback"
     for chunk in chunks:
         chunks_by_page.setdefault(chunk.physical_page, []).append(chunk)
     embeddings = await embed_texts([chunk.text for chunk in chunks])
@@ -820,6 +834,7 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
                     )
                 )
         paper.page_count = len(pages)
+        paper.chunking_strategy = chunking_strategy
         # 使用最终事务内重新加载的最新字段做条件回填，避免覆盖解析期间的用户编辑。
         backfill_pdf_metadata(paper, pdf_metadata)
         apply_crossref_publication(paper, crossref_enrichment)

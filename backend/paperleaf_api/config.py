@@ -52,6 +52,11 @@ class Settings:
     local_storage_path: Path = Path(os.getenv("PAPERLEAF_LOCAL_STORAGE_PATH", "data/uploads"))
     max_pdf_bytes: int = int(os.getenv("PAPERLEAF_MAX_PDF_BYTES", str(50 * 1024 * 1024)))
     max_pdf_pages: int = int(os.getenv("PAPERLEAF_MAX_PDF_PAGES", "500"))
+    chunk_target_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_TARGET_TOKENS", "700"))
+    chunk_overlap_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_OVERLAP_TOKENS", "100"))
+    chunk_semantic_unit_tokens: int = int(
+        os.getenv("PAPERLEAF_CHUNK_SEMANTIC_UNIT_TOKENS", "220")
+    )
     minio_endpoint: str = os.getenv("PAPERLEAF_MINIO_ENDPOINT", "minio:9000")
     minio_access_key: str = os.getenv("PAPERLEAF_MINIO_ACCESS_KEY", "paperleaf")
     minio_secret_key: str = os.getenv("PAPERLEAF_MINIO_SECRET_KEY", "paperleaf-local")
@@ -182,6 +187,12 @@ class Settings:
             raise RuntimeError("Agent 限流窗口必须位于 1 到 3600 秒之间")
         if not self.redis_key_prefix.strip():
             raise RuntimeError("Redis Key 前缀不能为空")
+        if self.chunk_target_tokens <= 0:
+            raise RuntimeError("Chunk 目标长度必须为正数")
+        if not 0 <= self.chunk_overlap_tokens < self.chunk_target_tokens:
+            raise RuntimeError("Chunk 重叠长度必须小于目标长度")
+        if not 1 <= self.chunk_semantic_unit_tokens <= self.chunk_target_tokens:
+            raise RuntimeError("语义单元长度必须位于 1 到 Chunk 目标长度之间")
         if self.mode != "production":
             return
         weak = {"local-demo-only-change-me", "paperleaf-dev-admin", "paperleaf-local"}

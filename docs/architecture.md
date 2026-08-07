@@ -105,6 +105,10 @@ sequenceDiagram
 
 Chunk 不跨物理页，引用始终关联 `paper_id + page_number + chunk_id`。解析失败不会删除原始 PDF，用户仍可阅读并重试。
 
+切分策略为版本化的 `structure_aware_v2`：Worker 先在单页内识别标题、空行、段落、句子、公式行和表格行，再把相邻短单元合并到 Token 目标范围。超长段落优先按完整句子滑窗，单句仍超长时才按 Token 滑窗，两层都保留受控重叠。边界选择完全确定，不调用 LLM 或 Embedding；Embedding 只处理最终 Chunk，因此向量服务不可用时全文检索和页码引用仍可用。
+
+V1 固定窗口实现保留为 `chunk_pages_fixed_window`，只用于异常降级和离线对照。重新索引在同一事务中删除旧 Page/Chunk 后写入新稳定键 `{paper_id}:p{physical_page}:c{chunk_index}`，不会后台静默改写已有论文。
+
 ## 全文翻译数据流
 
 ```mermaid

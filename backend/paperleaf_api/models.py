@@ -122,6 +122,9 @@ class Paper(Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     sha256: Mapped[str] = mapped_column(String(64))
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    chunking_strategy: Mapped[str] = mapped_column(
+        String(48), default="fixed_window_v1", server_default="fixed_window_v1"
+    )
     status: Mapped[PaperStatus] = mapped_column(Enum(PaperStatus), default=PaperStatus.uploaded)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_opened_at: Mapped[Optional[datetime]] = mapped_column(

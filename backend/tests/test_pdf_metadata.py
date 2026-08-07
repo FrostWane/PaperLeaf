@@ -1,11 +1,21 @@
 import asyncio
 from types import SimpleNamespace
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from paperleaf_api import worker
 from paperleaf_api.db import Base
-from paperleaf_api.models import Job, JobStatus, Paper, PaperArtifact, PaperStatus, User
+from paperleaf_api.models import (
+    Job,
+    JobStatus,
+    Paper,
+    PaperArtifact,
+    PaperChunk,
+    PaperPage,
+    PaperStatus,
+    User,
+)
 from paperleaf_api.pdf_metadata import (
     PdfMetadata,
     backfill_pdf_metadata,
@@ -436,6 +446,25 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                     markdown="old summary",
                 )
             )
+            old_page = PaperPage(
+                id="old-page",
+                paper_id="paper-1",
+                physical_page=1,
+                text="旧页面内容",
+                extraction_method="text",
+            )
+            session.add(old_page)
+            session.add(
+                PaperChunk(
+                    id="paper-1:p1:c99",
+                    page_id="old-page",
+                    paper_id="paper-1",
+                    physical_page=1,
+                    chunk_index=99,
+                    text="旧 Chunk 内容",
+                    token_count=4,
+                )
+            )
             await session.commit()
 
         async def embeddings_unavailable(texts: list[str], router: object | None = None) -> None:
@@ -451,6 +480,13 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                 paper = await session.get(Paper, "paper-1")
                 job = await session.get(Job, "job-1")
                 artifact = await session.get(PaperArtifact, "artifact-before-reindex")
+                chunks = list(
+                    await session.scalars(
+                        select(PaperChunk)
+                        .where(PaperChunk.paper_id == "paper-1")
+                        .order_by(PaperChunk.physical_page, PaperChunk.chunk_index)
+                    )
+                )
                 assert paper is not None
                 assert job is not None
                 assert paper.title == "Metadata Integration Paper"
@@ -459,8 +495,14 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                 assert paper.publication == "Bioinformatics"
                 assert paper.doi == "10.1093/bioinformatics/bty593"
                 assert paper.status == PaperStatus.ready
+                assert paper.chunking_strategy == "structure_aware_v2"
                 assert job.status == JobStatus.completed
                 assert artifact is not None and artifact.status == "stale"
+                assert chunks
+                assert all(chunk.id != "paper-1:p1:c99" for chunk in chunks)
+                assert [chunk.chunk_index for chunk in chunks if chunk.physical_page == 1] == list(
+                    range(sum(chunk.physical_page == 1 for chunk in chunks))
+                )
         finally:
             await engine.dispose()
 
