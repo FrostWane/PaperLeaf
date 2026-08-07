@@ -71,6 +71,9 @@ class Settings:
         "PAPERLEAF_FALLBACK_EMBEDDING_MODEL", "text-embedding-3-small"
     )
     model_timeout_seconds: float = float(os.getenv("PAPERLEAF_MODEL_TIMEOUT_SECONDS", "30"))
+    translation_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS", "90")
+    )
     artifact_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS", "120")
     )
@@ -131,9 +134,12 @@ class Settings:
         )
         if any(value < 0 or value > 1 for value in quality_values):
             raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
-        if self.model_timeout_seconds <= 0:
+        if self.model_timeout_seconds <= 0 or self.translation_timeout_seconds <= 0:
             raise RuntimeError("模型超时必须大于 0")
-        if self.model_timeout_seconds > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS:
+        if (
+            max(self.model_timeout_seconds, self.translation_timeout_seconds)
+            > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS
+        ):
             raise RuntimeError(
                 "模型单次超时不能超过 120 秒，以确保明显短于 Worker 租约"
             )

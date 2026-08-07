@@ -361,6 +361,7 @@ class TranslationCreate(BaseModel):
 
     target_language: TranslationLanguage = "zh-CN"
     priority_page: Optional[int] = Field(default=None, ge=1)
+    refresh: bool = False
 
 
 class TranslationPageRead(BaseModel):

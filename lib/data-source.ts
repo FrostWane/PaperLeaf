@@ -592,7 +592,7 @@ export interface PaperLeafDataSource {
   retryPaper(paperId: string): Promise<Paper>;
   summarizePaper(paperId: string, options?: { refresh?: boolean }): Promise<PaperSummary>;
   buildStructureGraph(paperId: string, options?: { refresh?: boolean }): Promise<PaperStructureGraph>;
-  createPaperTranslation(paperId: string, targetLanguage: string, priorityPage: number): Promise<PaperTranslation>;
+  createPaperTranslation(paperId: string, targetLanguage: string, priorityPage: number, options?: { refresh?: boolean }): Promise<PaperTranslation>;
   getPaperTranslation(paperId: string, translationId: string): Promise<PaperTranslation>;
   getPaperTranslationPage(paperId: string, translationId: string, page: number): Promise<PaperTranslationPage>;
   cancelPaperTranslation(paperId: string, translationId: string): Promise<PaperTranslation>;
@@ -870,11 +870,11 @@ export const demoDataSource: PaperLeafDataSource = {
   },
   async summarizePaper(paperId) { await wait(420); return { ...paperSummary, paperId }; },
   async buildStructureGraph(paperId) { await wait(520); return { ...paperStructureGraph, paperId }; },
-  async createPaperTranslation(paperId, targetLanguage, priorityPage) {
+  async createPaperTranslation(paperId, targetLanguage, priorityPage, options) {
     await wait(180);
     void priorityPage;
     const current = [...demoTranslations.values()].find((item) => item.paperId === paperId && item.targetLanguage === targetLanguage && item.status !== "cancelled");
-    if (current) return { ...current };
+    if (current && !options?.refresh) return { ...current };
     const paper = demoPapers.find((item) => item.id === paperId) ?? demoPapers[0];
     const translation: PaperTranslation = { id: demoId("translation"), paperId, targetLanguage, status: "running", progress: 36, completedPages: Math.min(5, paper.pages), failedPages: 0, totalPages: paper.pages };
     demoTranslations.set(translation.id, translation);
@@ -1187,8 +1187,8 @@ export const realDataSource: PaperLeafDataSource = {
     if (!r.ok) throw new Error("集合读取失败");
     return collectionForest((await r.json() as Array<Record<string, unknown>>).map((item) => mapCollection(item)));
   },
-  async createPaperTranslation(paperId, targetLanguage, priorityPage) {
-    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/translations`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ target_language: targetLanguage, priority_page: priorityPage }) });
+  async createPaperTranslation(paperId, targetLanguage, priorityPage, options) {
+    const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/translations`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ target_language: targetLanguage, priority_page: priorityPage, refresh: Boolean(options?.refresh) }) });
     if (!r.ok) throw await apiError(r, "全文翻译任务创建失败");
     return mapPaperTranslation(await r.json() as Record<string, unknown>, paperId);
   },

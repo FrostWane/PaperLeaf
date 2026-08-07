@@ -108,6 +108,7 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_FALLBACK_EMBEDDING_ENABLED` | 备用服务是否提供 Embeddings |
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
+| `PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS` | 单页全文翻译超时，默认 90 秒 |
 | `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括首次生成超时，默认 120 秒 |
 | `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台全文概括精简证据重试超时，默认 90 秒 |
 | `PAPERLEAF_STRUCTURE_TIMEOUT_SECONDS` | 研究脑图首次生成超时，默认 180 秒 |

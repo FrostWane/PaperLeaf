@@ -192,7 +192,9 @@ describe("真实 API 契约", () => {
       http.get(`${API_BASE_URL}/papers/p1/translations/t1/pages/7`, () => HttpResponse.json({ page: 7, status: "no_text", translated_text: "" })),
     );
     await expect(realDataSource.createPaperTranslation("p1", "zh-CN", 7)).resolves.toMatchObject({ id: "t1", status: "partial", progress: 100, completedPages: 5, failedPages: 2, totalPages: 12 });
-    expect(createPayload).toEqual({ target_language: "zh-CN", priority_page: 7 });
+    expect(createPayload).toEqual({ target_language: "zh-CN", priority_page: 7, refresh: false });
+    await realDataSource.createPaperTranslation("p1", "zh-CN", 7, { refresh: true });
+    expect(createPayload).toEqual({ target_language: "zh-CN", priority_page: 7, refresh: true });
     await expect(realDataSource.getPaperTranslation("p1", "t2")).resolves.toMatchObject({ status: "completed", progress: 100, completedPages: 0, totalPages: 12 });
     await expect(realDataSource.getPaperTranslationPage("p1", "t1", 7)).resolves.toEqual({ page: 7, status: "no_text", text: "", error: undefined });
   });

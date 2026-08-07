@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from paperleaf_api import worker
 from paperleaf_api.db import Base
-from paperleaf_api.model_runtime import ModelRuntimeError
+from paperleaf_api.model_runtime import ModelProvider, ModelRuntimeError
 from paperleaf_api.models import (
     Job,
     JobStatus,
@@ -64,7 +64,65 @@ def test_translation_page_cost_limit_rejects_oversized_text() -> None:
         worker.split_translation_text("A" * (worker.MAX_TRANSLATION_PAGE_CHARS + 1))
 
 
-async def _seed_translation(sessions, *, page_status: str = "queued", attempts: int = 0):
+def test_deepseek_translation_disables_thinking_and_rejects_truncation(
+    monkeypatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="length",
+                        message=SimpleNamespace(content="被截断的译文"),
+                    )
+                ]
+            )
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    class DeepSeekRouter:
+        def has_provider(self, purpose: str) -> bool:
+            return purpose == "translation"
+
+        async def execute(self, purpose: str, operation, **kwargs):
+            return await operation(
+                ModelProvider(
+                    name="deepseek",
+                    api_key="test",
+                    base_url="https://api.deepseek.com",
+                    chat_model="deepseek-v4-flash",
+                    embedding_model="",
+                )
+            )
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeClient)
+
+    async def scenario() -> None:
+        with pytest.raises(worker.TranslationOutputError) as caught:
+            await worker.translate_page_text(
+                "Complete source text.", "zh-CN", router=DeepSeekRouter()
+            )
+        assert caught.value.error_code == "MODEL_INCOMPLETE_RESPONSE"
+
+    asyncio.run(scenario())
+    assert requests[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert requests[0]["max_tokens"] == 8192
+
+
+async def _seed_translation(
+    sessions,
+    *,
+    page_status: str = "queued",
+    attempts: int = 0,
+    second_page_text: str = "",
+):
     source_text = "Source page text with formula E = mc^2 and citation [7]."
     async with sessions() as session:
         session.add(
@@ -99,7 +157,10 @@ async def _seed_translation(sessions, *, page_status: str = "queued", attempts: 
                     text=source_text,
                 ),
                 PaperPage(
-                    id="source-2", paper_id="paper-1", physical_page=2, text=""
+                    id="source-2",
+                    paper_id="paper-1",
+                    physical_page=2,
+                    text=second_page_text,
                 ),
             ]
         )
@@ -131,11 +192,11 @@ async def _seed_translation(sessions, *, page_status: str = "queued", attempts: 
                     id="translation-page-2",
                     translation_id="translation-1",
                     physical_page=2,
-                    status="no_text",
-                    source_text_hash=hashlib.sha256(b"").hexdigest(),
+                    status="queued" if second_page_text else "no_text",
+                    source_text_hash=hashlib.sha256(second_page_text.encode()).hexdigest(),
                     priority=1002,
-                    error_code="NO_TRANSLATABLE_TEXT",
-                    error_message="此页暂无可翻译文本",
+                    error_code=None if second_page_text else "NO_TRANSLATABLE_TEXT",
+                    error_message=None if second_page_text else "此页暂无可翻译文本",
                 ),
             ]
         )
@@ -198,11 +259,55 @@ def test_translation_worker_persists_valid_page_and_no_text_state(
     asyncio.run(scenario())
 
 
+def test_translation_worker_publishes_progress_after_each_page(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario() -> None:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'progress.db'}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed_translation(sessions, second_page_text="Second source page.")
+        monkeypatch.setattr(worker, "get_session_factory", lambda: sessions)
+        second_started = asyncio.Event()
+        release_second = asyncio.Event()
+        calls = 0
+
+        async def staged_translate(text: str, target: str, router=None, **kwargs) -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                second_started.set()
+                await release_second.wait()
+            return f"第 {calls} 页译文"
+
+        monkeypatch.setattr(worker, "translate_page_text", staged_translate)
+        task = asyncio.create_task(
+            worker.process_translation_job(
+                "job-1", "lease-1", router=AvailableRouter()
+            )
+        )
+        await asyncio.wait_for(second_started.wait(), timeout=2)
+        async with sessions() as session:
+            translation = await session.get(PaperTranslation, "translation-1")
+            job = await session.get(Job, "job-1")
+            assert translation.status == "running"
+            assert translation.completed_pages == 1
+            assert translation.failed_pages == 0
+            assert job.progress == 50
+        release_second.set()
+        await task
+        await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("error_code", "expected_page", "expected_job"),
     [
         ("MODEL_AUTHENTICATION_FAILED", "failed", JobStatus.failed),
         ("MODEL_TIMEOUT", "queued", JobStatus.queued),
+        ("MODEL_INCOMPLETE_RESPONSE", "queued", JobStatus.queued),
     ],
 )
 def test_translation_worker_retries_only_transient_errors(
@@ -221,6 +326,8 @@ def test_translation_worker_retries_only_transient_errors(
         async def failed_translate(text: str, target: str, router=None, **kwargs) -> str:
             nonlocal calls
             calls += 1
+            if error_code == "MODEL_INCOMPLETE_RESPONSE":
+                raise worker.TranslationOutputError(error_code)
             raise ModelRuntimeError(error_code, [])
 
         monkeypatch.setattr(worker, "translate_page_text", failed_translate)

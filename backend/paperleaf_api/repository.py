@@ -400,6 +400,7 @@ class Repository(Protocol):
         priority_page: int | None,
         *,
         model_available: bool,
+        refresh: bool = False,
     ) -> TranslationRecord | PaperTranslation | None: ...
     async def get_owned_translation(
         self, paper_id: str, translation_id: str, owner_id: str
@@ -974,6 +975,7 @@ class MemoryRepository:
         priority_page: int | None,
         *,
         model_available: bool,
+        refresh: bool = False,
     ) -> TranslationRecord | None:
         paper = await self.get_owned_paper(paper_id, owner_id)
         if not paper:
@@ -1016,7 +1018,7 @@ class MemoryRepository:
                 translation.error_code == "SOURCE_CHANGED"
                 or translation.source_revision != revision
             )
-            restart_requested = source_changed or translation.cancel_requested or (
+            restart_requested = refresh or source_changed or translation.cancel_requested or (
                 translation.status in {"cancelled", "failed", "partial"}
             )
             translation.source_revision = revision
@@ -1045,7 +1047,7 @@ class MemoryRepository:
                     source_text_hash=text_hash,
                 )
                 self.translation_pages[page.id] = page
-            elif source_changed or page.source_text_hash != text_hash:
+            elif refresh or source_changed or page.source_text_hash != text_hash:
                 page.source_text_hash = text_hash
                 page.status = initial_status
                 page.translated_text = None
@@ -3206,6 +3208,7 @@ class SQLAlchemyRepository:
         priority_page: int | None,
         *,
         model_available: bool,
+        refresh: bool = False,
     ) -> PaperTranslation | None:
         async with get_session_factory()() as session:
             # 锁论文即可串行化同一篇论文的“翻译 + 作业”创建，唯一约束作为第二道门禁。
@@ -3262,7 +3265,7 @@ class SQLAlchemyRepository:
                     translation.error_code == "SOURCE_CHANGED"
                     or translation.source_revision != revision
                 )
-                restart_requested = source_changed or translation.cancel_requested or (
+                restart_requested = refresh or source_changed or translation.cancel_requested or (
                     translation.status in {"cancelled", "failed", "partial"}
                 )
                 translation.source_revision = revision
@@ -3323,7 +3326,7 @@ class SQLAlchemyRepository:
                         source_text_hash=text_hash,
                     )
                     session.add(page)
-                elif source_changed or page.source_text_hash != text_hash:
+                elif refresh or source_changed or page.source_text_hash != text_hash:
                     page.source_text_hash = text_hash
                     page.status = initial_status
                     page.translated_text = None

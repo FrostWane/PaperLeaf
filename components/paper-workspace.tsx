@@ -12,6 +12,7 @@ import { useWorkspaceStore, type MobilePane } from "@/lib/store";
 import type { Paper, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput } from "@/lib/types";
 import { ChatWorkspace } from "./chat-workspace";
 import { PaperDetailsDialog } from "./paper-details-dialog";
+import { SafeMarkdown } from "./safe-markdown";
 import { StructureDiagram } from "./structure-diagram";
 import { StructuredSummary } from "./summary-content";
 import { TranslationConfirmDialog, translationLanguageLabel } from "./translation-confirm-dialog";
@@ -108,6 +109,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const [translationBusy, setTranslationBusy] = useState(false);
   const [translationMessage, setTranslationMessage] = useState("");
   const [translationPageMessage, setTranslationPageMessage] = useState<{ page: number; text: string } | null>(null);
+  const [translationRefresh, setTranslationRefresh] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const lastPersistedZoomRef = useRef(100);
   const focusRestoreRef = useRef({ left: true, assistant: true });
@@ -115,7 +117,6 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const libraryHref = demo ? "/library?demo=1" : "/library";
   const activeTranslationId = translation?.id;
   const activeTranslationStatus = translation?.status;
-  const activeTranslationCompletedPages = translation?.completedPages;
 
   useEffect(() => {
     if (!isReal) return;
@@ -255,28 +256,38 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   }, [dataSource, paperId, structurePolling]);
 
   useEffect(() => {
-    if (!translation || (translation.status !== "queued" && translation.status !== "running")) return;
+    if (!activeTranslationId || (activeTranslationStatus !== "queued" && activeTranslationStatus !== "running")) return;
     let stopped = false;
-    const timer = window.setInterval(() => {
-      void dataSource.getPaperTranslation(paperId, translation.id).then((next) => {
-        if (!stopped) setTranslation(next);
-      }).catch((error: unknown) => {
+    async function pollTranslation() {
+      try {
+        const next = await dataSource.getPaperTranslation(paperId, activeTranslationId!);
+        if (!stopped) { setTranslation(next); setTranslationMessage(""); }
+      } catch (error) {
         if (!stopped) setTranslationMessage(error instanceof Error ? error.message : "翻译进度读取失败");
-      });
-    }, 2_000);
+      }
+    }
+    void pollTranslation();
+    const timer = window.setInterval(() => void pollTranslation(), 2_000);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [dataSource, paperId, translation]);
+  }, [activeTranslationId, activeTranslationStatus, dataSource, paperId]);
 
   useEffect(() => {
     if (!activeTranslationId) return;
     let stopped = false;
-    void dataSource.getPaperTranslationPage(paperId, activeTranslationId, currentPage).then((next) => {
-      if (!stopped) { setTranslationPage(next); setTranslationPageMessage(null); }
-    }).catch((error: unknown) => {
-      if (!stopped) setTranslationPageMessage({ page: currentPage, text: error instanceof Error ? error.message : "当前页译文读取失败" });
-    });
-    return () => { stopped = true; };
-  }, [activeTranslationCompletedPages, activeTranslationId, activeTranslationStatus, currentPage, dataSource, paperId]);
+    async function pollPage() {
+      try {
+        const next = await dataSource.getPaperTranslationPage(paperId, activeTranslationId!, currentPage);
+        if (!stopped) { setTranslationPage(next); setTranslationPageMessage(null); }
+      } catch (error) {
+        if (!stopped) setTranslationPageMessage({ page: currentPage, text: error instanceof Error ? error.message : "当前页译文读取失败" });
+      }
+    }
+    void pollPage();
+    const timer = activeTranslationStatus === "queued" || activeTranslationStatus === "running"
+      ? window.setInterval(() => void pollPage(), 1_500)
+      : undefined;
+    return () => { stopped = true; if (timer) window.clearInterval(timer); };
+  }, [activeTranslationId, activeTranslationStatus, currentPage, dataSource, paperId]);
 
   function openCitation(page: number) {
     setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
@@ -360,9 +371,14 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     changePanelVisibility(false, false);
   }
 
-  function openTranslationDialog() {
+  function openTranslationDialog(refresh = false) {
     setTranslationMessage("");
+    setTranslationRefresh(refresh);
     setTranslationDialogOpen(true);
+  }
+
+  function goToPage(page: number) {
+    setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
   }
 
   function changeZoom(delta: number) {
@@ -374,8 +390,11 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     setTranslationBusy(true);
     setTranslationMessage("");
     try {
-      const next = await dataSource.createPaperTranslation(paperId, translationLanguage, currentPage);
+      const next = translationRefresh
+        ? await dataSource.createPaperTranslation(paperId, translationLanguage, currentPage, { refresh: true })
+        : await dataSource.createPaperTranslation(paperId, translationLanguage, currentPage);
       setTranslation(next);
+      setTranslationPage(null);
       setTranslationVisible(true);
       setTranslationDialogOpen(false);
       if (typeof window !== "undefined") window.localStorage.setItem(`paperleaf:translation:${paperId}`, next.id);
@@ -431,18 +450,18 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   if (currentTranslationPage?.status === "failed") translatedPageContent = <p role="alert">此页翻译失败：{currentTranslationPage.error || "可稍后重新创建翻译任务重试。"}</p>;
   if (currentTranslationPage?.status === "cancelled") translatedPageContent = <p role="status">此页翻译已取消。</p>;
   if (currentTranslationPage?.status === "completed") translatedPageContent = currentTranslationPage.text
-    ? <div className="translated-text">{currentTranslationPage.text.split(/\n{2,}/).map((paragraph, index) => <p key={`${currentPage}-${index}`}>{paragraph}</p>)}</div>
+    ? <SafeMarkdown className="translated-text" content={currentTranslationPage.text} />
     : <p role="status">此页暂无可翻译文本。</p>;
 
   const readerPane = <section className={`workspace-reader pane-view ${mobilePane === "pdf" ? "mobile-active" : ""}`} aria-label="PDF 阅读器">
     <div className="reader-toolbar" role="toolbar" aria-label="PDF 阅读工具栏">
       <div className="reader-tool-group page-control">
-        <button className="icon-button" aria-label="上一页" title="上一页" disabled={currentPage <= 1} onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}><ChevronLeft size={17} /></button>
+        <button className="icon-button" aria-label="上一页" title="上一页" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}><ChevronLeft size={17} /></button>
         <span className="mono" aria-label={`第 ${currentPage} 页，共 ${paper.pages || "未知"} 页`}>{currentPage} / {paper.pages || "—"}</span>
-        <button className="icon-button" aria-label="下一页" title="下一页" disabled={Boolean(paper.pages && currentPage >= paper.pages)} onClick={() => setCurrentPage(Math.min(paper.pages || currentPage + 1, currentPage + 1))}><ChevronRight size={17} /></button>
+        <button className="icon-button" aria-label="下一页" title="下一页" disabled={Boolean(paper.pages && currentPage >= paper.pages)} onClick={() => goToPage(currentPage + 1)}><ChevronRight size={17} /></button>
       </div>
       <div className="reader-tool-group translation-tool-group">
-        <button className={translationVisible ? "reader-tool-button active" : "reader-tool-button"} type="button" aria-pressed={translationVisible} onClick={() => translation ? setTranslationVisible((current) => !current) : openTranslationDialog()}><Languages size={15} />{translation ? translationVisible ? "隐藏译文" : "显示译文" : "翻译全文"}</button>
+        <button className={translationVisible ? "reader-tool-button active" : "reader-tool-button"} type="button" aria-pressed={translationVisible} onClick={() => translation ? setTranslationVisible((current) => !current) : openTranslationDialog(false)}><Languages size={15} />{translation ? translationVisible ? "隐藏译文" : "显示译文" : "翻译全文"}</button>
       </div>
       <div className="reader-tool-group zoom-tools">
         <button className="icon-button" aria-label="缩小 PDF" title="缩小" disabled={!fitWidth && zoomPercent <= 50} onClick={() => changeZoom(-10)}><Minus size={16} /></button>
@@ -462,12 +481,13 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     <div className={translation && translationVisible ? "document-stage translation-stage" : "document-stage"} tabIndex={0} aria-label="PDF 页面，可滚动浏览">
       <div className="translation-original" tabIndex={0} aria-label={`原始 PDF，第 ${currentPage} 页`}>{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
       {translation && translationVisible && <aside className="translation-page" aria-label={`${translationLanguageLabel(translation.targetLanguage)}译文，第 ${currentPage} 页`}>
-        <div className="translation-page-head"><div><span>{translationLanguageLabel(translation.targetLanguage)}译文</span><strong>第 {currentPage} 页</strong></div><button type="button" className="icon-button" aria-label="关闭译文双栏" onClick={() => setTranslationVisible(false)}><X size={16} /></button></div>
+        <div className="translation-page-head"><div><span>{translationLanguageLabel(translation.targetLanguage)}译文</span><strong>第 {currentPage} / {paper.pages || translation.totalPages} 页</strong></div><div className="translation-page-nav"><button type="button" className="icon-button" aria-label="上一页译文" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}><ChevronLeft size={16} /></button><button type="button" className="icon-button" aria-label="下一页译文" disabled={Boolean((paper.pages || translation.totalPages) && currentPage >= (paper.pages || translation.totalPages))} onClick={() => goToPage(currentPage + 1)}><ChevronRight size={16} /></button><button type="button" className="icon-button" aria-label="关闭译文双栏" onClick={() => setTranslationVisible(false)}><X size={16} /></button></div></div>
         <div className="translation-progress" role="status"><span>{translationStatusLabel(translation)}</span><progress aria-label={`翻译进度 ${translation.progress}%`} max={100} value={translation.progress}>{translation.progress}%</progress></div>
         <div className="translation-page-body">{translatedPageContent}</div>
         {(translation.status === "queued" || translation.status === "running") && <button type="button" className="secondary-button translation-cancel" disabled={translationBusy} onClick={() => void cancelTranslation()}>{translationBusy ? "正在取消…" : "取消后台翻译"}</button>}
-        {translation.status === "partial" && <button type="button" className="secondary-button translation-cancel" disabled={translationBusy} onClick={openTranslationDialog}>重试失败页</button>}
-        {(translation.status === "failed" || translation.status === "cancelled") && <button type="button" className="secondary-button translation-cancel" disabled={translationBusy} onClick={openTranslationDialog}>重新创建翻译任务</button>}
+        {translation.status === "completed" && <button type="button" className="secondary-button translation-cancel" disabled={translationBusy} onClick={() => openTranslationDialog(true)}>重新翻译</button>}
+        {translation.status === "partial" && <button type="button" className="secondary-button translation-cancel" disabled={translationBusy} onClick={() => openTranslationDialog(false)}>重试失败页</button>}
+        {(translation.status === "failed" || translation.status === "cancelled") && <button type="button" className="secondary-button translation-cancel" disabled={translationBusy} onClick={() => openTranslationDialog(false)}>重新创建翻译任务</button>}
         {translationMessage && <p className="field-error" role="alert">{translationMessage}</p>}
         {translationPageMessage?.page === currentPage && <p className="field-error" role="alert">{translationPageMessage.text}</p>}
       </aside>}

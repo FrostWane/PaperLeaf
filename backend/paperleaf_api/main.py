@@ -834,6 +834,7 @@ def create_app(
                 payload.target_language,
                 payload.priority_page,
                 model_available=services.model_router.has_provider("translation"),
+                refresh=payload.refresh,
             )
         except TranslationSourceUnavailableError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

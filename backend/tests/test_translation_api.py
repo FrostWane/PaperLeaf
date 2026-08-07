@@ -274,6 +274,31 @@ def test_translation_without_model_returns_explicit_failed_state(
         assert translation_jobs[0].status == JobStatus.queued
         assert sum(job.type == "translate_paper" for job in repository.jobs.values()) == 1
 
+        pages = asyncio.run(
+            repository.list_translation_pages(resumed.id, uploaded["owner_id"])
+        )
+        pages[0].status = "completed"
+        pages[0].translated_text = "需要更新的旧译文"
+        resumed.status = "completed"
+        resumed.completed_pages = 1
+        translation_jobs[0].status = JobStatus.completed
+        refreshed = asyncio.run(
+            repository.create_or_resume_translation(
+                uploaded["id"],
+                uploaded["owner_id"],
+                "zh-CN",
+                1,
+                model_available=True,
+                refresh=True,
+            )
+        )
+        assert refreshed is not None
+        assert refreshed.status == "queued"
+        assert refreshed.completed_pages == 0
+        assert pages[0].status == "queued"
+        assert pages[0].translated_text is None
+        assert translation_jobs[0].id == original_job_id
+
 
 def test_translation_requires_parsed_pages(tmp_path, valid_pdf_bytes: bytes) -> None:
     config = replace(

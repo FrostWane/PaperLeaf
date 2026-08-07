@@ -103,6 +103,7 @@ docker compose up -d web
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用嵌入模型，维度必须与主模型一致 |
 | `PAPERLEAF_FALLBACK_VISION_MODEL` | 可选备用 OCR 视觉模型 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 每次模型调用的超时秒数 |
+| `PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS` | 单页全文翻译超时，默认 90 秒 |
 | `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括首次生成超时，默认 120 秒 |
 | `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台全文概括精简证据重试超时，默认 90 秒且不得大于首次超时 |
 | `PAPERLEAF_STRUCTURE_TIMEOUT_SECONDS` | 研究脑图首次生成超时，默认 180 秒 |

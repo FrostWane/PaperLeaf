@@ -78,13 +78,52 @@ describe("PaperWorkspace PDF 主视区", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalledWith("attention", "zh-CN", 2));
     const translationPane = await desktop.findByLabelText("简体中文译文，第 2 页");
-    expect(await within(translationPane).findByText('<script>alert("x")</script>')).toBeVisible();
+    expect(translationPane).not.toHaveTextContent('alert("x")');
+    expect(await within(translationPane).findByText("安全译文")).toBeVisible();
     expect(translationPane.querySelector("script")).toBeNull();
     fireEvent.click(within(translationPane).getByRole("button", { name: "取消后台翻译" }));
     expect(within(translationPane).getByRole("button", { name: "正在取消…" })).toBeDisabled();
     await waitFor(() => expect(within(translationPane).getByText(/翻译任务已取消/)).toBeVisible());
     fireEvent.click(desktop.getByRole("button", { name: "下一页" }));
     expect(await within(translationPane).findByText("第 3 页缓存译文")).toBeVisible();
+    expect(within(translationPane).getByText("第 3 / 15 页")).toBeVisible();
+    fireEvent.click(within(translationPane).getByRole("button", { name: "下一页译文" }));
+    expect(await within(translationPane).findByText("第 4 页缓存译文")).toBeVisible();
+  });
+
+  it("后台完成当前页后无需刷新即可显示译文与进度", async () => {
+    let pageReads = 0;
+    vi.spyOn(demoDataSource, "createPaperTranslation").mockResolvedValue({ id: "live-translation", paperId: "attention", targetLanguage: "zh-CN", status: "running", progress: 0, completedPages: 0, failedPages: 0, totalPages: 15 });
+    vi.spyOn(demoDataSource, "getPaperTranslation").mockResolvedValue({ id: "live-translation", paperId: "attention", targetLanguage: "zh-CN", status: "running", progress: 7, completedPages: 1, failedPages: 0, totalPages: 15 });
+    vi.spyOn(demoDataSource, "getPaperTranslationPage").mockImplementation(async (_paperId, _translationId, page) => {
+      pageReads += 1;
+      return pageReads === 1
+        ? { page, status: "running", text: "" }
+        : { page, status: "completed", text: "无需刷新出现的译文" };
+    });
+    const { container } = render(<PaperWorkspace demo paperId="attention" initialPage={2} />);
+    const desktop = within(container.querySelector(".workspace-desktop") as HTMLElement);
+    fireEvent.click(desktop.getByRole("button", { name: "翻译全文" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并开始翻译" }));
+    expect(await desktop.findByText("正在翻译第 2 页…")).toBeVisible();
+    expect(await desktop.findByText("无需刷新出现的译文", {}, { timeout: 2_500 })).toBeVisible();
+    expect(pageReads).toBeGreaterThanOrEqual(2);
+    expect(desktop.getByText("正在翻译 · 1/15 页")).toBeVisible();
+  });
+
+  it("完成后可确认重新翻译并强制刷新缓存", async () => {
+    const create = vi.spyOn(demoDataSource, "createPaperTranslation")
+      .mockResolvedValueOnce({ id: "done-translation", paperId: "attention", targetLanguage: "zh-CN", status: "completed", progress: 100, completedPages: 15, failedPages: 0, totalPages: 15 })
+      .mockResolvedValueOnce({ id: "done-translation", paperId: "attention", targetLanguage: "zh-CN", status: "queued", progress: 0, completedPages: 0, failedPages: 0, totalPages: 15 });
+    vi.spyOn(demoDataSource, "getPaperTranslationPage").mockResolvedValue({ page: 2, status: "completed", text: "旧译文" });
+    const { container } = render(<PaperWorkspace demo paperId="attention" initialPage={2} />);
+    const desktop = within(container.querySelector(".workspace-desktop") as HTMLElement);
+    fireEvent.click(desktop.getByRole("button", { name: "翻译全文" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并开始翻译" }));
+    expect(await desktop.findByRole("button", { name: "重新翻译" })).toBeVisible();
+    fireEvent.click(desktop.getByRole("button", { name: "重新翻译" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并开始翻译" }));
+    await waitFor(() => expect(create).toHaveBeenLastCalledWith("attention", "zh-CN", 2, { refresh: true }));
   });
 
   it("缩放偏好去抖保存，并在重新挂载阅读器后恢复", async () => {
