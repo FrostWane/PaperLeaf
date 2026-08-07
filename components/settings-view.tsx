@@ -15,6 +15,7 @@ import {
   type FontScale,
   type UserPreferences,
 } from "@/lib/preferences-api";
+import { clearCurrentUserState } from "./current-user-provider";
 
 const passwordSchema = z.object({
   currentPassword: z.string().min(8, "请输入当前密码"),
@@ -144,6 +145,7 @@ export function SettingsView() {
     setSettingsError("");
     try {
       if (!usesDemoData) await logoutSession();
+      clearCurrentUserState();
       window.location.replace("/login");
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "退出登录失败");

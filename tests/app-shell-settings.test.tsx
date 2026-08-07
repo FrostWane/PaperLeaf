@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "@/components/app-shell";
+import { resetCurrentUserStateForTests } from "@/components/current-user-provider";
 import { SettingsView } from "@/components/settings-view";
 import { server } from "./test-server";
 
@@ -19,9 +20,28 @@ describe("AppShell 账户与角色导航", () => {
   beforeEach(() => vi.stubEnv("NEXT_PUBLIC_DATA_MODE", "real"));
   afterEach(() => {
     cleanup();
+    resetCurrentUserStateForTests();
     vi.unstubAllEnvs();
     document.documentElement.removeAttribute("data-font-scale");
     document.cookie = "paperleaf_csrf=; Max-Age=0; path=/";
+  });
+
+  it("页面外壳重新挂载时复用已验证身份，不闪回未登录状态", async () => {
+    let requests = 0;
+    server.use(http.get(`${api}/auth/me`, () => {
+      requests += 1;
+      return HttpResponse.json({ id: "a1", email: "admin@example.org", display_name: "管理员", role: "admin", active: true, must_change_password: false, preferences });
+    }));
+
+    const first = render(<AppShell active="/library" title="文献库"><p>正文</p></AppShell>);
+    expect(await screen.findByText("admin@example.org")).toBeInTheDocument();
+    first.unmount();
+    render(<AppShell active="/ask" title="跨文献提问"><p>正文</p></AppShell>);
+
+    expect(screen.getByText("admin@example.org")).toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("link", { name: /管理/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("正在验证账户")).not.toBeInTheDocument();
+    expect(requests).toBe(1);
   });
 
   it("显示真实用户并对普通用户隐藏管理入口", async () => {
@@ -73,6 +93,7 @@ describe("SettingsView 真实偏好", () => {
   beforeEach(() => vi.stubEnv("NEXT_PUBLIC_DATA_MODE", "real"));
   afterEach(() => {
     cleanup();
+    resetCurrentUserStateForTests();
     vi.unstubAllEnvs();
     document.documentElement.removeAttribute("data-font-scale");
     document.cookie = "paperleaf_csrf=; Max-Age=0; path=/";

@@ -23,6 +23,8 @@ export interface PreferencesUpdate extends Partial<UserPreferences> {
   displayName?: string;
 }
 
+export class SessionExpiredError extends Error {}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
 const defaultPreferences: UserPreferences = {
@@ -90,7 +92,11 @@ export function applyFontScale(scale: FontScale): void {
 
 export async function getCurrentUser(): Promise<CurrentUser> {
   const response = await fetch(`${API_BASE_URL}/auth/me`, { credentials: "include" });
-  if (!response.ok) throw new Error(await errorMessage(response, "账户信息读取失败"));
+  if (!response.ok) {
+    const message = await errorMessage(response, "账户信息读取失败");
+    if (response.status === 401) throw new SessionExpiredError(message);
+    throw new Error(message);
+  }
   return mapCurrentUser(await response.json() as Record<string, unknown>);
 }
 

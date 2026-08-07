@@ -9,5 +9,5 @@ export default async function PaperPage({ params, searchParams }: { params: Prom
   const demo = query.demo === "1";
   const requestedPage = Number.parseInt(query.page ?? "", 10);
   const initialPage = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : undefined;
-  return <AppShell active="/library" title="论文工作台" eyebrow="Library / Reading" flush demo={demo}><PaperWorkspace key={`${id}:${initialPage ?? "default"}`} paperId={id} demo={demo} initialPage={initialPage} /></AppShell>;
+  return <AppShell active="/library" title="论文工作台" flush demo={demo}><PaperWorkspace key={`${id}:${initialPage ?? "default"}`} paperId={id} demo={demo} initialPage={initialPage} /></AppShell>;
 }

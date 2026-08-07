@@ -361,9 +361,9 @@ def test_structure_requires_valid_semantic_nodes_and_acyclic_edges() -> None:
     cycle = asyncio.run(
         generate_structure_artifact(_evidence(), model_router=cycle_router)
     )
-    assert cycle.status == "failed"
-    assert cycle.fallback_reason == "模型结构图包含孤立节点或循环关系"
-    assert cycle.payload["nodes"] == []
+    assert cycle_router.calls == 2
+    assert cycle.status == "ready"
+    assert len(cycle.payload["edges"]) == len(cycle.payload["nodes"]) - 1
 
     disconnected_router = SequenceSummaryRouter(
         [_structure_json(disconnected=True), _structure_json(disconnected=True)]
@@ -372,9 +372,9 @@ def test_structure_requires_valid_semantic_nodes_and_acyclic_edges() -> None:
         generate_structure_artifact(_evidence(), model_router=disconnected_router)
     )
     assert disconnected_router.calls == 2
-    assert disconnected.status == "failed"
-    assert disconnected.fallback_reason == "模型结构图未形成从研究问题出发的完整有向链路"
-    assert disconnected.payload["nodes"] == []
+    assert disconnected.status == "ready"
+    assert len(disconnected.payload["edges"]) == len(disconnected.payload["nodes"]) - 1
+    assert disconnected.payload["edges"][0]["source"] == "n1"
 
 
 def test_structure_retries_unknown_evidence_alias_with_compact_context() -> None:

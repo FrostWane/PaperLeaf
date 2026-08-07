@@ -33,6 +33,83 @@ describe("ChatWorkspace", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it("Enter 发送，Shift+Enter 与中文输入法选词不误发，连续 Enter 不重复提交", async () => {
+    const session: ChatSession = { id: "s-enter", title: "新对话", type: "library", createdAt, updatedAt: createdAt };
+    const submit = vi.fn().mockResolvedValue({ sessionId: session.id, messageId: "m-enter", runId: "r-enter", status: "pending", replayed: false });
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValue([session]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      updateChatSession: vi.fn().mockResolvedValue({ ...session, title: "比较实验结果" }),
+      submitChatMessage: submit,
+      getAgentRun: vi.fn().mockResolvedValue({ ...activeRun(""), runId: "r-enter", sessionId: session.id, status: "pending" as const }),
+      subscribeAgentRun: vi.fn(async (_runId, _handlers, options) => { await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true })); }),
+    };
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+    const input = await screen.findByPlaceholderText(/输入问题/);
+    fireEvent.change(input, { target: { value: "比较实验结果" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", shiftKey: true });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 229 });
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(screen.getByText("Enter 发送 · Shift + Enter 换行")).toBeInTheDocument();
+  });
+
+  it("新对话尚未创建完成时禁用输入，避免问题误发到旧会话", async () => {
+    const previous: ChatSession = { id: "s-old", title: "旧对话", type: "library", createdAt, updatedAt: createdAt };
+    const next: ChatSession = { id: "s-new", title: "新对话", type: "library", createdAt, updatedAt: "2026-08-07T10:00:00Z" };
+    let resolveCreate!: (session: ChatSession) => void;
+    const submit = vi.fn().mockResolvedValue({ sessionId: next.id, messageId: "m-new", runId: "r-new", status: "pending", replayed: false });
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValueOnce([previous]).mockResolvedValue([next, previous]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      createChatSession: vi.fn(() => new Promise<ChatSession>((resolve) => { resolveCreate = resolve; })),
+      updateChatSession: vi.fn().mockResolvedValue({ ...next, title: "新会话问题" }),
+      submitChatMessage: submit,
+      getAgentRun: vi.fn().mockResolvedValue({ ...activeRun(""), runId: "r-new", sessionId: next.id, status: "pending" as const }),
+      subscribeAgentRun: vi.fn(async (_runId, _handlers, options) => { await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true })); }),
+    };
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+    await waitFor(() => expect(screen.getAllByText("旧对话")).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+    const input = screen.getByRole("textbox", { name: "向文献提问" });
+    expect(input).toBeDisabled();
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    expect(submit).not.toHaveBeenCalled();
+
+    act(() => resolveCreate(next));
+    await waitFor(() => expect(input).toBeEnabled());
+    await waitFor(() => expect(source.listChatMessages).toHaveBeenCalledWith(next.id));
+    fireEvent.change(input, { target: { value: "新会话问题" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(next.id, "新会话问题", expect.any(String), { webEnabled: false }));
+  });
+
+  it("跨文献历史会话每 15 条分页并按最近更新时间排序", async () => {
+    const sessions: ChatSession[] = Array.from({ length: 16 }, (_, index) => ({
+      id: `session-${index + 1}`,
+      title: `会话 ${String(index + 1).padStart(2, "0")}`,
+      type: "library",
+      createdAt,
+      updatedAt: `2026-08-${String(16 - index).padStart(2, "0")}T10:00:00Z`,
+    }));
+    const source = { ...demoDataSource, listChatSessions: vi.fn().mockResolvedValue(sessions), listChatMessages: vi.fn().mockResolvedValue([]) };
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+
+    const history = await screen.findByRole("complementary", { name: "历史对话" });
+    expect(within(history).getByText("会话 01")).toBeInTheDocument();
+    expect(within(history).queryByText("会话 16")).not.toBeInTheDocument();
+    expect(within(history).getByText("第 1 / 2 页")).toBeInTheDocument();
+    fireEvent.click(within(history).getByRole("button", { name: "下一页" }));
+    expect(await within(history).findByText("会话 16")).toBeInTheDocument();
+    expect(within(history).getByText("第 2 / 2 页")).toBeInTheDocument();
+  });
+
   it("已核验段落在界面中逐字呈现，而不是整段瞬间出现", async () => {
     const session = activeSession();
     let streamHandlers: Parameters<typeof demoDataSource.subscribeAgentRun>[1] | undefined;

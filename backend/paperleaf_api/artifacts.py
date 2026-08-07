@@ -597,6 +597,8 @@ def validate_structure_payload(
     raw: Any,
     evidence: list[Evidence],
     citation_aliases: dict[str, Evidence] | None = None,
+    *,
+    normalize_topology: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(raw, dict):
         return None, "模型输出格式不合法"
@@ -655,6 +657,18 @@ def validate_structure_payload(
         "结果": 4,
         "局限": 5,
     }
+    if normalize_topology:
+        ordered_nodes = sorted(
+            enumerate(nodes),
+            key=lambda item: (type_rank[item[1]["type"]], item[0]),
+        )
+        edges = [
+            {"source": current[1]["id"], "target": following[1]["id"]}
+            for current, following in zip(ordered_nodes, ordered_nodes[1:], strict=False)
+        ]
+        payload = {"nodes": nodes, "edges": edges}
+        payload["mermaid"] = _mermaid(payload)
+        return payload, None
     for edge in raw_edges:
         if not isinstance(edge, dict):
             return None, "模型输出格式不合法"
@@ -722,6 +736,16 @@ async def generate_structure_artifact(
                 continue
             return _structure_fallback(evidence, "模型输出格式不合法")
         payload, reason = validate_structure_payload(raw, evidence, citation_aliases)
+        if attempt == 1 and reason in {
+            "模型结构图包含孤立节点或循环关系",
+            "模型结构图未形成从研究问题出发的完整有向链路",
+        }:
+            payload, reason = validate_structure_payload(
+                raw,
+                evidence,
+                citation_aliases,
+                normalize_topology=True,
+            )
         if payload is not None:
             return ArtifactGeneration("ready", None, payload, "")
         if reason in {

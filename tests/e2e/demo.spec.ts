@@ -11,7 +11,7 @@ test("公开演示可以提问并通过引用跳到论文页", async ({ page }) 
     await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("提问");
   }
   const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
-  const citation = assistant.getByRole("button", { name: /PDF 6/ });
+  const citation = assistant.getByRole("button", { name: /PDF 第 6 页/ });
   await expect(citation).toBeVisible();
   await citation.click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
@@ -29,7 +29,7 @@ test("跨文献提问持久化运行状态并跳到引用物理页", async ({ pa
   await expect(trace).toBeVisible();
   await expect(trace).toContainText("检索");
   await expect(page.getByText(/离开页面不会中断|回答已完成并持久化/)).toBeVisible();
-  await page.getByRole("button", { name: /Attention Is All You Need.*PDF 2/ }).first().click();
+  await page.getByRole("button", { name: /Attention Is All You Need.*PDF 第 2 页/ }).first().click();
 
   await expect(page).toHaveURL(/\/library\/attention\?page=2/);
   const mobile = page.viewportSize()!.width <= 900;
@@ -67,7 +67,7 @@ test("论文工作台分隔条和引用保留完整可访问语义", async ({ pa
   }
   if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
   const assistant = mobile ? page.locator(".workspace-mobile .workspace-assistant.mobile-active") : page.locator(".workspace-desktop .workspace-assistant");
-  await expect(assistant.getByRole("button", { name: /PDF 2/ }).first()).toBeVisible();
+  await expect(assistant.getByRole("button", { name: /PDF 第 2 页/ }).first()).toBeVisible();
 });
 
 test("跨文献后台问答离开页面后继续，返回时恢复会话", async ({ page }) => {
@@ -95,14 +95,14 @@ test("公开演示可以生成证据化概览和结构图", async ({ page }) => 
   await assistant.getByRole("button", { name: "生成概览" }).click();
   await expect(assistant.getByText("模型归纳")).toBeVisible();
   for (const section of ["研究问题", "核心方法", "实验设置", "主要结果", "局限与适用范围"]) await expect(assistant.getByRole("region", { name: section })).toBeVisible();
-  await assistant.getByRole("button", { name: /查看 主要结果第 1 条事实的引用 2，PDF 第 12 页/ }).click();
+  await assistant.getByRole("button", { name: /引用 \[\d+\]，查看 PDF 第 12 页/ }).click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
   const reader = mobile ? page.locator(".workspace-mobile .workspace-reader.mobile-active") : page.locator(".workspace-desktop .workspace-reader");
   await expect(reader.getByText("12 / 15")).toBeVisible();
 
   if (mobile) await page.locator(".mobile-workspace-tabs").getByRole("button", { name: /^提问/ }).click();
   await assistant.getByRole("button", { name: "结构" }).click();
-  await assistant.getByRole("button", { name: "构建结构" }).click();
+  await assistant.getByRole("button", { name: "构建脑图" }).click();
   await expect(assistant.locator(".structure-outline > li")).toHaveCount(8);
   await assistant.getByRole("button", { name: /方法：以多头自注意力替代循环，查看首条证据 PDF 第 4 页/ }).click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");

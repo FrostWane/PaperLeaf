@@ -1,6 +1,5 @@
 "use client";
 
-import { BookOpen } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { collectionForest, findCollection } from "@/lib/collections";
 import { getDataSource } from "@/lib/data-source";
@@ -62,7 +61,6 @@ export function AskView() {
         <span className="eyebrow">回答范围</span><h2>选择要检索的内容</h2>
         <CollectionTree collections={collections} selectedId={scopeKey} onSelect={setScopeKey} allCount={allReadyCount} disabled={scopesLoading} label="问答集合范围" />
         {scopesError && <p className="field-error" role="alert">{scopesError}</p>}
-        <div className="scope-note"><BookOpen size={17} /><p>范围由服务端递归解析，只使用你有权访问且完成索引的文献。</p></div>
       </aside>
       <ChatWorkspace
         binding={binding}

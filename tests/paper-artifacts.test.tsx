@@ -33,7 +33,7 @@ describe("PaperWorkspace 证据化产物", () => {
     const { container } = render(<PaperWorkspace demo paperId="attention" />);
     const assistant = within(container.querySelector(".workspace-desktop .workspace-assistant") as HTMLElement);
     fireEvent.click(assistant.getByRole("button", { name: "结构" }));
-    fireEvent.click(assistant.getByRole("button", { name: "构建结构" }));
+    fireEvent.click(assistant.getByRole("button", { name: "构建脑图" }));
 
     expect(await assistant.findByRole("list", { name: "结构节点与原文页码" })).toBeInTheDocument();
     expect(buildStructure).toHaveBeenNthCalledWith(1, "attention", { refresh: false });

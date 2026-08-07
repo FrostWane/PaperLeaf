@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import { CurrentUserProvider } from "@/components/current-user-provider";
 import "./globals.css";
 
 function metadataBaseFromRequest(requestHeaders: Headers) {
@@ -60,7 +61,7 @@ export default function RootLayout({
       <body
         className={`${GeistSans.variable} ${GeistMono.variable}`}
       >
-        {children}
+        <CurrentUserProvider>{children}</CurrentUserProvider>
       </body>
     </html>
   );

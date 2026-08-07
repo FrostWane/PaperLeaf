@@ -205,6 +205,7 @@ def run_smoke(config: SmokeConfig) -> None:
     client = PaperLeafClient(config)
     paper_id = None
     collection_id = None
+    child_collection_id = None
     deleted = False
 
     print("[1/8] 等待 API ready")
@@ -387,7 +388,12 @@ def run_smoke(config: SmokeConfig) -> None:
                 )
             except Exception:
                 print("清理提示：临时论文未能自动删除，请按 paper id 从管理员作业中检查。")
-        for resource, resource_id in (("collections", collection_id),):
+        # 先删除子集合，再删除父集合；否则父集合删除语义会把子集合提升为顶层，
+        # 让一次安全冒烟在真实文献库里残留空集合。
+        for resource, resource_id in (
+            ("collections", child_collection_id),
+            ("collections", collection_id),
+        ):
             if not resource_id:
                 continue
             try:

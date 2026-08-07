@@ -478,13 +478,13 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} onOpenCitation={(citation) => openCitation(citation.page)} />;
 
   const summaryContent = <div className="artifact-panel">
-    <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>按研究问题、核心方法、实验设置、主要结果和局限整理，每条事实都能回到原文。</p></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || summary?.status === "processing"} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在提交" : summary?.status === "processing" ? "后台生成中" : summary ? "重新生成" : "生成概览"}</button>}</div>
-    {!summary && !artifactMessage && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "生成后，每条事实都会附带可点击的物理页码。" : "PDF 仍可阅读；总结功能会在索引就绪后开放。"}</p></div>}
-    {busy === "summary" && <div className="artifact-state" role="status"><strong>正在提交后台任务</strong><p>提交后可以离开当前页面，不会中断概括生成。</p></div>}
+    <div className="artifact-heading"><div><h3>论文概览</h3></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || summary?.status === "processing"} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在提交" : summary?.status === "processing" ? "后台生成中" : summary ? "重新生成" : "生成概览"}</button>}</div>
+    {!summary && !artifactMessage && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong></div>}
+    {busy === "summary" && <div className="artifact-state" role="status"><strong>正在提交后台任务</strong></div>}
     {summary?.status === "processing" && <div className="artifact-state" role="status"><strong>{summary.sections.length > 0 ? "正在后台更新概览" : "概览正在后台生成"}</strong><p>{summary.sections.length > 0 ? "当前继续显示上次成功结果，更新完成后会自动替换。" : "可以继续阅读或离开页面，返回后会恢复进度。通常需要 1～3 分钟。"}</p></div>}
     {summary?.status === "failed" && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactFailureMessage(summary.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
     {summary && summary.status !== "failed" && summary.sections.length > 0 && <article className="summary-artifact">
-      <div className="artifact-mode"><span>模型归纳</span><em>{summary.citations.length} 条页码证据</em></div>
+      <div className="artifact-mode"><span>已生成</span><em>{summary.citations.length} 条引用</em></div>
       {summary.stale && <p className="artifact-stale-note" role="status">这份概览基于论文上一次索引生成，当前已过期。重新生成后才会使用最新页面内容。</p>}
       <StructuredSummary sections={summary.sections} citations={summary.citations} paperTitle={paper.title} onOpenPage={openCitation} />
     </article>}
@@ -492,9 +492,9 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   </div>;
 
   const structureContent = <div className="artifact-panel">
-    <div className="artifact-heading"><div><span className="eyebrow">研究逻辑脑图</span><h3>问题到局限的证据链</h3><p>由模型提炼问题、方法、实验、结果与局限；节点引用必须通过物理页校验。</p></div>{structure?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || structure?.status === "processing"} onClick={() => void generateStructure(Boolean(structure))}>{busy === "structure" ? "正在提交" : structure?.status === "processing" ? "后台生成中" : structure ? "重新构建" : "构建结构"}</button>}</div>
-    {!structure && !artifactMessage && <div className="artifact-empty"><Network size={20} /><strong>{readyForArtifacts ? "尚未构建研究脑图" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "研究逻辑与页码证据全部通过核验后才会显示。" : "索引完成后再提取论文研究逻辑。"}</p></div>}
-    {structure?.status === "processing" && <div className="artifact-state" role="status"><strong>研究脑图正在后台生成</strong><p>可以离开页面；返回后会继续查询，节点与页码核验通过后才会显示。</p></div>}
+    <div className="artifact-heading"><div><h3>研究脑图</h3></div>{structure?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || structure?.status === "processing"} onClick={() => void generateStructure(Boolean(structure))}>{busy === "structure" ? "正在提交" : structure?.status === "processing" ? "后台生成中" : structure ? "重新构建" : "构建脑图"}</button>}</div>
+    {!structure && !artifactMessage && <div className="artifact-empty"><Network size={20} /><strong>{readyForArtifacts ? "尚未构建研究脑图" : "等待论文完成索引"}</strong></div>}
+    {structure?.status === "processing" && <div className="artifact-state" role="status"><strong>研究脑图正在后台生成</strong><p>可以离开页面，完成后会自动显示。</p></div>}
     {structure?.status === "failed" && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactFailureMessage(structure.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
     {structure && structure.status !== "failed" && structure.nodes.length > 0 && <>{structure.stale && <p className="artifact-stale-note" role="status">这份研究脑图基于旧索引，重新构建后才会使用最新页面内容。</p>}<StructureDiagram key={structure.mermaid} graph={structure} paperTitle={paper.title} onOpenPage={openCitation} /></>}
     {artifactMessage && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}

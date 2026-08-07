@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronRight, History, LoaderCircle, MessageSquarePlus, Pencil, RotateCw, Send, Square, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, History, LoaderCircle, MessageSquarePlus, Pencil, RotateCw, Send, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getDataSource, type PaperLeafDataSource } from "@/lib/data-source";
 import type { AgentActivity, AgentRunSnapshot, ChatMessage, ChatSession, ChatSessionInput, Citation } from "@/lib/types";
@@ -14,6 +14,7 @@ export type ChatBinding =
 
 const activeStatuses = new Set(["pending", "running", "interrupted"]);
 const subscribedStatuses = new Set(["pending", "running"]);
+const historyPageSize = 15;
 const exampleQuestions = [
   "比较这些论文所采用的方法与关键假设",
   "哪些结论有直接实验结果支持？",
@@ -146,16 +147,28 @@ function phaseLabel(status: string | undefined): string {
 }
 
 function runStatusText(run: AgentRunSnapshot | null, connection: "connected" | "reconnecting"): string {
-  if (connection === "reconnecting" && isActiveRun(run)) return "连接已中断，正在补发遗漏事件";
+  if (connection === "reconnecting" && isActiveRun(run)) return "正在恢复连接…";
   if (!run) return "";
   if (run.error?.includes("暂时无法恢复")) return run.error;
   if (run.cancelRequested && isActiveRun(run)) return "正在取消后台问答…";
-  if (run.status === "pending") return "问题已保存，等待后台处理";
-  if (run.status === "running") return "后台仍在检索、生成与核验；离开页面不会中断";
+  if (run.status === "pending") return "正在等待处理，可离开页面";
+  if (run.status === "running") return "正在回答，可离开页面";
   if (run.status === "interrupted") return "运行已暂停，正在等待恢复";
   if (run.status === "completed") return "回答已完成并持久化";
   if (run.status === "cancelled") return "问答已取消";
   return run.error ? `问答失败：${run.error}` : "问答运行失败";
+}
+
+function sortedWorkspaceSessions(sessions: ChatSession[], binding: ChatBinding): ChatSession[] {
+  return sessions
+    .filter((session) => belongsToWorkspace(session, binding))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function historyPageForSession(sessions: ChatSession[], sessionId: string | null): number {
+  if (!sessionId) return 1;
+  const index = sessions.findIndex((session) => session.id === sessionId);
+  return index < 0 ? 1 : Math.floor(index / historyPageSize) + 1;
 }
 
 function createIdempotencyKey(): string {
@@ -208,13 +221,16 @@ export function ChatWorkspace({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
   const [historyOverride, setHistoryOverride] = useState<boolean | null>(null);
+  const [historyPage, setHistoryPage] = useState(1);
   const [connection, setConnection] = useState<"connected" | "reconnecting">("connected");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const terminalReloadRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
+  const creatingSessionRef = useRef(false);
   const submissionAttemptRef = useRef<{ sessionId: string; content: string; key: string } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const narrowViewport = useSyncExternalStore(subscribeChatNarrow, getChatNarrow, () => false);
@@ -235,7 +251,12 @@ export function ChatWorkspace({
   const active = submitting || (currentRun ? isActiveRun(currentRun) : isActiveSession(selected));
   const progressiveAnswer = useProgressiveAnswer(liveAnswer, currentRun?.runId ?? selected?.id ?? "empty");
   const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === selected?.id && message.content.trim() && !(Boolean(currentRun && liveAnswer) && message.role === "assistant" && message.runId === currentRun?.runId)), [currentRun, liveAnswer, messages, selected?.id]);
-  const visibleSessions = useMemo(() => sessions.filter((session) => belongsToWorkspace(session, stableBinding)), [sessions, stableBinding]);
+  const visibleSessions = useMemo(() => sortedWorkspaceSessions(sessions, stableBinding), [sessions, stableBinding]);
+  const historyPageCount = Math.max(1, Math.ceil(visibleSessions.length / historyPageSize));
+  const effectiveHistoryPage = Math.min(Math.max(1, historyPage), historyPageCount);
+  const pagedSessions = compact
+    ? visibleSessions
+    : visibleSessions.slice((effectiveHistoryPage - 1) * historyPageSize, effectiveHistoryPage * historyPageSize);
 
   useEffect(() => {
     selectedIdRef.current = selected?.id ?? null;
@@ -249,8 +270,9 @@ export function ChatWorkspace({
     const candidate = next.find((item) => item.id === preferred && belongsToWorkspace(item, stableBinding))
       ?? next.find((item) => belongsToWorkspace(item, stableBinding) && matchesBinding(item, stableBinding));
     setSelectedId(candidate?.id ?? null);
+    if (!compact) setHistoryPage(historyPageForSession(sortedWorkspaceSessions(next, stableBinding), candidate?.id ?? null));
     return next;
-  }, [dataSource, selectedId, stableBinding, workspaceKey]);
+  }, [compact, dataSource, selectedId, stableBinding, workspaceKey]);
 
   useEffect(() => {
     let stopped = false;
@@ -261,13 +283,14 @@ export function ChatWorkspace({
       const candidate = next.find((item) => item.id === stored && belongsToWorkspace(item, stableBinding))
         ?? next.find((item) => belongsToWorkspace(item, stableBinding) && matchesBinding(item, stableBinding));
       setSelectedId(candidate?.id ?? null);
+      if (!compact) setHistoryPage(historyPageForSession(sortedWorkspaceSessions(next, stableBinding), candidate?.id ?? null));
     }).catch((reason: unknown) => {
       if (!stopped) setError(reason instanceof Error ? reason.message : "对话历史读取失败");
     }).finally(() => {
       if (!stopped) setLoading(false);
     });
     return () => { stopped = true; };
-  }, [dataSource, stableBinding, workspaceKey]);
+  }, [compact, dataSource, stableBinding, workspaceKey]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -346,15 +369,24 @@ export function ChatWorkspace({
   }, [currentRun, liveAnswer, messages, progressiveAnswer]);
 
   async function createSession() {
+    if (disabled || creatingSessionRef.current) return;
+    creatingSessionRef.current = true;
+    setCreatingSession(true);
     setError("");
+    let shouldFocus = false;
     try {
       const next = await dataSource.createChatSession(inputFromBinding(stableBinding));
       await refreshSessions(next.id);
       setSelectedId(next.id);
+      setHistoryPage(1);
       setHistoryOverride(compact || narrowViewport ? false : true);
-      textareaRef.current?.focus();
+      shouldFocus = true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "新建对话失败");
+    } finally {
+      creatingSessionRef.current = false;
+      setCreatingSession(false);
+      if (shouldFocus) window.requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }
 
@@ -395,7 +427,7 @@ export function ChatWorkspace({
       textareaRef.current?.focus();
       return;
     }
-    if (active || disabled || submittingRef.current) return;
+    if (active || disabled || creatingSessionRef.current || submittingRef.current) return;
     submittingRef.current = true;
     setSubmitting(true);
     setError("");
@@ -490,12 +522,12 @@ export function ChatWorkspace({
   };
 
   return (
-    <div className={compact ? "chat-workspace compact" : "chat-workspace"} data-active-run={active ? "true" : "false"}>
+    <div className={compact ? "chat-workspace compact" : "chat-workspace"} data-active-run={active || creatingSession ? "true" : "false"}>
       <header className="chat-toolbar">
-        <div><span className="eyebrow">持久化问答</span><strong>{selected?.title ?? "尚未选择对话"}</strong><small>范围：{scopeLabel}</small></div>
+        <div><strong>{selected?.title ?? "新对话"}</strong><small>{scopeLabel}</small></div>
         <div className="chat-toolbar-actions">
           <button type="button" className="secondary-button" aria-expanded={historyOpen} onClick={() => setHistoryOverride(!historyOpen)}><History size={15} />历史</button>
-          <button type="button" className="secondary-button" disabled={disabled} onClick={() => void createSession()}><MessageSquarePlus size={15} />新对话</button>
+          <button type="button" className="secondary-button" disabled={disabled || creatingSession} onClick={() => void createSession()}><MessageSquarePlus size={15} />新对话</button>
         </div>
       </header>
 
@@ -504,7 +536,7 @@ export function ChatWorkspace({
           <div className="chat-history-head"><strong>历史对话</strong>{(compact || narrowViewport) && <button type="button" className="icon-button" aria-label="关闭历史对话" onClick={() => setHistoryOverride(false)}><X size={15} /></button>}</div>
           {visibleSessions.length === 0 && <p>还没有对话。新问题会自动保存在这里。</p>}
           <div className="chat-session-list">
-            {visibleSessions.map((session) => <div className={session.id === selectedId ? "chat-session active" : "chat-session"} key={session.id}>
+            {pagedSessions.map((session) => <div className={session.id === selectedId ? "chat-session active" : "chat-session"} key={session.id}>
               {renamingId === session.id ? <form onSubmit={(event) => { event.preventDefault(); void saveRename(session.id); }}><input autoFocus aria-label="对话标题" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} maxLength={80} /><button type="submit" className="icon-button" aria-label="保存标题"><Check size={14} /></button><button type="button" className="icon-button" aria-label="取消重命名" onClick={() => setRenamingId(null)}><X size={14} /></button></form> : <>
                 <button type="button" className="chat-session-select" onClick={() => selectSession(session)}><span>{session.title}</span><small>{session.currentRunStatus && activeStatuses.has(session.currentRunStatus) ? "后台运行中" : new Date(session.updatedAt).toLocaleDateString("zh-CN")}</small></button>
                 <button type="button" className="icon-button" aria-label={`重命名对话 ${session.title}`} disabled={isActiveSession(session)} onClick={() => { setRenamingId(session.id); setRenameDraft(session.title); }}><Pencil size={13} /></button>
@@ -512,11 +544,16 @@ export function ChatWorkspace({
               </>}
             </div>)}
           </div>
+          {!compact && visibleSessions.length > historyPageSize && <nav className="chat-history-pagination" aria-label="历史对话分页">
+            <button type="button" className="icon-button" aria-label="上一页" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(Math.max(1, effectiveHistoryPage - 1))}><ChevronLeft size={15} /></button>
+            <span aria-live="polite">第 {effectiveHistoryPage} / {historyPageCount} 页</span>
+            <button type="button" className="icon-button" aria-label="下一页" disabled={effectiveHistoryPage >= historyPageCount} onClick={() => setHistoryPage(Math.min(historyPageCount, effectiveHistoryPage + 1))}><ChevronRight size={15} /></button>
+          </nav>}
         </aside>}
 
-        <section className="chat-thread" aria-label="对话消息" aria-busy={active}>
+        <section className="chat-thread" aria-label="对话消息" aria-busy={active || creatingSession}>
           {loading && <div className="chat-empty" role="status"><LoaderCircle className="spinner-icon" size={20} />正在恢复对话…</div>}
-          {!loading && visibleMessages.length === 0 && !liveAnswer && <div className="chat-empty"><strong>从可核对的证据开始</strong><p>回答会在完整事实段落通过引用核验后显示。离开页面不会取消后台运行。</p><div className="chat-prompts"><span>可以这样问</span>{exampleQuestions.map((prompt) => <button type="button" key={prompt} onClick={() => fillPrompt(prompt)}>{prompt}<ChevronRight size={14} /></button>)}</div></div>}
+          {!loading && visibleMessages.length === 0 && !liveAnswer && <div className="chat-empty"><strong>向文献提问</strong><div className="chat-prompts"><span>可以这样问</span>{exampleQuestions.map((prompt) => <button type="button" key={prompt} onClick={() => fillPrompt(prompt)}>{prompt}<ChevronRight size={14} /></button>)}</div></div>}
           {visibleMessages.map((message) => <article key={message.id} className={`chat-message ${message.role}`} aria-label={message.role === "user" ? "你的消息" : "PaperLeaf 回复"}>
             <span className="chat-message-author">{message.role === "user" ? "你" : "PaperLeaf"}{message.role === "assistant" && message.status !== "completed" ? ` · ${message.status === "failed" ? "回答失败，已保留核验段落" : message.status === "cancelled" ? "已取消，已保留核验段落" : "正在写入"}` : ""}</span>
             {message.role === "assistant" ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p>{message.content}</p>}
@@ -539,8 +576,12 @@ export function ChatWorkspace({
       </div>
 
       <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void submitQuestion(); }}>
-        <label><span className="sr-only">向文献提问</span><textarea ref={textareaRef} rows={compact ? 2 : 3} value={draft} disabled={disabled} onChange={(event) => { setDraft(event.target.value); if (error) setError(""); }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitQuestion(); } }} placeholder={disabled ? "等待论文完成索引后可提问" : "输入问题；回答将附上可回读页码…"} /><button type="submit" className="send-button" disabled={active || disabled || draft.trim().length < 3} aria-label="发送问题"><Send size={16} /></button></label>
-        <div><span>{active ? "当前对话正在后台处理，暂不能重复提交" : webEnabled ? "联网按个人设置启用；导入论文仍需确认" : "示例问题只会填入输入框，不会自动发送"}</span><span>Ctrl + Enter</span></div>
+        <label><span className="sr-only">向文献提问</span><textarea ref={textareaRef} rows={compact ? 2 : 3} value={draft} disabled={disabled || creatingSession} onChange={(event) => { setDraft(event.target.value); if (error) setError(""); }} onKeyDown={(event) => {
+          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+          event.preventDefault();
+          if (!active && !disabled && !creatingSessionRef.current && draft.trim().length >= 3) void submitQuestion();
+        }} placeholder={disabled ? "等待论文完成索引后可提问" : creatingSession ? "正在新建对话…" : "输入问题；回答将附上可回读页码…"} /><button type="submit" className="send-button" disabled={active || disabled || creatingSession || draft.trim().length < 3} aria-label="发送问题"><Send size={16} /></button></label>
+        <div><span>{creatingSession ? "正在新建对话…" : active ? "正在回答，可离开页面" : ""}</span><span>Enter 发送 · Shift + Enter 换行</span></div>
       </form>
     </div>
   );
