@@ -416,6 +416,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const summaryContent = <div className="artifact-panel">
     <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>按研究问题、核心方法、实验设置、主要结果和局限整理，每条事实都能回到原文。</p></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在生成" : summary ? "重新生成" : "生成概览"}</button>}</div>
     {!summary && !artifactMessage && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "生成后，每条事实都会附带可点击的物理页码。" : "PDF 仍可阅读；总结功能会在索引就绪后开放。"}</p></div>}
+    {busy === "summary" && <div className="artifact-state" role="status"><strong>正在阅读全文并生成概括</strong><p>通常需要 30～90 秒；模型响应较慢时会自动使用精简证据重试。</p></div>}
     {summary?.status === "processing" && <div className="artifact-state" role="status"><strong>概览仍在生成</strong><p>完成后会显示经过页码核验的五部分总结。</p></div>}
     {summary?.status === "failed" && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactFailureMessage(summary.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
     {summary && summary.status !== "failed" && summary.status !== "processing" && <article className="summary-artifact">

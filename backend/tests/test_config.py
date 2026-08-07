@@ -50,6 +50,12 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
     [
         ({"model_timeout_seconds": 0}, "模型超时"),
         ({"model_timeout_seconds": 121}, "不能超过 120 秒"),
+        ({"artifact_timeout_seconds": 0}, "论文产物生成超时"),
+        ({"artifact_retry_timeout_seconds": 121}, "论文产物单次超时"),
+        (
+            {"artifact_timeout_seconds": 40, "artifact_retry_timeout_seconds": 45},
+            "精简重试超时不能大于",
+        ),
         ({"model_attempts_per_provider": 4}, "尝试次数"),
         ({"model_circuit_failure_threshold": 0}, "失败阈值"),
         ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),

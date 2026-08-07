@@ -18,12 +18,14 @@ from paperleaf_api.rag.citations import Evidence
 class FakeSummaryRouter:
     def __init__(self, content: str) -> None:
         self.content = content
+        self.timeouts: list[float | None] = []
 
     def has_provider(self, purpose: str) -> bool:
         return purpose == "summary"
 
-    async def execute(self, purpose: str, operation):
+    async def execute(self, purpose: str, operation, *, timeout_seconds=None):
         assert purpose == "summary"
+        self.timeouts.append(timeout_seconds)
         return SimpleNamespace(content=self.content)
 
 
@@ -33,11 +35,13 @@ class TimeoutThenSummaryRouter(FakeSummaryRouter):
         self.calls = 0
         self.always_timeout = always_timeout
 
-    async def execute(self, purpose: str, operation):
+    async def execute(self, purpose: str, operation, *, timeout_seconds=None):
         self.calls += 1
+        self.timeouts.append(timeout_seconds)
         if self.calls == 1 or self.always_timeout:
             raise ModelRuntimeError("MODEL_TIMEOUT", [])
-        return await super().execute(purpose, operation)
+        assert purpose == "summary"
+        return SimpleNamespace(content=self.content)
 
 
 class SequenceSummaryRouter(FakeSummaryRouter):
@@ -46,8 +50,9 @@ class SequenceSummaryRouter(FakeSummaryRouter):
         self.contents = contents
         self.calls = 0
 
-    async def execute(self, purpose: str, operation):
+    async def execute(self, purpose: str, operation, *, timeout_seconds=None):
         assert purpose == "summary"
+        self.timeouts.append(timeout_seconds)
         content = self.contents[self.calls]
         self.calls += 1
         return SimpleNamespace(content=content)
@@ -277,6 +282,7 @@ def test_structured_summary_retries_format_once_but_not_invalid_citation() -> No
     retried = SequenceSummaryRouter(["not-json", _summary_json()])
     result = asyncio.run(generate_summary_artifact(_evidence(), model_router=retried))
     assert retried.calls == 2
+    assert retried.timeouts == [75, 45]
     assert result.status == "ready"
 
     invalid = json.loads(_summary_json())

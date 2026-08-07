@@ -70,6 +70,12 @@ class Settings:
         "PAPERLEAF_FALLBACK_EMBEDDING_MODEL", "text-embedding-3-small"
     )
     model_timeout_seconds: float = float(os.getenv("PAPERLEAF_MODEL_TIMEOUT_SECONDS", "30"))
+    artifact_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS", "75")
+    )
+    artifact_retry_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS", "45")
+    )
     model_attempts_per_provider: int = int(
         os.getenv("PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER", "1")
     )
@@ -124,6 +130,16 @@ class Settings:
             raise RuntimeError(
                 "模型单次超时不能超过 120 秒，以确保明显短于 Worker 租约"
             )
+        artifact_timeouts = (
+            self.artifact_timeout_seconds,
+            self.artifact_retry_timeout_seconds,
+        )
+        if any(value <= 0 for value in artifact_timeouts):
+            raise RuntimeError("论文产物生成超时必须大于 0")
+        if any(value > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS for value in artifact_timeouts):
+            raise RuntimeError("论文产物单次超时不能超过 120 秒")
+        if self.artifact_retry_timeout_seconds > self.artifact_timeout_seconds:
+            raise RuntimeError("论文产物精简重试超时不能大于首次生成超时")
         if not 1 <= self.model_attempts_per_provider <= 3:
             raise RuntimeError("单端点模型尝试次数必须位于 1 到 3 之间")
         if self.model_circuit_failure_threshold < 1:

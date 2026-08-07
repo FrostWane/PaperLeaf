@@ -104,6 +104,8 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_FALLBACK_EMBEDDING_ENABLED` | 备用服务是否提供 Embeddings |
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
+| `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 全文概括与结构图首次生成超时，默认 75 秒 |
+| `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 产物精简证据重试超时，默认 45 秒 |
 | `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务最多尝试次数，范围 1~3 |
 | `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败多少次后打开熔断器 |
 | `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断后的冷却时间 |

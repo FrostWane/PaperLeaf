@@ -402,6 +402,7 @@ async def _invoke_artifact_model(
     system_prompt: str,
     *,
     compact: bool,
+    timeout_seconds: float,
 ) -> Any:
     selected = _spread_evidence(evidence, 6 if compact else 10)
     excerpt_chars = 650 if compact else 1200
@@ -435,7 +436,7 @@ async def _invoke_artifact_model(
             ]
         )
 
-    return await router.execute("summary", invoke)
+    return await router.execute("summary", invoke, timeout_seconds=timeout_seconds)
 
 
 def _response_json(response: Any) -> Any:
@@ -459,17 +460,23 @@ async def generate_summary_artifact(
         "每节含 facts 数组；每个事实为 {text,citations}，citations 至少一个，"
         "每项必须逐字复制证据的 chunk_id 与 physical_page。"
     )
+    full_timeout = float(getattr(config, "artifact_timeout_seconds", 75))
+    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 45))
     for attempt in range(2):
         try:
             response = await _invoke_artifact_model(
-                router, evidence, prompt, compact=attempt == 1
+                router,
+                evidence,
+                prompt,
+                compact=attempt == 1,
+                timeout_seconds=retry_timeout if attempt == 1 else full_timeout,
             )
             raw = _response_json(response)
         except ModelRuntimeError as exc:
             if exc.error_code == "MODEL_TIMEOUT" and attempt == 0:
                 continue
             reason = (
-                "论文总结模型响应超时"
+                "论文总结模型在完整与精简两次生成中均响应超时"
                 if exc.error_code == "MODEL_TIMEOUT"
                 else "论文总结模型暂不可用"
             )
@@ -660,17 +667,23 @@ async def generate_structure_artifact(
         "方法、实验、结果、局限。edges 只含 source,target。每节点至少一个合法证据引用；"
         "所有节点必须连通，边构成无环的 问题→方法→实验→结果→局限 逻辑。"
     )
+    full_timeout = float(getattr(config, "artifact_timeout_seconds", 75))
+    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 45))
     for attempt in range(2):
         try:
             response = await _invoke_artifact_model(
-                router, evidence, prompt, compact=attempt == 1
+                router,
+                evidence,
+                prompt,
+                compact=attempt == 1,
+                timeout_seconds=retry_timeout if attempt == 1 else full_timeout,
             )
             raw = _response_json(response)
         except ModelRuntimeError as exc:
             if exc.error_code == "MODEL_TIMEOUT" and attempt == 0:
                 continue
             reason = (
-                "论文结构图模型响应超时"
+                "论文结构图模型在完整与精简两次生成中均响应超时"
                 if exc.error_code == "MODEL_TIMEOUT"
                 else "论文结构图模型暂不可用"
             )
