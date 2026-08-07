@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { ArtifactCitation, SummarySection } from "@/lib/types";
+import { artifactCitationSources, CitationMarkers, CitationSources } from "./citation-sources";
 
 export interface SummaryContentProps {
   content: string;
@@ -39,7 +40,7 @@ function renderInlineReferences(
     if (markerIndex > lastIndex) nodes.push(text.slice(lastIndex, markerIndex));
 
     if (!citation) {
-      nodes.push(marker);
+      nodes.push(chunkId ? "[引用不可用]" : marker);
     } else {
       const number = citation.index + 1;
       nodes.push(
@@ -48,7 +49,7 @@ function renderInlineReferences(
           type="button"
           className="inline-citation"
           aria-label={`引用 [${number}]，查看 PDF 第 ${citation.citation.physicalPage} 页`}
-          title={`${marker} · PDF ${citation.citation.physicalPage}`}
+          title={`引用 [${number}] · PDF 第 ${citation.citation.physicalPage} 页`}
           onClick={() => onOpenPage(citation.citation.physicalPage)}
         >
           [{number}]
@@ -140,18 +141,18 @@ export function SummaryContent({ content, citations, onOpenPage }: SummaryConten
   return <div className="summary-content">{blocks}</div>;
 }
 
-export function StructuredSummary({ sections, onOpenPage }: { sections: SummarySection[]; onOpenPage: (page: number) => void }) {
+export function StructuredSummary({ sections, citations, paperTitle, onOpenPage }: { sections: SummarySection[]; citations: ArtifactCitation[]; paperTitle: string; onOpenPage: (page: number) => void }) {
+  const sources = artifactCitationSources([
+    ...sections.flatMap((section) => section.facts.flatMap((fact) => fact.citations)),
+    ...citations,
+  ], paperTitle);
   return <div className="summary-sections">
     {sections.map((section, sectionIndex) => <section key={section.key} className="summary-section" aria-label={section.title}>
       <div className="summary-section-heading"><span>{String(sectionIndex + 1).padStart(2, "0")}</span><h4>{section.title}</h4></div>
       <ul>{section.facts.map((fact, factIndex) => <li key={`${section.key}-${factIndex}`}>
-        <p>{fact.text}</p>
-        <div className="summary-fact-citations" aria-label={`${section.title}第 ${factIndex + 1} 条事实的原文引用`}>
-          {fact.citations.map((citation, citationIndex) => <button key={`${citation.chunkId}-${citation.physicalPage}`} type="button" aria-label={`查看 ${section.title}第 ${factIndex + 1} 条事实的引用 ${citationIndex + 1}，PDF 第 ${citation.physicalPage} 页`} onClick={() => onOpenPage(citation.physicalPage)}>
-            PDF {citation.physicalPage}<span className="mono">{citation.chunkId}</span>
-          </button>)}
-        </div>
+        <p>{fact.text} <CitationMarkers citations={fact.citations} sources={sources} label={`${section.title}第 ${factIndex + 1} 条事实的原文引用`} onOpen={(source) => onOpenPage(source.page)} /></p>
       </li>)}</ul>
     </section>)}
+    <CitationSources sources={sources} onOpen={(source) => onOpenPage(source.page)} />
   </div>;
 }

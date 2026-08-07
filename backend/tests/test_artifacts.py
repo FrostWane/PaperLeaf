@@ -195,11 +195,11 @@ def test_extractive_summary_spreads_evidence_across_the_paper() -> None:
 
 def _summary_json() -> str:
     rows = (
-        ("research_question", "研究可复核检索。", "c1", 2),
-        ("core_method", "方法采用页级检索。", "c1", 2),
-        ("experimental_setup", "实验检查引用定位。", "c2", 5),
-        ("main_results", "引用能够定位原文。", "c2", 5),
-        ("limitations_scope", "证据仅覆盖当前论文。", "c2", 5),
+        ("research_question", "研究可复核检索。", "E1", 2),
+        ("core_method", "方法采用页级检索。", "E1", 2),
+        ("experimental_setup", "实验检查引用定位。", "E2", 5),
+        ("main_results", "引用能够定位原文。", "E2", 5),
+        ("limitations_scope", "证据仅覆盖当前论文。", "E2", 5),
     )
     return json.dumps(
         {
@@ -210,7 +210,7 @@ def _summary_json() -> str:
                         {
                             "text": text,
                             "citations": [
-                                {"chunk_id": chunk_id, "physical_page": page}
+                                {"evidence_id": chunk_id, "physical_page": page}
                             ],
                         }
                     ],
@@ -236,7 +236,7 @@ def _structure_json(
             "summary": f"节点 {index} 的可核验内容",
             "citations": [
                 {
-                    "chunk_id": "c1" if index < 3 else "c2",
+                    "evidence_id": "E1" if index < 3 else "E2",
                     "physical_page": 2 if index < 3 else 5,
                 }
             ],
@@ -275,6 +275,11 @@ def test_structured_summary_has_five_sections_and_fact_citations() -> None:
         "局限与适用范围",
     ]
     assert all(item["facts"][0]["citations"] for item in result.payload["sections"])
+    assert result.payload["citations"][0] == {
+        "chunk_id": "c1",
+        "physical_page": 2,
+        "quote": "论文提出一种可复核的检索方法。",
+    }
     assert "## 研究问题" in result.markdown
 
 
@@ -286,7 +291,7 @@ def test_structured_summary_retries_format_once_but_not_invalid_citation() -> No
     assert result.status == "ready"
 
     invalid = json.loads(_summary_json())
-    invalid["sections"][0]["facts"][0]["citations"][0]["chunk_id"] = "forged"
+    invalid["sections"][0]["facts"][0]["citations"][0]["evidence_id"] = "forged"
     router = SequenceSummaryRouter([json.dumps(invalid, ensure_ascii=False)])
     result = asyncio.run(generate_summary_artifact(_evidence(), model_router=router))
     assert router.calls == 1
@@ -337,6 +342,7 @@ def test_structure_requires_valid_semantic_nodes_and_acyclic_edges() -> None:
     assert len(result.payload["nodes"]) == 5
     assert result.payload["mermaid"].startswith("flowchart TD")
     assert all(item["citations"] for item in result.payload["nodes"])
+    assert result.payload["nodes"][0]["citations"][0]["chunk_id"] == "c1"
 
     invalid_router = SequenceSummaryRouter(
         [_structure_json(bad_type=True), _structure_json(bad_type=True)]
@@ -369,6 +375,22 @@ def test_structure_requires_valid_semantic_nodes_and_acyclic_edges() -> None:
     assert disconnected.status == "failed"
     assert disconnected.fallback_reason == "模型结构图未形成从研究问题出发的完整有向链路"
     assert disconnected.payload["nodes"] == []
+
+
+def test_structure_retries_unknown_evidence_alias_with_compact_context() -> None:
+    invalid = json.loads(_structure_json())
+    invalid["nodes"][0]["citations"][0]["evidence_id"] = "E99"
+    router = SequenceSummaryRouter(
+        [json.dumps(invalid, ensure_ascii=False), _structure_json()]
+    )
+
+    result = asyncio.run(
+        generate_structure_artifact(_evidence(), model_router=router)
+    )
+
+    assert router.calls == 2
+    assert router.timeouts == [180, 120]
+    assert result.status == "ready"
 
 
 def test_structure_without_model_never_builds_sequential_chunk_graph() -> None:

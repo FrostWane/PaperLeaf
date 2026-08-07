@@ -21,7 +21,7 @@ describe("PaperWorkspace 证据化产物", () => {
     expect(await assistant.findByRole("region", { name: "研究问题" })).toBeInTheDocument();
     expect(summarize).toHaveBeenNthCalledWith(1, "attention", { refresh: false });
     expect(assistant.getAllByRole("region")).toHaveLength(5);
-    fireEvent.click(assistant.getByRole("button", { name: /查看 主要结果第 1 条事实的引用 2，PDF 第 12 页/ }));
+    fireEvent.click(assistant.getByRole("button", { name: /引用 \[\d+\]，查看 PDF 第 12 页/ }));
     expect(within(container.querySelector(".workspace-desktop .workspace-reader") as HTMLElement).getByText("12 / 15")).toBeInTheDocument();
 
     fireEvent.click(assistant.getByRole("button", { name: "重新生成" }));

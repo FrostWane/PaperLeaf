@@ -257,6 +257,7 @@ class ArxivImportRequest(BaseModel):
 class ArtifactCitation(BaseModel):
     chunk_id: str
     physical_page: int
+    quote: Optional[str] = None
 
 
 class SummaryFact(BaseModel):

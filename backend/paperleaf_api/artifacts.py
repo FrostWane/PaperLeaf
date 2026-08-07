@@ -293,7 +293,16 @@ def artifact_source_revision(evidence: list[Evidence]) -> str:
     return digest.hexdigest()
 
 
-def _citation_values(raw: Any, evidence: list[Evidence]) -> list[dict[str, Any]] | None:
+def _citation_quote(text: str, limit: int = 240) -> str:
+    normalized = " ".join(text.split())
+    return normalized if len(normalized) <= limit else f"{normalized[: limit - 1].rstrip()}…"
+
+
+def _citation_values(
+    raw: Any,
+    evidence: list[Evidence],
+    citation_aliases: dict[str, Evidence] | None = None,
+) -> list[dict[str, Any]] | None:
     if not isinstance(raw, list) or not raw:
         return None
     by_chunk = {item.chunk_id: item for item in evidence}
@@ -301,13 +310,23 @@ def _citation_values(raw: Any, evidence: list[Evidence]) -> list[dict[str, Any]]
     for item in raw:
         if not isinstance(item, dict):
             return None
-        chunk_id = item.get("chunk_id")
+        reference = item.get("evidence_id", item.get("chunk_id"))
         physical_page = item.get("physical_page")
-        source = by_chunk.get(chunk_id) if isinstance(chunk_id, str) else None
+        if not isinstance(reference, str):
+            return None
+        source = (
+            citation_aliases.get(reference)
+            if citation_aliases is not None
+            else by_chunk.get(reference)
+        )
         if source is None or physical_page != source.physical_page:
             return None
         values.append(
-            {"chunk_id": source.chunk_id, "physical_page": source.physical_page}
+            {
+                "chunk_id": source.chunk_id,
+                "physical_page": source.physical_page,
+                "quote": _citation_quote(source.text),
+            }
         )
     return list({item["chunk_id"]: item for item in values}.values())
 
@@ -325,7 +344,9 @@ def _summary_fallback(evidence: list[Evidence], reason: str) -> ArtifactGenerati
 
 
 def validate_summary_payload(
-    raw: Any, evidence: list[Evidence]
+    raw: Any,
+    evidence: list[Evidence],
+    citation_aliases: dict[str, Evidence] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(raw, dict) or not isinstance(raw.get("sections"), list):
         return None, "模型输出格式不合法"
@@ -358,7 +379,9 @@ def validate_summary_payload(
                 or not _CJK_RE.search(text)
             ):
                 return None, "模型输出格式不合法"
-            citations = _citation_values(fact.get("citations"), evidence)
+            citations = _citation_values(
+                fact.get("citations"), evidence, citation_aliases
+            )
             if citations is None:
                 return None, "模型引用未通过证据校验"
             for citation in citations:
@@ -399,13 +422,16 @@ async def _invoke_artifact_model(
     *,
     compact: bool,
     timeout_seconds: float,
-) -> Any:
+) -> tuple[Any, dict[str, Evidence]]:
     selected = _spread_evidence(evidence, 6 if compact else 10)
+    citation_aliases = {
+        f"E{index}": item for index, item in enumerate(selected, start=1)
+    }
     excerpt_chars = 650 if compact else 1200
     context = "\n\n".join(
-        f"[chunk:{item.chunk_id}｜物理页:{item.physical_page}]\n"
+        f"[证据:{alias}｜物理页:{item.physical_page}]\n"
         f"{item.text[:excerpt_chars]}"
-        for item in selected
+        for alias, item in citation_aliases.items()
     )
 
     async def invoke(provider: ModelProvider):
@@ -432,7 +458,8 @@ async def _invoke_artifact_model(
             ]
         )
 
-    return await router.execute("summary", invoke, timeout_seconds=timeout_seconds)
+    response = await router.execute("summary", invoke, timeout_seconds=timeout_seconds)
+    return response, citation_aliases
 
 
 def _response_json(response: Any) -> Any:
@@ -455,13 +482,14 @@ async def generate_summary_artifact(
         "根对象必须是 sections 数组，且恰好各含一次 key："
         "research_question、core_method、experimental_setup、main_results、limitations_scope。"
         "每节含 facts 数组；每个事实为 {text,citations}，citations 至少一个，"
-        "每项必须逐字复制证据的 chunk_id 与 physical_page。"
+        "每项格式为 {evidence_id,physical_page}，evidence_id 只能复制 E1、E2 等证据编号，"
+        "physical_page 必须与对应证据一致。"
     )
     full_timeout = float(getattr(config, "artifact_timeout_seconds", 120))
     retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 90))
     for attempt in range(2):
         try:
-            response = await _invoke_artifact_model(
+            response, citation_aliases = await _invoke_artifact_model(
                 router,
                 evidence,
                 prompt,
@@ -482,7 +510,7 @@ async def generate_summary_artifact(
             if attempt == 0:
                 continue
             return _summary_fallback(evidence, "模型输出格式不合法")
-        payload, reason = validate_summary_payload(raw, evidence)
+        payload, reason = validate_summary_payload(raw, evidence, citation_aliases)
         if payload is not None:
             return ArtifactGeneration("ready", None, payload, _summary_markdown(payload))
         if reason == "模型输出格式不合法" and attempt == 0:
@@ -566,7 +594,9 @@ def _mermaid(payload: dict[str, Any]) -> str:
 
 
 def validate_structure_payload(
-    raw: Any, evidence: list[Evidence]
+    raw: Any,
+    evidence: list[Evidence],
+    citation_aliases: dict[str, Evidence] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(raw, dict):
         return None, "模型输出格式不合法"
@@ -597,7 +627,7 @@ def validate_structure_payload(
             or not _CJK_RE.search(summary)
         ):
             return None, "模型输出格式不合法"
-        citations = _citation_values(node.get("citations"), evidence)
+        citations = _citation_values(node.get("citations"), evidence, citation_aliases)
         if citations is None:
             return None, "模型引用未通过证据校验"
         node_ids.add(node_id)
@@ -664,12 +694,13 @@ async def generate_structure_artifact(
         "type 只能是研究问题、背景、方法、数据、实验、结果、局限，且至少包含研究问题、"
         "方法、实验、结果、局限。edges 只含 source,target。每节点至少一个合法证据引用；"
         "所有节点必须连通，边构成无环的 问题→方法→实验→结果→局限 逻辑。"
+        "每项引用格式为 {evidence_id,physical_page}，evidence_id 只能使用 E1、E2 等证据编号。"
     )
-    full_timeout = float(getattr(config, "artifact_timeout_seconds", 120))
-    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 90))
+    full_timeout = float(getattr(config, "structure_timeout_seconds", 180))
+    retry_timeout = float(getattr(config, "structure_retry_timeout_seconds", 120))
     for attempt in range(2):
         try:
-            response = await _invoke_artifact_model(
+            response, citation_aliases = await _invoke_artifact_model(
                 router,
                 evidence,
                 prompt,
@@ -690,11 +721,12 @@ async def generate_structure_artifact(
             if attempt == 0:
                 continue
             return _structure_fallback(evidence, "模型输出格式不合法")
-        payload, reason = validate_structure_payload(raw, evidence)
+        payload, reason = validate_structure_payload(raw, evidence, citation_aliases)
         if payload is not None:
             return ArtifactGeneration("ready", None, payload, "")
         if reason in {
             "模型输出格式不合法",
+            "模型引用未通过证据校验",
             "模型结构图包含孤立节点或循环关系",
             "模型结构图未形成从研究问题出发的完整有向链路",
         } and attempt == 0:

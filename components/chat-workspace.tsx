@@ -4,6 +4,7 @@ import { Check, ChevronRight, History, LoaderCircle, MessageSquarePlus, Pencil, 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getDataSource, type PaperLeafDataSource } from "@/lib/data-source";
 import type { AgentActivity, AgentRunSnapshot, ChatMessage, ChatSession, ChatSessionInput, Citation } from "@/lib/types";
+import { chatCitationSources, CitationSources } from "./citation-sources";
 import { SafeMarkdown } from "./safe-markdown";
 
 export type ChatBinding =
@@ -94,13 +95,12 @@ function useProgressiveAnswer(target: string, resetKey: string): string {
 }
 
 function ChatCitations({ citations, onOpenCitation }: { citations: Citation[]; onOpenCitation?: (citation: Citation) => void }) {
-  if (citations.length === 0) return null;
-  return <div className="chat-citations" aria-label={`引用来源，共 ${citations.length} 条`}>
-    <p className="chat-citations-title">引用来源 · {citations.length}</p>
-    {citations.map((citation, index) => <button type="button" key={`${citation.id}-${index}`} title={`打开《${citation.paperTitle}》PDF 第 ${citation.page} 页`} onClick={() => onOpenCitation?.(citation)}>
-      <span>{index + 1}</span><span><strong>{citation.paperTitle}</strong><small>{citation.quote}</small></span><em>PDF {citation.page}</em>
-    </button>)}
-  </div>;
+  const sources = chatCitationSources(citations);
+  const citationsByChunk = new Map(citations.map((citation) => [citation.chunkId, citation]));
+  return <CitationSources sources={sources} onOpen={(source) => {
+    const citation = citationsByChunk.get(source.key);
+    if (citation) onOpenCitation?.(citation);
+  }} />;
 }
 
 function inputFromBinding(binding: ChatBinding, title = "新对话"): ChatSessionInput {

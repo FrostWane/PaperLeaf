@@ -39,6 +39,7 @@ describe("SafeMarkdown", () => {
     const onOpen = vi.fn();
     render(<SafeMarkdown content="结论 [chunk:paper:p4:c1]，伪造 [chunk:paper:p99:fake] 和 [内部链接](#paperleaf-citation-0)。" citations={[citation]} onOpenCitation={onOpen} />);
     const button = screen.getByRole("button", { name: "查看《测试论文》PDF 第 4 页" });
+    expect(button).toHaveTextContent("[1]");
     fireEvent.click(button);
     expect(onOpen).toHaveBeenCalledWith(citation);
     expect(screen.queryByText(/p99/)).not.toBeInTheDocument();

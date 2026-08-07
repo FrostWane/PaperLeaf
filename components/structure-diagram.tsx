@@ -3,8 +3,9 @@
 import { useEffect, useId, useState } from "react";
 import { structureNodeTypeLabels } from "@/lib/artifacts";
 import type { PaperStructureGraph } from "@/lib/types";
+import { artifactCitationSources, CitationMarkers, CitationSources } from "./citation-sources";
 
-export function StructureDiagram({ graph, onOpenPage }: { graph: PaperStructureGraph; onOpenPage: (page: number) => void }) {
+export function StructureDiagram({ graph, paperTitle, onOpenPage }: { graph: PaperStructureGraph; paperTitle: string; onOpenPage: (page: number) => void }) {
   const reactId = useId();
   const [svg, setSvg] = useState("");
   const [failed, setFailed] = useState(false);
@@ -33,6 +34,8 @@ export function StructureDiagram({ graph, onOpenPage }: { graph: PaperStructureG
     return () => { active = false; };
   }, [graph, reactId]);
 
+  const sources = artifactCitationSources(graph.nodes.flatMap((node) => node.citations), paperTitle);
+
   return (
     <div className="structure-figure">
       <div className="structure-canvas" aria-hidden="true">
@@ -46,9 +49,10 @@ export function StructureDiagram({ graph, onOpenPage }: { graph: PaperStructureG
             <span className="structure-index">{String(index + 1).padStart(2, "0")}</span>
             <span><small>{structureNodeTypeLabels[node.type]}</small><strong>{node.label}</strong><em>{node.summary}</em></span>
           </button>
-          <div className="structure-node-citations" aria-label={`${node.label}的原文引用`}>{node.citations.map((citation, citationIndex) => <button key={`${citation.chunkId}-${citation.physicalPage}`} type="button" aria-label={`查看 ${node.label}的引用 ${citationIndex + 1}，PDF 第 ${citation.physicalPage} 页`} onClick={() => onOpenPage(citation.physicalPage)}>PDF {citation.physicalPage}<span className="mono">{citation.chunkId}</span></button>)}</div>
+          <CitationMarkers citations={node.citations} sources={sources} label={`${node.label}的原文引用`} onOpen={(source) => onOpenPage(source.page)} />
         </li>)}
       </ol>
+      <CitationSources sources={sources} onOpen={(source) => onOpenPage(source.page)} />
     </div>
   );
 }

@@ -558,10 +558,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .summary-section ul { display: grid; gap: 13px; margin: 12px 0 0 36px; padding: 0; list-style: none; }
 .summary-section li { min-width: 0; }
 .summary-section li > p { margin: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.72; }
-.summary-fact-citations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.summary-fact-citations button, .structure-node-citations button { width: auto; min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: #fbfcfb; color: var(--blue-ink); font-size: 12px; }
-.summary-fact-citations button:hover, .structure-node-citations button:hover { border-color: var(--blue-line); background: var(--blue-soft); }
-.summary-fact-citations button span, .structure-node-citations button span { max-width: 110px; overflow: hidden; color: var(--quiet); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.citation-markers { display: inline-flex; flex-wrap: wrap; gap: 3px; margin-left: 3px; vertical-align: baseline; }
+.citation-markers .inline-citation { min-width: 24px; min-height: 24px; padding: 2px 5px; font-size: 11px; }
 .structure-outline { border-top-color: var(--border-strong); }
 .structure-outline > li { padding: 13px 0; border-bottom: 1px solid var(--border); }
 .structure-outline .structure-node-main { min-height: 44px; padding: 0; border: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: start; gap: 8px; text-align: left; }
@@ -570,7 +568,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .structure-node-main strong { color: var(--ink); font-size: 14px; line-height: 1.45; }
 .structure-outline .structure-node-main em { color: var(--muted); font-family: inherit; font-size: 13px; font-style: normal; line-height: 1.55; white-space: normal; }
 .structure-outline .structure-index { padding-top: 1px; font-size: 12px; }
-.structure-node-citations { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 0 38px; }
+.structure-outline .citation-markers { margin: 8px 0 0 38px; }
 
 /* 应用区字体按语义分级。禁止再对所有 span/strong/button 强制同号，
    否则标题、正文和辅助信息会被压成同一层级，并导致窄表头逐字换行。 */

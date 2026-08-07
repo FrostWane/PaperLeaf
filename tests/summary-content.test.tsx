@@ -4,8 +4,8 @@ import { StructuredSummary, SummaryContent } from "@/components/summary-content"
 import type { ArtifactCitation } from "@/lib/types";
 
 const citations: ArtifactCitation[] = [
-  { chunkId: "paper-1:p4:c0", physicalPage: 4 },
-  { chunkId: "paper-1:p7:c2", physicalPage: 7 },
+  { chunkId: "paper-1:p4:c0", physicalPage: 4, quote: "模型通过注意力机制处理序列。" },
+  { chunkId: "paper-1:p7:c2", physicalPage: 7, quote: "实验展示了训练效率。" },
 ];
 
 describe("SummaryContent", () => {
@@ -50,6 +50,7 @@ describe("SummaryContent", () => {
     const pageReference = screen.getByRole("button", { name: "引用 [2]，查看 PDF 第 7 页" });
     expect(chunkReference).toHaveTextContent("[1]");
     expect(pageReference).toHaveTextContent("[2]");
+    expect(document.body.innerHTML).not.toContain("paper-1:p4:c0");
 
     fireEvent.click(chunkReference);
     fireEvent.click(pageReference);
@@ -57,7 +58,7 @@ describe("SummaryContent", () => {
     expect(onOpenPage).toHaveBeenNthCalledWith(2, 7);
   });
 
-  it("保留无法映射的引用标记，避免丢失原始信息", () => {
+  it("无法映射的内部引用不向用户暴露 Chunk ID", () => {
     render(<SummaryContent
       content="尚未收录 [chunk:missing]，页码也未知 [物理页 99]。"
       citations={citations}
@@ -65,7 +66,8 @@ describe("SummaryContent", () => {
     />);
 
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(screen.getByText("尚未收录 [chunk:missing]，页码也未知 [物理页 99]。")).toBeInTheDocument();
+    expect(screen.getByText("尚未收录 [引用不可用]，页码也未知 [物理页 99]。")).toBeInTheDocument();
+    expect(screen.queryByText(/chunk:missing/)).not.toBeInTheDocument();
   });
 
   it("结构化五节中的每条事实保留独立的多页引用", () => {
@@ -76,10 +78,13 @@ describe("SummaryContent", () => {
       { key: "experiment_setup", title: "实验设置", facts: [{ text: "比较翻译任务。", citations: [citations[1]] }] },
       { key: "main_results", title: "主要结果", facts: [{ text: "训练更快。", citations: [citations[1]] }] },
       { key: "limitations", title: "局限与适用范围", facts: [{ text: "长序列成本较高。", citations: [citations[0]] }] },
-    ]} onOpenPage={onOpenPage} />);
+    ]} citations={citations} paperTitle="测试论文" onOpenPage={onOpenPage} />);
 
     expect(screen.getAllByRole("region")).toHaveLength(5);
-    fireEvent.click(screen.getByRole("button", { name: "查看 研究问题第 1 条事实的引用 2，PDF 第 7 页" }));
+    expect(screen.queryByText("paper-1:p4:c0")).not.toBeInTheDocument();
+    expect(screen.getByText("模型通过注意力机制处理序列。")).toBeInTheDocument();
+    const researchProblem = screen.getByRole("region", { name: "研究问题" });
+    fireEvent.click(within(researchProblem).getByRole("button", { name: "引用 [2]，查看 PDF 第 7 页" }));
     expect(onOpenPage).toHaveBeenCalledWith(7);
   });
 });

@@ -34,10 +34,11 @@ function citationRemarkPlugin(options: { citations: Citation[] }) {
           const index = match[1] ? byChunk.get(match[1]) : Number(match[2]) - 1;
           const citation = index === undefined ? undefined : options.citations[index];
           if (citation) {
+            const citationNumber = Number(index) + 1;
             nextChildren.push({
               type: "paperleafCitation",
               data: { hName: "paperleaf-citation", hProperties: { "data-citation-index": index } },
-              children: [{ type: "text", value: `PDF ${citation.page}` }],
+              children: [{ type: "text", value: `[${citationNumber}]` }],
             });
           }
           cursor = start + match[0].length;

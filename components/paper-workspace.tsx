@@ -486,8 +486,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     {summary && summary.status !== "failed" && summary.sections.length > 0 && <article className="summary-artifact">
       <div className="artifact-mode"><span>模型归纳</span><em>{summary.citations.length} 条页码证据</em></div>
       {summary.stale && <p className="artifact-stale-note" role="status">这份概览基于论文上一次索引生成，当前已过期。重新生成后才会使用最新页面内容。</p>}
-      <StructuredSummary sections={summary.sections} onOpenPage={openCitation} />
-      <div className="artifact-citations" aria-label="概览全部证据页">{summary.citations.map((citation, index) => <button key={`${citation.chunkId}-${citation.physicalPage}`} onClick={() => openCitation(citation.physicalPage)}><span>{String(index + 1).padStart(2, "0")}</span>PDF {citation.physicalPage}<small className="mono">{citation.chunkId}</small></button>)}</div>
+      <StructuredSummary sections={summary.sections} citations={summary.citations} paperTitle={paper.title} onOpenPage={openCitation} />
     </article>}
     {artifactMessage && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
   </div>;
@@ -497,7 +496,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     {!structure && !artifactMessage && <div className="artifact-empty"><Network size={20} /><strong>{readyForArtifacts ? "尚未构建研究脑图" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "研究逻辑与页码证据全部通过核验后才会显示。" : "索引完成后再提取论文研究逻辑。"}</p></div>}
     {structure?.status === "processing" && <div className="artifact-state" role="status"><strong>研究脑图正在后台生成</strong><p>可以离开页面；返回后会继续查询，节点与页码核验通过后才会显示。</p></div>}
     {structure?.status === "failed" && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactFailureMessage(structure.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
-    {structure && structure.status !== "failed" && structure.nodes.length > 0 && <>{structure.stale && <p className="artifact-stale-note" role="status">这份研究脑图基于旧索引，重新构建后才会使用最新页面内容。</p>}<StructureDiagram key={structure.mermaid} graph={structure} onOpenPage={openCitation} /></>}
+    {structure && structure.status !== "failed" && structure.nodes.length > 0 && <>{structure.stale && <p className="artifact-stale-note" role="status">这份研究脑图基于旧索引，重新构建后才会使用最新页面内容。</p>}<StructureDiagram key={structure.mermaid} graph={structure} paperTitle={paper.title} onOpenPage={openCitation} /></>}
     {artifactMessage && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
   </div>;
 

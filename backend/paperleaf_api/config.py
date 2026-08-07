@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS = 120.0
+MAX_CONFIGURED_ARTIFACT_TIMEOUT_SECONDS = 240.0
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -76,6 +77,12 @@ class Settings:
     artifact_retry_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS", "90")
     )
+    structure_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_STRUCTURE_TIMEOUT_SECONDS", "180")
+    )
+    structure_retry_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_STRUCTURE_RETRY_TIMEOUT_SECONDS", "120")
+    )
     model_attempts_per_provider: int = int(
         os.getenv("PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER", "1")
     )
@@ -133,13 +140,17 @@ class Settings:
         artifact_timeouts = (
             self.artifact_timeout_seconds,
             self.artifact_retry_timeout_seconds,
+            self.structure_timeout_seconds,
+            self.structure_retry_timeout_seconds,
         )
         if any(value <= 0 for value in artifact_timeouts):
             raise RuntimeError("论文产物生成超时必须大于 0")
-        if any(value > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS for value in artifact_timeouts):
-            raise RuntimeError("论文产物单次超时不能超过 120 秒")
+        if any(value > MAX_CONFIGURED_ARTIFACT_TIMEOUT_SECONDS for value in artifact_timeouts):
+            raise RuntimeError("论文产物单次超时不能超过 240 秒")
         if self.artifact_retry_timeout_seconds > self.artifact_timeout_seconds:
             raise RuntimeError("论文产物精简重试超时不能大于首次生成超时")
+        if self.structure_retry_timeout_seconds > self.structure_timeout_seconds:
+            raise RuntimeError("研究脑图精简重试超时不能大于首次生成超时")
         if not 1 <= self.model_attempts_per_provider <= 3:
             raise RuntimeError("单端点模型尝试次数必须位于 1 到 3 之间")
         if self.model_circuit_failure_threshold < 1:
