@@ -28,6 +28,7 @@ PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保�
 - Agent 事件持久化并支持 `Last-Event-ID` 补发；人工确认后可以恢复同一个运行
 - 主/备用 OpenAI-compatible 服务统一经过超时、受控重试和按用途隔离的熔断器
 - Redis 为多 API 实例提供 Agent 提交限流与幂等判定；故障时退回本机限流，不承载业务真相
+- 管理员可查看 RAG 证据漏斗、召回通道、意图、失败分布和阶段 P50/P95；Prometheus/Grafana 提供本地趋势面板
 - 搜索 arXiv，并在用户确认后导入开放 PDF
 - 论文概览按研究问题、方法、实验、结果与局限生成结构化事实，并为每条事实保留页码证据
 - 论文概括与研究结构图由 Worker 后台生成；离开阅读页不会取消任务，返回后自动恢复进度
@@ -84,6 +85,8 @@ docker compose ps
 - API 健康检查：<http://localhost:8000/health>
 - MinIO 控制台：<http://localhost:9001>
 - Redis：仅在 Compose 私有网络中使用，无宿主机端口
+- Prometheus：<http://localhost:9090>
+- Grafana：<http://localhost:3001>
 
 首次启动会自动执行数据库迁移、创建私有 PDF Bucket，并根据环境变量创建管理员。查看日志：
 
@@ -235,6 +238,7 @@ flowchart LR
 - [部署指南](docs/deployment.md)
 - [测试指南](docs/testing.md)
 - [容量与可观测性里程碑](docs/scaling.md)
+- [RAG 可观测性与指标口径](docs/observability.md)
 - [RAG 离线评测](backend/evaluation/README.md)
 - [安全说明](docs/security.md)
 - [贡献指南](docs/contributing.md)

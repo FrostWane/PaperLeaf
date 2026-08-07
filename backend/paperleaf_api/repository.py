@@ -334,9 +334,7 @@ def _validate_collection_change(
             current, height = levels.pop()
             subtree_height = max(subtree_height, height)
             levels.extend(
-                (item.id, height + 1)
-                for item in owned.values()
-                if item.parent_id == current
+                (item.id, height + 1) for item in owned.values() if item.parent_id == current
             )
     if parent_depth + subtree_height > MAX_COLLECTION_DEPTH:
         raise ValueError(f"集合最多支持 {MAX_COLLECTION_DEPTH} 层")
@@ -368,9 +366,7 @@ class Repository(Protocol):
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
     ) -> PaperRecord | None: ...
-    async def requeue_owned_paper(
-        self, paper_id: str, owner_id: str
-    ) -> PaperRecord | None: ...
+    async def requeue_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def get_active_paper_artifact_job(
         self, paper_id: str, owner_id: str, artifact_type: str
     ) -> JobRecord | Job | None: ...
@@ -414,6 +410,9 @@ class Repository(Protocol):
     async def cancel_owned_translation(
         self, paper_id: str, translation_id: str, owner_id: str
     ) -> TranslationRecord | PaperTranslation | None: ...
+    async def list_agent_runs_for_observability(
+        self, since: datetime, *, limit: int = 5000
+    ) -> list[AgentRunRecord | AgentRun]: ...
 
 
 class MemoryRepository:
@@ -497,14 +496,14 @@ class MemoryRepository:
             user = self.users.get(user_id)
             if not user:
                 raise ManagedUserNotFoundError("用户不存在")
-            removes_active_admin = user.active and user.role == UserRole.admin and (
-                changes.get("active") is False or changes.get("role") == UserRole.user
+            removes_active_admin = (
+                user.active
+                and user.role == UserRole.admin
+                and (changes.get("active") is False or changes.get("role") == UserRole.user)
             )
             if removes_active_admin:
                 active_admins = sum(
-                    1
-                    for item in self.users.values()
-                    if item.active and item.role == UserRole.admin
+                    1 for item in self.users.values() if item.active and item.role == UserRole.admin
                 )
                 if active_admins <= 1:
                     raise LastAdminProtectionError("不能停用或降级最后一名管理员")
@@ -515,9 +514,7 @@ class MemoryRepository:
                     setattr(user, key, changes[key])
             if changes.get("active") is False:
                 self.sessions = {
-                    digest: value
-                    for digest, value in self.sessions.items()
-                    if value[0] != user_id
+                    digest: value for digest, value in self.sessions.items() if value[0] != user_id
                 }
             return user
 
@@ -574,9 +571,7 @@ class MemoryRepository:
             if resolved is None:
                 return []
             allowed_ids = set(resolved)
-        filed_ids = (
-            {paper_id for paper_id, _ in self.paper_collections} if unfiled else set()
-        )
+        filed_ids = {paper_id for paper_id, _ in self.paper_collections} if unfiled else set()
         return sorted(
             (
                 paper
@@ -594,9 +589,7 @@ class MemoryRepository:
         paper = self.papers.get(paper_id)
         return paper if paper and paper.owner_id == owner_id else None
 
-    async def requeue_owned_paper(
-        self, paper_id: str, owner_id: str
-    ) -> PaperRecord | None:
+    async def requeue_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None:
         paper = await self.get_owned_paper(paper_id, owner_id)
         if not paper or paper.status in {
             PaperStatus.queued,
@@ -628,10 +621,10 @@ class MemoryRepository:
                         page.error_message = "来源页面正在重新索引"
                         page.updated_at = now()
                 for translate_job in self.jobs.values():
-                    if (
-                        translate_job.translation_id == translation.id
-                        and translate_job.status in {JobStatus.queued, JobStatus.running}
-                    ):
+                    if translate_job.translation_id == translation.id and translate_job.status in {
+                        JobStatus.queued,
+                        JobStatus.running,
+                    }:
                         translate_job.status = JobStatus.completed
                         translate_job.error_code = "SOURCE_CHANGED"
                         translate_job.error_message = "论文重新索引已终止旧翻译作业"
@@ -687,9 +680,7 @@ class MemoryRepository:
     ) -> PaperArtifactRecord | None:
         if not await self.get_owned_paper(paper_id, owner_id):
             return None
-        record = await self.get_owned_paper_artifact(
-            paper_id, owner_id, artifact_type
-        )
+        record = await self.get_owned_paper_artifact(paper_id, owner_id, artifact_type)
         if record is None:
             record = PaperArtifactRecord(
                 id=str(uuid.uuid4()),
@@ -744,9 +735,7 @@ class MemoryRepository:
             return None
         if not await self.get_owned_paper(paper_id, owner_id):
             return None
-        active = await self.get_active_paper_artifact_job(
-            paper_id, owner_id, artifact_type
-        )
+        active = await self.get_active_paper_artifact_job(paper_id, owner_id, artifact_type)
         if active:
             return active
         if not preserve_existing:
@@ -783,9 +772,7 @@ class MemoryRepository:
         paper.updated_at = now()
         for translation in self.translations.values():
             if translation.paper_id == paper_id and translation.status != "completed":
-                await self.cancel_owned_translation(
-                    paper_id, translation.id, owner_id
-                )
+                await self.cancel_owned_translation(paper_id, translation.id, owner_id)
         has_delete_job = any(
             job.paper_id == paper.id
             and job.type == "delete_paper"
@@ -797,9 +784,7 @@ class MemoryRepository:
             self.jobs[job.id] = job
         return paper
 
-    async def touch_paper_opened(
-        self, paper_id: str, owner_id: str
-    ) -> PaperRecord | None:
+    async def touch_paper_opened(self, paper_id: str, owner_id: str) -> PaperRecord | None:
         paper = await self.get_owned_paper(paper_id, owner_id)
         if not paper:
             return None
@@ -907,9 +892,7 @@ class MemoryRepository:
                 raise ValueError("集合名称不能为空")
             changes["name"] = normalized_name
         proposed_name = str(changes.get("name", record.name))
-        proposed_parent_id = (
-            changes["parent_id"] if "parent_id" in changes else record.parent_id
-        )
+        proposed_parent_id = changes["parent_id"] if "parent_id" in changes else record.parent_id
         if proposed_parent_id is not None and not isinstance(proposed_parent_id, str):
             raise ValueError("父集合无效")
         _validate_collection_change(
@@ -1018,8 +1001,11 @@ class MemoryRepository:
                 translation.error_code == "SOURCE_CHANGED"
                 or translation.source_revision != revision
             )
-            restart_requested = refresh or source_changed or translation.cancel_requested or (
-                translation.status in {"cancelled", "failed", "partial"}
+            restart_requested = (
+                refresh
+                or source_changed
+                or translation.cancel_requested
+                or (translation.status in {"cancelled", "failed", "partial"})
             )
             translation.source_revision = revision
             translation.priority_page = priority_page
@@ -1076,11 +1062,7 @@ class MemoryRepository:
         queued = [item for item in pages if item.status == "queued"]
         running = [item for item in pages if item.status == "running"]
         translation_job = next(
-            (
-                job
-                for job in self.jobs.values()
-                if job.translation_id == translation.id
-            ),
+            (job for job in self.jobs.values() if job.translation_id == translation.id),
             None,
         )
         if translation_job is None:
@@ -1120,13 +1102,9 @@ class MemoryRepository:
                 page.status = "failed"
                 page.error_code = "MODEL_NOT_CONFIGURED"
                 page.error_message = "尚未配置可用于全文翻译的模型"
-            translation.completed_pages = sum(
-                item.status == "completed" for item in pages
-            )
+            translation.completed_pages = sum(item.status == "completed" for item in pages)
             translation.failed_pages = sum(item.status == "failed" for item in pages)
-            translation.status = (
-                "partial" if translation.completed_pages else "failed"
-            )
+            translation.status = "partial" if translation.completed_pages else "failed"
             translation.error_code = "MODEL_NOT_CONFIGURED"
             translation.error_message = "尚未配置可用于全文翻译的模型"
             translation_job.status = JobStatus.failed
@@ -1134,9 +1112,8 @@ class MemoryRepository:
             translation_job.error_message = "尚未配置可用于全文翻译的模型"
         elif queued:
             translation.status = "running" if running else "queued"
-            if (
-                translation_job.status != JobStatus.running
-                and (translation_job_created or restart_requested)
+            if translation_job.status != JobStatus.running and (
+                translation_job_created or restart_requested
             ):
                 translation_job.status = JobStatus.queued
                 translation_job.progress = 0
@@ -1200,8 +1177,7 @@ class MemoryRepository:
             (
                 page
                 for page in self.translation_pages.values()
-                if page.translation_id == translation_id
-                and page.physical_page == physical_page
+                if page.translation_id == translation_id and page.physical_page == physical_page
             ),
             None,
         )
@@ -1225,10 +1201,10 @@ class MemoryRepository:
                     page.error_message = "全文翻译已取消"
                     page.updated_at = now()
             for job in self.jobs.values():
-                if (
-                    job.translation_id == translation_id
-                    and job.status in {JobStatus.queued, JobStatus.running}
-                ):
+                if job.translation_id == translation_id and job.status in {
+                    JobStatus.queued,
+                    JobStatus.running,
+                }:
                     job.status = JobStatus.completed
                     job.error_code = "TRANSLATION_CANCELLED"
                     job.error_message = "用户已取消全文翻译"
@@ -1272,9 +1248,7 @@ class MemoryRepository:
             )
             paper = self.papers.get(job.paper_id)
             artifact = (
-                await self.get_owned_paper_artifact(
-                    job.paper_id, paper.owner_id, artifact_type
-                )
+                await self.get_owned_paper_artifact(job.paper_id, paper.owner_id, artifact_type)
                 if paper
                 else None
             )
@@ -1308,9 +1282,7 @@ class MemoryRepository:
                 )
         return job
 
-    def _chat_session_with_current_run(
-        self, record: ChatSessionRecord
-    ) -> ChatSessionRecord:
+    def _chat_session_with_current_run(self, record: ChatSessionRecord) -> ChatSessionRecord:
         runs = sorted(
             (
                 item
@@ -1350,11 +1322,7 @@ class MemoryRepository:
         return [
             self._chat_session_with_current_run(item)
             for item in sorted(
-                (
-                    item
-                    for item in self.chat_sessions.values()
-                    if item.user_id == user_id
-                ),
+                (item for item in self.chat_sessions.values() if item.user_id == user_id),
                 key=lambda item: item.updated_at,
                 reverse=True,
             )
@@ -1404,21 +1372,15 @@ class MemoryRepository:
             if item.session_id == session_id and item.user_id == user_id
         }
         self.jobs = {
-            key: item
-            for key, item in self.jobs.items()
-            if item.agent_run_id not in run_ids
+            key: item for key, item in self.jobs.items() if item.agent_run_id not in run_ids
         }
         self.agent_run_events = {
-            key: item
-            for key, item in self.agent_run_events.items()
-            if item.run_id not in run_ids
+            key: item for key, item in self.agent_run_events.items() if item.run_id not in run_ids
         }
         for run_id in run_ids:
             self.agent_runs.pop(run_id, None)
         self.chat_messages = {
-            key: item
-            for key, item in self.chat_messages.items()
-            if item.session_id != session_id
+            key: item for key, item in self.chat_messages.items() if item.session_id != session_id
         }
         self.chat_sessions.pop(session_id, None)
         return True
@@ -1429,11 +1391,7 @@ class MemoryRepository:
         if not await self.get_owned_chat_session(session_id, user_id):
             return None
         return sorted(
-            (
-                item
-                for item in self.chat_messages.values()
-                if item.session_id == session_id
-            ),
+            (item for item in self.chat_messages.values() if item.session_id == session_id),
             key=lambda item: item.sequence,
         )
 
@@ -1453,8 +1411,7 @@ class MemoryRepository:
             (
                 item
                 for item in self.chat_messages.values()
-                if item.session_id == session_id
-                and item.client_message_id == client_message_id
+                if item.session_id == session_id and item.client_message_id == client_message_id
             ),
             None,
         )
@@ -1466,8 +1423,7 @@ class MemoryRepository:
                 raise RuntimeError("幂等消息关联的 Agent Run 不存在")
             return ChatSubmission(existing, run, True)
         if any(
-            item.session_id == session_id
-            and item.status in {"pending", "running", "interrupted"}
+            item.session_id == session_id and item.status in {"pending", "running", "interrupted"}
             for item in self.agent_runs.values()
         ):
             raise ChatActiveRunError("当前会话已有正在运行或等待确认的任务")
@@ -1532,18 +1488,23 @@ class MemoryRepository:
         self.agent_runs[run_id] = record
         return record
 
-    async def get_owned_agent_run(
-        self, run_id: str, user_id: str
-    ) -> AgentRunRecord | None:
+    async def get_owned_agent_run(self, run_id: str, user_id: str) -> AgentRunRecord | None:
         record = self.agent_runs.get(run_id)
         return record if record and record.user_id == user_id else None
 
     async def get_agent_run(self, run_id: str) -> AgentRunRecord | None:
         return self.agent_runs.get(run_id)
 
-    async def get_agent_run_input(
-        self, run_id: str
-    ) -> tuple[AgentRunRecord, str] | None:
+    async def list_agent_runs_for_observability(
+        self, since: datetime, *, limit: int = 5000
+    ) -> list[AgentRunRecord]:
+        return sorted(
+            (item for item in self.agent_runs.values() if item.created_at >= since),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )[:limit]
+
+    async def get_agent_run_input(self, run_id: str) -> tuple[AgentRunRecord, str] | None:
         run = self.agent_runs.get(run_id)
         if not run or not run.user_message_id:
             return None
@@ -1581,9 +1542,7 @@ class MemoryRepository:
     ) -> AgentRunEventRecord | None:
         if run_id not in self.agent_runs:
             return None
-        if claim_token is not None and not self._agent_claim_is_current(
-            run_id, claim_token
-        ):
+        if claim_token is not None and not self._agent_claim_is_current(run_id, claim_token):
             return None
         if event_key:
             existing = next(
@@ -1597,11 +1556,7 @@ class MemoryRepository:
             if existing:
                 return existing
         sequence = 1 + max(
-            (
-                item.sequence
-                for item in self.agent_run_events.values()
-                if item.run_id == run_id
-            ),
+            (item.sequence for item in self.agent_run_events.values() if item.run_id == run_id),
             default=0,
         )
         record = AgentRunEventRecord(
@@ -1631,9 +1586,7 @@ class MemoryRepository:
         )
 
     def _agent_claim_is_current(self, run_id: str, claim_token: str) -> bool:
-        job = next(
-            (item for item in self.jobs.values() if item.agent_run_id == run_id), None
-        )
+        job = next((item for item in self.jobs.values() if item.agent_run_id == run_id), None)
         return bool(
             job
             and job.status == JobStatus.running
@@ -1643,9 +1596,7 @@ class MemoryRepository:
         )
 
     async def claim_agent_run_job(self, run_id: str) -> str | None:
-        job = next(
-            (item for item in self.jobs.values() if item.agent_run_id == run_id), None
-        )
+        job = next((item for item in self.jobs.values() if item.agent_run_id == run_id), None)
         if not job or job.status != JobStatus.queued or job.available_at > now():
             return None
         token = str(uuid.uuid4())
@@ -1656,9 +1607,7 @@ class MemoryRepository:
         job.updated_at = now()
         return token
 
-    async def start_agent_run(
-        self, run_id: str, claim_token: str
-    ) -> AgentRunRecord | None:
+    async def start_agent_run(self, run_id: str, claim_token: str) -> AgentRunRecord | None:
         run = self.agent_runs.get(run_id)
         if (
             not run
@@ -1752,8 +1701,7 @@ class MemoryRepository:
         if not run:
             return None
         if not force and (
-            claim_token is None
-            or not self._agent_claim_is_current(run_id, claim_token)
+            claim_token is None or not self._agent_claim_is_current(run_id, claim_token)
         ):
             return None
         if run.status in {"completed", "failed", "cancelled"}:
@@ -1810,9 +1758,7 @@ class MemoryRepository:
         )
         return run
 
-    async def cancel_owned_agent_run(
-        self, run_id: str, user_id: str
-    ) -> AgentRunRecord | None:
+    async def cancel_owned_agent_run(self, run_id: str, user_id: str) -> AgentRunRecord | None:
         run = await self.get_owned_agent_run(run_id, user_id)
         if not run:
             return None
@@ -1995,15 +1941,17 @@ class SQLAlchemyRepository:
             if not user:
                 raise ManagedUserNotFoundError("用户不存在")
 
-            removes_active_admin = user.active and user.role == UserRole.admin and (
-                changes.get("active") is False or changes.get("role") == UserRole.user
+            removes_active_admin = (
+                user.active
+                and user.role == UserRole.admin
+                and (changes.get("active") is False or changes.get("role") == UserRole.user)
             )
             if removes_active_admin:
                 # READ COMMITTED 下等待行锁后用新语句重新计数，不能复用等待前的查询快照。
                 active_admin_count = await session.scalar(
-                    select(func.count()).select_from(User).where(
-                        User.active.is_(True), User.role == UserRole.admin
-                    )
+                    select(func.count())
+                    .select_from(User)
+                    .where(User.active.is_(True), User.role == UserRole.admin)
                 )
                 if int(active_admin_count or 0) <= 1:
                     raise LastAdminProtectionError("不能停用或降级最后一名管理员")
@@ -2109,9 +2057,7 @@ class SQLAlchemyRepository:
                     return []
                 statement = statement.where(Paper.id.in_(allowed_ids))
             if unfiled:
-                statement = statement.where(
-                    ~Paper.id.in_(select(paper_collections.c.paper_id))
-                )
+                statement = statement.where(~Paper.id.in_(select(paper_collections.c.paper_id)))
             result = await session.scalars(statement.order_by(Paper.created_at.desc()))
             return list(result)
 
@@ -2337,9 +2283,7 @@ class SQLAlchemyRepository:
             paper.updated_at = now()
             translation_ids = list(
                 await session.scalars(
-                    select(PaperTranslation.id).where(
-                        PaperTranslation.paper_id == paper.id
-                    )
+                    select(PaperTranslation.id).where(PaperTranslation.paper_id == paper.id)
                 )
             )
             if translation_ids:
@@ -2500,9 +2444,9 @@ class SQLAlchemyRepository:
     async def count_active_admins(self) -> int:
         async with get_session_factory()() as session:
             value = await session.scalar(
-                select(func.count()).select_from(User).where(
-                    User.active.is_(True), User.role == UserRole.admin
-                )
+                select(func.count())
+                .select_from(User)
+                .where(User.active.is_(True), User.role == UserRole.admin)
             )
             return int(value or 0)
 
@@ -2518,9 +2462,7 @@ class SQLAlchemyRepository:
             raise ValueError("集合名称不能为空")
         async with get_session_factory()() as session:
             records = list(
-                await session.scalars(
-                    select(Collection).where(Collection.owner_id == owner_id)
-                )
+                await session.scalars(select(Collection).where(Collection.owner_id == owner_id))
             )
             _validate_collection_change(
                 records,
@@ -2562,9 +2504,7 @@ class SQLAlchemyRepository:
                 return existing
         sequence = 1 + int(
             await session.scalar(
-                select(func.max(AgentRunEvent.sequence)).where(
-                    AgentRunEvent.run_id == run_id
-                )
+                select(func.max(AgentRunEvent.sequence)).where(AgentRunEvent.run_id == run_id)
             )
             or 0
         )
@@ -2650,9 +2590,7 @@ class SQLAlchemyRepository:
     ) -> list[AgentRunEvent] | None:
         async with get_session_factory()() as session:
             owned = await session.scalar(
-                select(AgentRun.id).where(
-                    AgentRun.id == run_id, AgentRun.user_id == user_id
-                )
+                select(AgentRun.id).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
             )
             if not owned:
                 return None
@@ -2671,6 +2609,19 @@ class SQLAlchemyRepository:
         async with get_session_factory()() as session:
             return await session.get(AgentRun, run_id)
 
+    async def list_agent_runs_for_observability(
+        self, since: datetime, *, limit: int = 5000
+    ) -> list[AgentRun]:
+        async with get_session_factory()() as session:
+            return list(
+                await session.scalars(
+                    select(AgentRun)
+                    .where(AgentRun.created_at >= since)
+                    .order_by(AgentRun.created_at.desc())
+                    .limit(limit)
+                )
+            )
+
     async def get_agent_run_input(self, run_id: str) -> tuple[AgentRun, str] | None:
         async with get_session_factory()() as session:
             run = await session.get(AgentRun, run_id)
@@ -2686,9 +2637,7 @@ class SQLAlchemyRepository:
             )
             if (
                 not run
-                or not await self._sql_agent_claim_current(
-                    session, run_id, claim_token
-                )
+                or not await self._sql_agent_claim_current(session, run_id, claim_token)
                 or run.cancel_requested
                 or run.status == "cancelled"
             ):
@@ -2734,9 +2683,7 @@ class SQLAlchemyRepository:
             )
             if (
                 not run
-                or not await self._sql_agent_claim_current(
-                    session, run_id, claim_token
-                )
+                or not await self._sql_agent_claim_current(session, run_id, claim_token)
                 or run.cancel_requested
                 or run.status != "running"
                 or not run.assistant_message_id
@@ -2807,9 +2754,7 @@ class SQLAlchemyRepository:
                 return None
             if not force and (
                 claim_token is None
-                or not await self._sql_agent_claim_current(
-                    session, run_id, claim_token
-                )
+                or not await self._sql_agent_claim_current(session, run_id, claim_token)
             ):
                 return None
             if run.status in {"completed", "failed", "cancelled"}:
@@ -2845,9 +2790,7 @@ class SQLAlchemyRepository:
                 )
                 assistant.updated_at = now()
             job = await session.scalar(
-                select(Job)
-                .where(Job.agent_run_id == run_id)
-                .with_for_update()
+                select(Job).where(Job.agent_run_id == run_id).with_for_update()
             )
             if job:
                 job.status = (
@@ -2870,11 +2813,7 @@ class SQLAlchemyRepository:
                 {
                     "status": status,
                     "duration_ms": duration_ms,
-                    **(
-                        {"pending_action": pending_action or {}}
-                        if status == "interrupted"
-                        else {}
-                    ),
+                    **({"pending_action": pending_action or {}} if status == "interrupted" else {}),
                 },
                 "terminal",
             )
@@ -2925,9 +2864,7 @@ class SQLAlchemyRepository:
                 assistant.status = "cancelled"
                 assistant.updated_at = now()
             job = await session.scalar(
-                select(Job)
-                .where(Job.agent_run_id == run_id)
-                .with_for_update()
+                select(Job).where(Job.agent_run_id == run_id).with_for_update()
             )
             if job:
                 job.status = JobStatus.completed
@@ -2963,10 +2900,7 @@ class SQLAlchemyRepository:
             if not run:
                 return None
             if run.resume_action_id:
-                if (
-                    run.resume_action_id == action_id
-                    and run.resume_decision == decision
-                ):
+                if run.resume_action_id == action_id and run.resume_decision == decision:
                     return run
                 raise ChatIdempotencyConflictError("该待确认动作已使用不同决定处理")
             if run.status != "interrupted":
@@ -2985,9 +2919,7 @@ class SQLAlchemyRepository:
             run.error_code = None
             run.updated_at = now()
             job = await session.scalar(
-                select(Job)
-                .where(Job.agent_run_id == run_id)
-                .with_for_update()
+                select(Job).where(Job.agent_run_id == run_id).with_for_update()
             )
             if not job:
                 job = Job(agent_run_id=run_id, type="agent_run")
@@ -3023,9 +2955,7 @@ class SQLAlchemyRepository:
     async def list_collections(self, owner_id: str) -> list[Collection]:
         async with get_session_factory()() as session:
             result = await session.scalars(
-                select(Collection)
-                .where(Collection.owner_id == owner_id)
-                .order_by(Collection.name)
+                select(Collection).where(Collection.owner_id == owner_id).order_by(Collection.name)
             )
             return list(result)
 
@@ -3052,9 +2982,7 @@ class SQLAlchemyRepository:
     ) -> list[str] | None:
         async with get_session_factory()() as session:
             records = list(
-                await session.scalars(
-                    select(Collection).where(Collection.owner_id == owner_id)
-                )
+                await session.scalars(select(Collection).where(Collection.owner_id == owner_id))
             )
             if collection_id not in {item.id for item in records}:
                 return None
@@ -3186,9 +3114,7 @@ class SQLAlchemyRepository:
             )
             if assigned and not exists:
                 await session.execute(
-                    insert(paper_collections).values(
-                        paper_id=paper_id, collection_id=collection_id
-                    )
+                    insert(paper_collections).values(paper_id=paper_id, collection_id=collection_id)
                 )
             elif not assigned and exists:
                 await session.execute(
@@ -3233,9 +3159,7 @@ class SQLAlchemyRepository:
             page_numbers = {item.physical_page for item in source_pages}
             if priority_page is not None and priority_page not in page_numbers:
                 raise ValueError("优先翻译页不存在")
-            revision = source_revision(
-                [(item.physical_page, item.text) for item in source_pages]
-            )
+            revision = source_revision([(item.physical_page, item.text) for item in source_pages])
             translation = await session.scalar(
                 select(PaperTranslation)
                 .where(
@@ -3265,8 +3189,11 @@ class SQLAlchemyRepository:
                     translation.error_code == "SOURCE_CHANGED"
                     or translation.source_revision != revision
                 )
-                restart_requested = refresh or source_changed or translation.cancel_requested or (
-                    translation.status in {"cancelled", "failed", "partial"}
+                restart_requested = (
+                    refresh
+                    or source_changed
+                    or translation.cancel_requested
+                    or (translation.status in {"cancelled", "failed", "partial"})
                 )
                 translation.source_revision = revision
                 translation.priority_page = priority_page
@@ -3279,9 +3206,7 @@ class SQLAlchemyRepository:
             # 先取得唯一 Job 锁，再修改任何页状态。重启会清除旧 token，确保旧
             # Worker 即使仍持有旧来源文本，也无法通过最终写入门禁。
             translation_job = await session.scalar(
-                select(Job)
-                .where(Job.translation_id == translation.id)
-                .with_for_update()
+                select(Job).where(Job.translation_id == translation.id).with_for_update()
             )
             if translation_job is None:
                 translation_job_created = True
@@ -3357,9 +3282,7 @@ class SQLAlchemyRepository:
                 )
             )
             translation.total_pages = len(pages)
-            translation.completed_pages = sum(
-                item.status == "completed" for item in pages
-            )
+            translation.completed_pages = sum(item.status == "completed" for item in pages)
             translation.failed_pages = sum(item.status == "failed" for item in pages)
             queued_pages = [item for item in pages if item.status == "queued"]
             running_pages = [item for item in pages if item.status == "running"]
@@ -3380,15 +3303,9 @@ class SQLAlchemyRepository:
                     page.status = "failed"
                     page.error_code = "MODEL_NOT_CONFIGURED"
                     page.error_message = "尚未配置可用于全文翻译的模型"
-                translation.completed_pages = sum(
-                    item.status == "completed" for item in pages
-                )
-                translation.failed_pages = sum(
-                    item.status == "failed" for item in pages
-                )
-                translation.status = (
-                    "partial" if translation.completed_pages else "failed"
-                )
+                translation.completed_pages = sum(item.status == "completed" for item in pages)
+                translation.failed_pages = sum(item.status == "failed" for item in pages)
+                translation.status = "partial" if translation.completed_pages else "failed"
                 translation.error_code = "MODEL_NOT_CONFIGURED"
                 translation.error_message = "尚未配置可用于全文翻译的模型"
                 translation_job.status = JobStatus.failed
@@ -3396,9 +3313,8 @@ class SQLAlchemyRepository:
                 translation_job.error_message = "尚未配置可用于全文翻译的模型"
             elif queued_pages:
                 translation.status = "running" if running_pages else "queued"
-                if (
-                    translation_job.status != JobStatus.running
-                    and (translation_job_created or restart_requested)
+                if translation_job.status != JobStatus.running and (
+                    translation_job_created or restart_requested
                 ):
                     translation_job.status = JobStatus.queued
                     translation_job.progress = 0
@@ -3419,9 +3335,7 @@ class SQLAlchemyRepository:
                 translation_job.error_code = "NO_TRANSLATABLE_TEXT"
                 translation_job.error_message = "此文献暂无可翻译的页面文本"
             elif translation.failed_pages:
-                translation.status = (
-                    "partial" if translation.completed_pages else "failed"
-                )
+                translation.status = "partial" if translation.completed_pages else "failed"
                 translation_job.status = JobStatus.failed
             else:
                 translation.status = "completed"
@@ -3510,9 +3424,7 @@ class SQLAlchemyRepository:
             if not translation:
                 return None
             translation_job = await session.scalar(
-                select(Job)
-                .where(Job.translation_id == translation_id)
-                .with_for_update()
+                select(Job).where(Job.translation_id == translation_id).with_for_update()
             )
             # 重复取消不会清空已成功页，也不会改变已完成翻译。
             if translation.status != "completed":
@@ -3560,15 +3472,11 @@ class SQLAlchemyRepository:
                 return None
             translation: PaperTranslation | None = None
             if snapshot.type == "translate_paper" and snapshot.translation_id:
-                translation_snapshot = await session.get(
-                    PaperTranslation, snapshot.translation_id
-                )
+                translation_snapshot = await session.get(PaperTranslation, snapshot.translation_id)
                 if not translation_snapshot:
                     return None
                 paper = await session.scalar(
-                    select(Paper)
-                    .where(Paper.id == translation_snapshot.paper_id)
-                    .with_for_update()
+                    select(Paper).where(Paper.id == translation_snapshot.paper_id).with_for_update()
                 )
                 translation = await session.scalar(
                     select(PaperTranslation)
@@ -3593,9 +3501,11 @@ class SQLAlchemyRepository:
                         .order_by(PaperPage.physical_page)
                     )
                 )
-                current_revision = source_revision(
-                    [(page.physical_page, page.text) for page in pages]
-                ) if pages else None
+                current_revision = (
+                    source_revision([(page.physical_page, page.text) for page in pages])
+                    if pages
+                    else None
+                )
                 if (
                     paper.status not in {PaperStatus.ready, PaperStatus.partial}
                     or translation.cancel_requested
@@ -3622,9 +3532,7 @@ class SQLAlchemyRepository:
             job.updated_at = now()
             if job.paper_id and job.type in ARTIFACT_JOB_TYPES.values():
                 artifact_type = next(
-                    key
-                    for key, value in ARTIFACT_JOB_TYPES.items()
-                    if value == job.type
+                    key for key, value in ARTIFACT_JOB_TYPES.items() if value == job.type
                 )
                 artifact = await session.scalar(
                     select(PaperArtifact)
@@ -3729,9 +3637,7 @@ class SQLAlchemyRepository:
                 await self._chat_session_with_current_run_sql(session, record)
             return records
 
-    async def get_owned_chat_session(
-        self, session_id: str, user_id: str
-    ) -> ChatSession | None:
+    async def get_owned_chat_session(self, session_id: str, user_id: str) -> ChatSession | None:
         async with get_session_factory()() as session:
             record = await session.scalar(
                 select(ChatSession).where(
@@ -3766,9 +3672,7 @@ class SQLAlchemyRepository:
             await session.refresh(record)
             return await self._chat_session_with_current_run_sql(session, record)
 
-    async def list_session_thread_ids(
-        self, session_id: str, user_id: str
-    ) -> list[str] | None:
+    async def list_session_thread_ids(self, session_id: str, user_id: str) -> list[str] | None:
         async with get_session_factory()() as session:
             owned = await session.scalar(
                 select(ChatSession.id).where(
@@ -3787,9 +3691,7 @@ class SQLAlchemyRepository:
                 )
             )
 
-    async def delete_owned_chat_session(
-        self, session_id: str, user_id: str
-    ) -> bool:
+    async def delete_owned_chat_session(self, session_id: str, user_id: str) -> bool:
         async with get_session_factory()() as session:
             record = await session.scalar(
                 select(ChatSession)
@@ -3808,13 +3710,9 @@ class SQLAlchemyRepository:
                 )
             )
             if active is not None:
-                raise ChatActiveRunError(
-                    "会话仍有运行中或等待确认的任务，请先取消"
-                )
+                raise ChatActiveRunError("会话仍有运行中或等待确认的任务，请先取消")
             run_ids = list(
-                await session.scalars(
-                    select(AgentRun.id).where(AgentRun.session_id == session_id)
-                )
+                await session.scalars(select(AgentRun.id).where(AgentRun.session_id == session_id))
             )
             if run_ids:
                 # jobs.agent_run_id 使用 SET NULL，以便管理员保留一般任务记录；
@@ -3824,9 +3722,7 @@ class SQLAlchemyRepository:
             await session.commit()
             return True
 
-    async def list_chat_messages(
-        self, session_id: str, user_id: str
-    ) -> list[ChatMessage] | None:
+    async def list_chat_messages(self, session_id: str, user_id: str) -> list[ChatMessage] | None:
         async with get_session_factory()() as session:
             owned = await session.scalar(
                 select(ChatSession.id).where(
@@ -3872,9 +3768,7 @@ class SQLAlchemyRepository:
             )
             if existing is not None:
                 if existing.request_hash != request_hash:
-                    raise ChatIdempotencyConflictError(
-                        "客户端消息 ID 已用于不同请求"
-                    )
+                    raise ChatIdempotencyConflictError("客户端消息 ID 已用于不同请求")
                 run = await session.get(AgentRun, existing.run_id)
                 if run is None:
                     raise RuntimeError("幂等消息关联的 Agent Run 不存在")
@@ -3957,22 +3851,16 @@ class SQLAlchemyRepository:
                             ) from exc
                         replay_run = await retry_session.get(AgentRun, replay.run_id)
                         if replay_run is None:
-                            raise RuntimeError(
-                                "幂等消息关联的 Agent Run 不存在"
-                            ) from exc
+                            raise RuntimeError("幂等消息关联的 Agent Run 不存在") from exc
                         return ChatSubmission(replay, replay_run, True)
                     retry_active = await retry_session.scalar(
                         select(AgentRun.id).where(
                             AgentRun.session_id == session_id,
-                            AgentRun.status.in_(
-                                ["pending", "running", "interrupted"]
-                            ),
+                            AgentRun.status.in_(["pending", "running", "interrupted"]),
                         )
                     )
                     if retry_active is not None:
-                        raise ChatActiveRunError(
-                            "当前会话已有正在运行或等待确认的任务"
-                        ) from exc
+                        raise ChatActiveRunError("当前会话已有正在运行或等待确认的任务") from exc
                 raise
             await session.refresh(user_message)
             await session.refresh(run)

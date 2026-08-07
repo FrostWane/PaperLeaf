@@ -44,6 +44,8 @@ class RuntimeStore(Protocol):
 
     async def ping(self) -> bool: ...
 
+    async def stats(self) -> dict[str, int | str | None]: ...
+
     async def acquire_rate_limit(
         self,
         namespace: str,
@@ -74,6 +76,15 @@ class MemoryRuntimeStore:
 
     async def ping(self) -> bool:
         return True
+
+    async def stats(self) -> dict[str, int | str | None]:
+        return {
+            "backend": self.backend,
+            "used_memory_bytes": None,
+            "max_memory_bytes": None,
+            "key_count": len(self._windows) + len(self._decisions),
+            "connected_clients": None,
+        }
 
     async def acquire_rate_limit(
         self,
@@ -180,6 +191,22 @@ class RedisRuntimeStore:
     async def ping(self) -> bool:
         return bool(await self._execute(self._client.ping()))
 
+    async def stats(self) -> dict[str, int | str | None]:
+        memory, clients, key_count = await self._execute(
+            asyncio.gather(
+                self._client.info("memory"),
+                self._client.info("clients"),
+                self._client.dbsize(),
+            )
+        )
+        return {
+            "backend": self.backend,
+            "used_memory_bytes": int(memory.get("used_memory", 0)),
+            "max_memory_bytes": int(memory.get("maxmemory", 0)) or None,
+            "key_count": int(key_count),
+            "connected_clients": int(clients.get("connected_clients", 0)),
+        }
+
     async def acquire_rate_limit(
         self,
         namespace: str,
@@ -239,6 +266,13 @@ class ResilientRuntimeStore:
             return await self._primary.ping()
         except RuntimeStoreUnavailable:
             return False
+
+    async def stats(self) -> dict[str, int | str | None]:
+        try:
+            return await self._primary.stats()
+        except RuntimeStoreUnavailable:
+            stats = await self._fallback.stats()
+            return {**stats, "backend": "memory-fallback"}
 
     async def acquire_rate_limit(
         self,

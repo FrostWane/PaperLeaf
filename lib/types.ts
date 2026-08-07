@@ -278,6 +278,59 @@ export interface AgentEvent<T = unknown> {
   id?: string;
 }
 
+export interface AdminRagObservability {
+  windowHours: number;
+  generatedAt: string;
+  limitReached: boolean;
+  totals: {
+    runs: number;
+    terminalRuns: number;
+    completedRuns: number;
+    failedRuns: number;
+    citedAnswers: number;
+    groundedAnswers: number;
+    ragIssueRuns: number;
+    telemetryRuns: number;
+    telemetryCoverage: number;
+    completionRate: number;
+    failureRate: number;
+    citedAnswerRate: number;
+    ragIssueRate: number;
+  };
+  funnel: Array<{ key: string; label: string; count: number; rate: number }>;
+  latency: {
+    overall: { samples: number; p50Ms?: number; p95Ms?: number };
+    stages: Array<{ stage: string; samples: number; p50Ms?: number; p95Ms?: number }>;
+  };
+  retrievalChannels: Array<{
+    channel: string;
+    label: string;
+    runs: number;
+    citedAnswerRate: number;
+    sufficientEvidenceRate: number;
+    retrievalP95Ms?: number;
+  }>;
+  intents: Array<{
+    intent: string;
+    label: string;
+    runs: number;
+    citedAnswerRate: number;
+    sufficientEvidenceRate: number;
+    p95Ms?: number;
+  }>;
+  failures: Array<{ category: string; label: string; count: number; rate: number }>;
+  chunkingStrategies: Array<{ strategy: string; runs: number }>;
+  runtimeStore: {
+    backend: string;
+    status: "available" | "degraded";
+    usedMemoryBytes?: number;
+    maxMemoryBytes?: number;
+    keyCount?: number;
+    connectedClients?: number;
+  };
+  privacy: { contentCollected: boolean; identifiersCollected: boolean };
+}
+
 export type ChatSessionType = "paper" | "collection" | "library";
 export type AgentRunStatus = "pending" | "running" | "interrupted" | "completed" | "failed" | "cancelled";
 

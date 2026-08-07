@@ -62,3 +62,4 @@ __pycache__/
 # RAG 评测原件与可能包含论文片段的逐题预测
 /backend/evaluation/datasets/**/pdfs/
 /backend/evaluation/**/predictions/
+ops/grafana/grafana.tar.gz

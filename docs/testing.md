@@ -78,6 +78,8 @@ Redis 专项覆盖固定窗口、幂等键不重复计数、标识哈希、`429 
 
 2026-08-07 Redis 基础落地验证：后端完整回归 206 passed / 6 skipped；真实 Redis 7.4.10 返回 `PONG`，正常 `/ready` 为 `available`。停止 Redis 后 `/ready` 为 `degraded`，限流退化为 `memory-fallback` 且 API 保持运行；恢复 Redis 后重新可用。真实 TTL 冒烟确认同一幂等键在窗口内不重复计数，窗口结束后不会被旧判定继续阻塞。本轮没有执行并发容量压测，因此不报告吞吐或延迟提升。
 
+2026-08-07 RAG 可观测性里程碑验证：Python 3.11 临时测试镜像完整回归为 216 passed / 6 skipped；前端完整 Vitest 为 91/91，最终管理员面板的加载隔离、无样本口径、窗口竞态与数据源契约定向测试为 21/21，TypeScript 与 ESLint 为 0 error。Compose 中 Prometheus 的 API、Worker 两个采集目标均为 `up=1`，Grafana 自动装载 `PaperLeaf RAG` 面板并成功查询 Prometheus 数据源；Redis 实测约使用 1.2 MiB，配置上限为 256 MiB。两次虚构 SyntheticDTA 闭环分别耗时 8.684 秒与 4.779 秒，均生成持久 RAG Trace 和 Prometheus 阶段指标。该样本只证明观测链路可用，不代表检索质量、吞吐或稳定延迟已经达标；当前开发库仍含升级前 Run，因此页面会同时展示原始覆盖数和低覆盖警告。
+
 ## RAG 评测
 
 `backend/evaluation/datasets/paperleaf-rag-v1` 已冻结 20 篇 arXiv 精确版本和 120 个问题。仓库只分发注释与官方下载链接，不重新分发论文 PDF。问题覆盖：

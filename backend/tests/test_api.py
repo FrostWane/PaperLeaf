@@ -73,11 +73,21 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
 
     with TestClient(app) as admin_client:
         assert admin_client.get("/health").json()["status"] == "ok"
+        metrics = admin_client.get("/metrics/")
+        assert metrics.status_code == 200
+        assert "python_info" in metrics.text
         csrf = _login(admin_client, "admin@example.com", "admin-password-123")
         model_health = admin_client.get("/api/v1/admin/model-health")
         assert model_health.status_code == 200
         assert model_health.json()["configured"] is False
         assert model_health.json()["providers"] == []
+        observability = admin_client.get("/api/v1/admin/observability?window=24h")
+        assert observability.status_code == 200
+        assert observability.json()["totals"]["runs"] == 0
+        assert observability.json()["privacy"] == {
+            "content_collected": False,
+            "identifiers_collected": False,
+        }
         created = admin_client.post(
             "/api/v1/admin/users",
             headers={"X-CSRF-Token": csrf},
@@ -113,6 +123,7 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
         )
         assert changed.status_code == 200
         assert changed.json()["must_change_password"] is False
+        assert reader_client.get("/api/v1/admin/observability").status_code == 403
         assert reader_client.get(f"/api/v1/papers/{paper_id}").status_code == 404
         assert reader_client.get("/api/v1/papers").json() == []
         isolated_bulk = reader_client.post(
@@ -244,10 +255,7 @@ def test_arxiv_import_persists_exact_metadata_publication(
         assert imported.json()["authors"] == ["Alice", "Bob"]
         assert imported.json()["year"] == 2025
         assert imported.json()["abstract"] == "摘要"
-        assert (
-            imported.json()["publication"]
-            == "Journal of Reliable Systems 12 (2025) 1-9"
-        )
+        assert imported.json()["publication"] == "Journal of Reliable Systems 12 (2025) 1-9"
 
 
 def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_path) -> None:

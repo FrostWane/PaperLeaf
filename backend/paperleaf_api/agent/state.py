@@ -15,6 +15,7 @@ class AgentState(TypedDict, total=False):
     messages: list[dict[str, Any]]
     message_ids: list[str]
     intent: str
+    stage_timings_ms: dict[str, int]
     scope: Literal["paper", "selection", "collection", "library"]
     selected_paper_ids: list[str]
     web_enabled: bool

@@ -1,11 +1,14 @@
 # 更新记录
 
-## 未发布：Redis 运行态与容量里程碑
+## 未发布：Redis 运行态与 RAG 可观测性
 
 - Compose 增加 Redis，作为可丢失的短期运行态存储，不替代 PostgreSQL/MinIO 的业务真相。
 - Agent 提交按用户执行原子固定窗口限流；相同幂等键不重复计数，超限返回中文 `429` 与 `Retry-After`。
 - Redis Key 对用户和幂等标识做 SHA-256 摘要；连接故障时降级为当前 API 进程内限流，并由 `/ready` 公开脱敏状态。
-- 新增容量与可观测性里程碑，后续按证据引入 OpenTelemetry、Prometheus/Grafana、Locust、Worker 隔离和水平扩容。
+- Agent Run 持久化内容无关的 RAG Trace，统计意图、范围、召回通道、证据漏斗、失败原因、阶段耗时与 Chunk 策略。
+- 管理员页面新增 24 小时、7 天和 30 天 RAG 质量视图，并显示 Redis 内存、Key、连接与降级状态。
+- 真实管理页不再以演示用户、任务或 AI 状态占位；四类管理数据独立加载，时间窗口迟到响应被丢弃，无样本比例显示为未知而不是 `0%`。
+- Compose 增加 Prometheus 和预置 Grafana 面板；API/Worker 暴露低基数指标，不采集问题、论文、回答正文或业务标识。
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。早期开发阶段的接口仍可能调整，升级前请阅读对应版本说明并备份数据。
 

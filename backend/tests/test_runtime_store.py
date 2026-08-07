@@ -36,6 +36,18 @@ class FakeRedis:
         self.eval_calls.append(args)
         return [1, 1, 60]
 
+    async def info(self, section: str) -> dict[str, int]:
+        if self.fail:
+            raise ConnectionError("redis unavailable")
+        if section == "memory":
+            return {"used_memory": 2048, "maxmemory": 8192}
+        return {"connected_clients": 3}
+
+    async def dbsize(self) -> int:
+        if self.fail:
+            raise ConnectionError("redis unavailable")
+        return 7
+
     async def aclose(self) -> None:
         self.closed = True
 
@@ -124,6 +136,13 @@ def test_redis_rate_limit_hashes_identifiers_and_closes_client() -> None:
     call = client.eval_calls[0]
     assert "private-user-id" not in " ".join(str(item) for item in call)
     assert "private-message-id" not in " ".join(str(item) for item in call)
+    assert asyncio.run(store.stats()) == {
+        "backend": "redis",
+        "used_memory_bytes": 2048,
+        "max_memory_bytes": 8192,
+        "key_count": 7,
+        "connected_clients": 3,
+    }
     asyncio.run(store.close())
     assert client.closed is True
 

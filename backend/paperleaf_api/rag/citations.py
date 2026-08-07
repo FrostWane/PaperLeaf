@@ -18,6 +18,8 @@ class Evidence:
     # 实际用于命中该证据的检索表达式。中文问题经过受控英文关键词改写时，
     # 质量门禁据此复核“改写词是否真的出现在原文”，而不是盲信模型改写。
     retrieval_query: str = ""
+    # 仅用于版本化评测与聚合指标，不向模型或普通用户展示。
+    chunking_strategy: str = "unknown"
 
 
 @dataclass(frozen=True)

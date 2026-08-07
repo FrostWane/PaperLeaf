@@ -28,15 +28,12 @@ class Settings:
     )
     redis_url: str | None = os.getenv("PAPERLEAF_REDIS_URL") or None
     redis_key_prefix: str = os.getenv("PAPERLEAF_REDIS_KEY_PREFIX", "paperleaf")
-    redis_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_REDIS_TIMEOUT_SECONDS", "0.5")
-    )
-    agent_rate_limit_requests: int = int(
-        os.getenv("PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS", "12")
-    )
+    redis_timeout_seconds: float = float(os.getenv("PAPERLEAF_REDIS_TIMEOUT_SECONDS", "0.5"))
+    agent_rate_limit_requests: int = int(os.getenv("PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS", "12"))
     agent_rate_limit_window_seconds: int = int(
         os.getenv("PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")
     )
+    worker_metrics_port: int = int(os.getenv("PAPERLEAF_WORKER_METRICS_PORT", "9101"))
     session_secret: str = os.getenv("PAPERLEAF_SESSION_SECRET", "local-demo-only-change-me")
     session_cookie: str = "paperleaf_session"
     csrf_cookie: str = "paperleaf_csrf"
@@ -54,9 +51,7 @@ class Settings:
     max_pdf_pages: int = int(os.getenv("PAPERLEAF_MAX_PDF_PAGES", "500"))
     chunk_target_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_TARGET_TOKENS", "700"))
     chunk_overlap_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_OVERLAP_TOKENS", "100"))
-    chunk_semantic_unit_tokens: int = int(
-        os.getenv("PAPERLEAF_CHUNK_SEMANTIC_UNIT_TOKENS", "220")
-    )
+    chunk_semantic_unit_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_SEMANTIC_UNIT_TOKENS", "220"))
     minio_endpoint: str = os.getenv("PAPERLEAF_MINIO_ENDPOINT", "minio:9000")
     minio_access_key: str = os.getenv("PAPERLEAF_MINIO_ACCESS_KEY", "paperleaf")
     minio_secret_key: str = os.getenv("PAPERLEAF_MINIO_SECRET_KEY", "paperleaf-local")
@@ -78,9 +73,7 @@ class Settings:
     fallback_openai_base_url: str = os.getenv(
         "PAPERLEAF_FALLBACK_OPENAI_BASE_URL", "https://api.openai.com/v1"
     )
-    fallback_chat_model: str = os.getenv(
-        "PAPERLEAF_FALLBACK_CHAT_MODEL", "gpt-4.1-mini"
-    )
+    fallback_chat_model: str = os.getenv("PAPERLEAF_FALLBACK_CHAT_MODEL", "gpt-4.1-mini")
     fallback_vision_model: str | None = os.getenv("PAPERLEAF_FALLBACK_VISION_MODEL")
     fallback_embedding_enabled: bool = _bool("PAPERLEAF_FALLBACK_EMBEDDING_ENABLED", True)
     fallback_embedding_model: str = os.getenv(
@@ -90,9 +83,7 @@ class Settings:
     translation_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS", "90")
     )
-    artifact_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS", "120")
-    )
+    artifact_timeout_seconds: float = float(os.getenv("PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS", "120"))
     artifact_retry_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS", "90")
     )
@@ -102,9 +93,7 @@ class Settings:
     structure_retry_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_STRUCTURE_RETRY_TIMEOUT_SECONDS", "120")
     )
-    model_attempts_per_provider: int = int(
-        os.getenv("PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER", "1")
-    )
+    model_attempts_per_provider: int = int(os.getenv("PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER", "1"))
     model_circuit_failure_threshold: int = int(
         os.getenv("PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD", "3")
     )
@@ -156,9 +145,7 @@ class Settings:
             max(self.model_timeout_seconds, self.translation_timeout_seconds)
             > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS
         ):
-            raise RuntimeError(
-                "模型单次超时不能超过 120 秒，以确保明显短于 Worker 租约"
-            )
+            raise RuntimeError("模型单次超时不能超过 120 秒，以确保明显短于 Worker 租约")
         artifact_timeouts = (
             self.artifact_timeout_seconds,
             self.artifact_retry_timeout_seconds,
@@ -187,6 +174,8 @@ class Settings:
             raise RuntimeError("Agent 限流窗口必须位于 1 到 3600 秒之间")
         if not self.redis_key_prefix.strip():
             raise RuntimeError("Redis Key 前缀不能为空")
+        if not 1024 <= self.worker_metrics_port <= 65535:
+            raise RuntimeError("Worker 指标端口必须位于 1024 到 65535 之间")
         if self.chunk_target_tokens <= 0:
             raise RuntimeError("Chunk 目标长度必须为正数")
         if not 0 <= self.chunk_overlap_tokens < self.chunk_target_tokens:

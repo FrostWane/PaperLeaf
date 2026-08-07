@@ -10,6 +10,11 @@ from typing import Any
 from .model_runtime import ModelRuntimeError, collect_model_attempts
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import CitationClaim, Evidence, validate_citations
+from .rag_observability import (
+    build_rag_trace,
+    classify_intent,
+    record_rag_run,
+)
 
 _CITATION_RE = re.compile(r"\[chunk:([^\]]+)\]")
 _CONTROLLED_NOTICE_RE = re.compile(r"^\s*>?\s*证据说明[：:]", re.IGNORECASE)
@@ -77,10 +82,7 @@ def _validate_publishable_paragraph(
         controlled_notice = (
             _CONTROLLED_NOTICE_RE.match(paragraph) is not None
             or _STRUCTURAL_MARKDOWN_RE.match(paragraph) is not None
-            or (
-                not citations
-                and str(evidence_quality.get("grade", "")) == "insufficient"
-            )
+            or (not citations and str(evidence_quality.get("grade", "")) == "insufficient")
         )
         return controlled_notice, "controlled_notice", []
     valid, _errors = validate_citations(paragraph_citations, evidence)
@@ -135,6 +137,53 @@ async def _invoke_with_cancel(
         raise
 
 
+async def _finish_observed_run(
+    repository: Any,
+    run_id: str,
+    claim_token: str,
+    *,
+    started_at: float,
+    status: str,
+    intent: str,
+    scope: str,
+    outcome: str,
+    result: dict[str, Any] | None,
+    result_summary: dict[str, Any],
+    error_code: str | None = None,
+    stage_timings_ms: dict[str, int] | None = None,
+    **finish_values: Any,
+) -> Any:
+    """原子落终态后记录低基数指标；持久轨迹仍是管理员统计的事实源。"""
+
+    duration_ms = round((time.perf_counter() - started_at) * 1000)
+    trace = build_rag_trace(
+        intent=intent,
+        scope=scope,
+        result=result,
+        stage_timings_ms=stage_timings_ms,
+        outcome=outcome,
+        error_code=error_code,
+    )
+    summary = dict(result_summary)
+    summary["rag_trace"] = trace
+    finished = await repository.finish_agent_run(
+        run_id,
+        status=status,
+        error_code=error_code,
+        duration_ms=duration_ms,
+        result_summary=summary,
+        claim_token=claim_token,
+        **finish_values,
+    )
+    if finished:
+        record_rag_run(
+            trace,
+            status=str(getattr(finished, "status", status)),
+            duration_ms=getattr(finished, "duration_ms", duration_ms),
+        )
+    return finished
+
+
 async def execute_agent_run(
     repository: Any,
     graph: Any,
@@ -155,6 +204,15 @@ async def execute_agent_run(
         return
     run = started
     snapshot = dict(run.scope_snapshot or {})
+    scope = str(snapshot.get("type", "library"))
+    intent_started_at = time.perf_counter()
+    intent = classify_intent(
+        query,
+        scope=scope,
+        selected_paper_count=len(snapshot.get("paper_ids", [])),
+        web_enabled=bool(snapshot.get("web_enabled", False)),
+    )
+    intent_ms = round((time.perf_counter() - intent_started_at) * 1000)
     visible_history = await repository.list_chat_messages(run.session_id, run.user_id)
     initial = {
         "run_id": run.id,
@@ -169,10 +227,12 @@ async def execute_agent_run(
             for item in (visible_history or [])
             if item.content.strip() and item.id != run.assistant_message_id
         ][-9:],
-        "scope": snapshot.get("type", "library"),
+        "intent": intent,
+        "scope": scope,
         "selected_paper_ids": list(snapshot.get("paper_ids", [])),
         "web_enabled": bool(snapshot.get("web_enabled", False)),
         "tool_steps": 0,
+        "stage_timings_ms": {"intent": intent_ms},
         "status": "pending",
     }
     await repository.append_agent_run_event(
@@ -200,39 +260,50 @@ async def execute_agent_run(
                 return
             raise
         except ModelRuntimeError as error:
-            duration_ms = round((time.perf_counter() - started_at) * 1000)
-            await repository.finish_agent_run(
+            await _finish_observed_run(
+                repository,
                 run_id,
+                claim_token,
+                started_at=started_at,
                 status="failed",
+                intent=intent,
+                scope=scope,
+                outcome="model_failed",
                 error_code=error.error_code,
-                duration_ms=duration_ms,
+                result=None,
+                stage_timings_ms={"intent": intent_ms},
                 result_summary={
                     "answer": "",
                     "citations": [],
                     "model_attempts": [item.as_dict() for item in attempts],
                 },
-                claim_token=claim_token,
             )
             return
         except Exception:
-            duration_ms = round((time.perf_counter() - started_at) * 1000)
-            await repository.finish_agent_run(
+            await _finish_observed_run(
+                repository,
                 run_id,
+                claim_token,
+                started_at=started_at,
                 status="failed",
+                intent=intent,
+                scope=scope,
+                outcome="internal_failed",
                 error_code="AGENT_RUN_FAILED",
-                duration_ms=duration_ms,
+                result=None,
+                stage_timings_ms={"intent": intent_ms},
                 result_summary={"answer": "", "citations": []},
-                claim_token=claim_token,
             )
             return
-    duration_ms = round((time.perf_counter() - started_at) * 1000)
     model_attempts = [item.as_dict() for item in attempts]
+    stage_timings = dict(result.get("stage_timings_ms", {}))
     await repository.append_agent_run_event(
         run_id,
         "tool_finished",
         {
             "tool": "search_library",
             "evidence_count": len(result.get("retrieved_evidence", [])),
+            "duration_ms": stage_timings.get("retrieval"),
         },
         event_key="stage:tool:search:finish",
         claim_token=claim_token,
@@ -240,7 +311,11 @@ async def execute_agent_run(
     await repository.append_agent_run_event(
         run_id,
         "node_finished",
-        {"node": "retrieve_library", "stage": "检索文献证据"},
+        {
+            "node": "retrieve_library",
+            "stage": "检索文献证据",
+            "duration_ms": stage_timings.get("retrieval"),
+        },
         event_key="stage:retrieve:finish",
         claim_token=claim_token,
     )
@@ -249,19 +324,24 @@ async def execute_agent_run(
     if interrupts:
         pending_action = getattr(interrupts[0], "value", pending_action or {})
     if pending_action or result.get("status") == "interrupted":
-        await repository.finish_agent_run(
+        await _finish_observed_run(
+            repository,
             run_id,
+            claim_token,
+            started_at=started_at,
             status="interrupted",
+            intent=intent,
+            scope=scope,
+            outcome="interrupted",
+            result=result,
             pending_action=pending_action or {},
             tool_steps=int(result.get("tool_steps", 0)),
-            duration_ms=duration_ms,
             result_summary={
                 "answer": "",
                 "citations": [],
                 "evidence_quality": dict(result.get("evidence_quality", {})),
                 "model_attempts": model_attempts,
             },
-            claim_token=claim_token,
         )
         return
 
@@ -271,18 +351,23 @@ async def execute_agent_run(
     quality = dict(result.get("evidence_quality", {}))
     allowed_paper_ids = set(snapshot.get("paper_ids", []))
     if any(item.paper_id not in allowed_paper_ids for item in evidence):
-        await repository.finish_agent_run(
+        await _finish_observed_run(
+            repository,
             run_id,
+            claim_token,
+            started_at=started_at,
             status="failed",
+            intent=intent,
+            scope=scope,
+            outcome="scope_violation",
             error_code="EVIDENCE_SCOPE_VIOLATION",
-            duration_ms=duration_ms,
+            result={**result, "citations": []},
             result_summary={
                 "answer": "",
                 "citations": [],
                 "evidence_quality": quality,
                 "model_attempts": model_attempts,
             },
-            claim_token=claim_token,
         )
         return
     paragraphs = _answer_paragraphs(answer)
@@ -291,7 +376,11 @@ async def execute_agent_run(
     await repository.append_agent_run_event(
         run_id,
         "node_started",
-        {"node": "generate_answer", "stage": "生成候选回答"},
+        {
+            "node": "generate_answer",
+            "stage": "生成候选回答",
+            "duration_ms": stage_timings.get("generation"),
+        },
         event_key="stage:generate:start",
         claim_token=claim_token,
     )
@@ -309,6 +398,7 @@ async def execute_agent_run(
         event_key="stage:validate:start",
         claim_token=claim_token,
     )
+    citation_validation_started_at = time.perf_counter()
     for paragraph in paragraphs:
         valid, classification, paragraph_citations = _validate_publishable_paragraph(
             paragraph,
@@ -323,15 +413,23 @@ async def execute_agent_run(
             dropped_paragraphs += 1
             continue
         validated.append((paragraph, classification, paragraph_citations))
-    has_cited_answer = any(
-        classification == "cited_answer" for _, classification, _ in validated
+    stage_timings["citation_validation"] = round(
+        (time.perf_counter() - citation_validation_started_at) * 1000
     )
+    has_cited_answer = any(classification == "cited_answer" for _, classification, _ in validated)
     if evidence and not has_cited_answer:
-        await repository.finish_agent_run(
+        await _finish_observed_run(
+            repository,
             run_id,
+            claim_token,
+            started_at=started_at,
             status="failed",
+            intent=intent,
+            scope=scope,
+            outcome="unverified_answer",
             error_code="UNVERIFIED_ANSWER",
-            duration_ms=duration_ms,
+            result={**result, "citations": [], "stage_timings_ms": stage_timings},
+            stage_timings_ms=stage_timings,
             result_summary={
                 "answer": "",
                 "citations": [],
@@ -339,13 +437,16 @@ async def execute_agent_run(
                 "model_attempts": model_attempts,
                 "dropped_paragraph_count": dropped_paragraphs,
             },
-            claim_token=claim_token,
         )
         return
     await repository.append_agent_run_event(
         run_id,
         "node_finished",
-        {"node": "validate_citations", "stage": "核验证据与引用"},
+        {
+            "node": "validate_citations",
+            "stage": "核验证据与引用",
+            "duration_ms": stage_timings.get("citation_validation"),
+        },
         event_key="stage:validate:finish",
         claim_token=claim_token,
     )
@@ -377,11 +478,23 @@ async def execute_agent_run(
     if result_status != "completed":
         result_status = "failed"
     published_answer = "\n\n".join(item[0] for item in validated)
-    await repository.finish_agent_run(
+    outcome = "cited_answer" if all_citation_dicts else "abstained"
+    await _finish_observed_run(
+        repository,
         run_id,
+        claim_token,
+        started_at=started_at,
         status=result_status,
+        intent=intent,
+        scope=scope,
+        outcome=outcome,
+        result={
+            **result,
+            "citations": list(all_citation_dicts.values()),
+            "stage_timings_ms": stage_timings,
+        },
+        stage_timings_ms=stage_timings,
         tool_steps=int(result.get("tool_steps", 0)),
-        duration_ms=duration_ms,
         error_code=result.get("error"),
         result_summary={
             "answer": published_answer,
@@ -390,5 +503,4 @@ async def execute_agent_run(
             "model_attempts": model_attempts,
             "dropped_paragraph_count": dropped_paragraphs,
         },
-        claim_token=claim_token,
     )

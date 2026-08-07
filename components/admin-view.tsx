@@ -3,10 +3,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { Activity, Plus, RefreshCw, UserX, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createAdminUser, getAdminModelHealth, listAdminJobs, listAdminUsers, retryAdminJob, setAdminUserActive } from "@/lib/data-source";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createAdminUser, getAdminModelHealth, getAdminRagObservability, listAdminJobs, listAdminUsers, retryAdminJob, setAdminUserActive } from "@/lib/data-source";
 import { users as fixtureUsers } from "@/lib/fixtures";
-import type { AdminJob, ModelRuntimeHealth, UserRecord } from "@/lib/types";
+import type { AdminJob, AdminRagObservability, ModelRuntimeHealth, UserRecord } from "@/lib/types";
 
 const helper = createColumnHelper<UserRecord>();
 const demoJobs: AdminJob[] = [{ id: "job-demo", paperId: "attention", type: "parse_pdf", status: "running", progress: 68, attempts: 1, maxAttempts: 3 }];
@@ -17,6 +17,46 @@ const demoHealth: ModelRuntimeHealth = {
     purposes: Object.fromEntries(["answer", "evidence_support", "summary", "translation", "embedding"].map((purpose) => [purpose, { configured: true, status: "closed", consecutiveFailures: 0, retryAfterMs: 0 }])),
   }],
   policy: { timeoutSeconds: 30, attemptsPerProvider: 2, failureThreshold: 3, cooldownSeconds: 60 },
+};
+const emptyHealth: ModelRuntimeHealth = {
+  configured: false,
+  providers: [],
+  policy: { timeoutSeconds: 0, attemptsPerProvider: 0, failureThreshold: 0, cooldownSeconds: 0 },
+};
+const emptyObservability: AdminRagObservability = {
+  windowHours: 24,
+  generatedAt: "",
+  limitReached: false,
+  totals: { runs: 0, terminalRuns: 0, completedRuns: 0, failedRuns: 0, citedAnswers: 0, groundedAnswers: 0, ragIssueRuns: 0, telemetryRuns: 0, telemetryCoverage: 0, completionRate: 0, failureRate: 0, citedAnswerRate: 0, ragIssueRate: 0 },
+  funnel: [],
+  latency: { overall: { samples: 0 }, stages: [] },
+  retrievalChannels: [],
+  intents: [],
+  failures: [],
+  chunkingStrategies: [],
+  runtimeStore: { backend: "memory", status: "available" },
+  privacy: { contentCollected: false, identifiersCollected: false },
+};
+
+const stageLabels: Record<string, string> = {
+  intent: "意图识别",
+  retrieval: "证据召回",
+  evidence_grading: "证据评级",
+  generation: "回答生成",
+  answer_support: "答案支持检查",
+  citation_validation: "引用校验",
+};
+
+function percent(value: number): string { return `${(value * 100).toFixed(1)}%`; }
+function sampledPercent(value: number, samples: number): string { return samples > 0 ? percent(value) : "—"; }
+function duration(value?: number): string { return typeof value === "number" ? value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${value} 毫秒` : "—"; }
+function bytes(value?: number): string { return typeof value === "number" ? value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${Math.round(value / 1024)} KiB` : "—"; }
+function generatedAt(value: string): string { return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "尚未生成"; }
+
+const runtimeStoreLabels: Record<string, string> = {
+  redis: "Redis",
+  memory: "进程内状态存储",
+  "memory-fallback": "进程内降级存储",
 };
 
 const purposeCopy: Record<string, { label: string; description: string }> = {
@@ -69,28 +109,47 @@ function jobProgressLabel(job: AdminJob): string {
 
 export function AdminView() {
   const real = process.env.NEXT_PUBLIC_DATA_MODE === "real";
-  const [users, setUsers] = useState(fixtureUsers);
-  const [jobs, setJobs] = useState(demoJobs);
-  const [modelHealth, setModelHealth] = useState<ModelRuntimeHealth>(demoHealth);
+  const grafanaUrl = process.env.NEXT_PUBLIC_GRAFANA_URL;
+  const [users, setUsers] = useState<UserRecord[]>(() => real ? [] : fixtureUsers);
+  const [jobs, setJobs] = useState<AdminJob[]>(() => real ? [] : demoJobs);
+  const [modelHealth, setModelHealth] = useState<ModelRuntimeHealth>(() => real ? emptyHealth : demoHealth);
+  const [usersLoaded, setUsersLoaded] = useState(!real);
+  const [jobsLoaded, setJobsLoaded] = useState(!real);
+  const [modelHealthLoaded, setModelHealthLoaded] = useState(!real);
+  const [observability, setObservability] = useState<AdminRagObservability>(emptyObservability);
+  const [window, setWindow] = useState<"24h" | "7d" | "30d">("24h");
+  const [observabilityLoading, setObservabilityLoading] = useState(real);
   const [message, setMessage] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [pendingDeactivation, setPendingDeactivation] = useState<UserRecord | null>(null);
   const [email, setEmail] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
+  const refreshSequence = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!real) return;
-    setMessage("正在刷新管理数据…");
-    try {
-      const [nextUsers, nextJobs, nextModelHealth] = await Promise.all([listAdminUsers(), listAdminJobs(), getAdminModelHealth()]);
-      setUsers(nextUsers);
-      setJobs(nextJobs);
-      setModelHealth(nextModelHealth);
-      setMessage("");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "管理数据读取失败");
-    }
-  }, [real]);
+    const sequence = ++refreshSequence.current;
+    setObservabilityLoading(true);
+    setMessage(`正在加载${window === "24h" ? "24 小时" : window === "7d" ? "7 天" : "30 天"}数据…`);
+    const [usersResult, jobsResult, healthResult, observabilityResult] = await Promise.allSettled([
+      listAdminUsers(),
+      listAdminJobs(),
+      getAdminModelHealth(),
+      getAdminRagObservability(window),
+    ]);
+    if (sequence !== refreshSequence.current) return;
+    const errors: string[] = [];
+    if (usersResult.status === "fulfilled") { setUsers(usersResult.value); setUsersLoaded(true); }
+    else errors.push(usersResult.reason instanceof Error ? usersResult.reason.message : "用户数据读取失败");
+    if (jobsResult.status === "fulfilled") { setJobs(jobsResult.value); setJobsLoaded(true); }
+    else errors.push(jobsResult.reason instanceof Error ? jobsResult.reason.message : "任务数据读取失败");
+    if (healthResult.status === "fulfilled") { setModelHealth(healthResult.value); setModelHealthLoaded(true); }
+    else errors.push(healthResult.reason instanceof Error ? healthResult.reason.message : "AI 状态读取失败");
+    if (observabilityResult.status === "fulfilled") setObservability(observabilityResult.value);
+    else errors.push(observabilityResult.reason instanceof Error ? observabilityResult.reason.message : "RAG 指标读取失败");
+    setObservabilityLoading(false);
+    setMessage(errors.join("；"));
+  }, [real, window]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -137,10 +196,26 @@ export function AdminView() {
   const runtimeProviders = modelHealth.providers.length > 0
     ? modelHealth.providers
     : [{ provider: "unconfigured", purposes: {} }];
+  const telemetrySamples = observability.totals.telemetryRuns;
+  const terminalSamples = observability.totals.terminalRuns;
+  const runtimeStoreLabel = runtimeStoreLabels[observability.runtimeStore.backend] ?? "运行状态存储";
 
   return <div className="admin-layout">
-    <div className="metric-row"><article><span>活跃用户</span><strong>{activeUsers}</strong><small>共 {users.length} 个账号</small></article><article><span>处理中任务</span><strong>{runningJobs}</strong><small>仅展示任务元数据</small></article><article><span>AI 服务</span><strong>{modelState}</strong><small>{modelHealth.providers.length || 0} 个已配置服务</small></article><article><span>内容访问</span><strong>关闭</strong><small>管理员默认不可读取</small></article></div>
+    <div className="metric-row rag-metrics"><article><span>Agent 运行</span><strong>{observability.totals.runs}</strong><small>全部运行记录</small></article><article><span>含引用回答</span><strong>{sampledPercent(observability.totals.citedAnswerRate, telemetrySamples)}</strong><small>{observability.totals.citedAnswers} / {telemetrySamples} 条已采集轨迹</small></article><article><span>RAG 异常/受限率</span><strong>{sampledPercent(observability.totals.ragIssueRate, telemetrySamples)}</strong><small>{observability.totals.ragIssueRuns} / {telemetrySamples} 条已采集轨迹</small></article><article><span>端到端 P95</span><strong>{duration(observability.latency.overall.p95Ms)}</strong><small>{observability.latency.overall.samples} 个终态耗时样本</small></article></div>
     {message && <p className="admin-message" role="status">{message}</p>}
+    <section className="admin-section rag-observability" aria-busy={observabilityLoading}><div className="section-bar"><div><span className="eyebrow">检索增强链路</span><h2>RAG 运行质量</h2><small>聚合运行结果与阶段耗时，不采集问题、论文内容或身份标识。数据生成于 {generatedAt(observability.generatedAt)}。</small></div><div className="rag-window" aria-label="统计时间范围">{(["24h", "7d", "30d"] as const).map((value) => <button type="button" key={value} className={window === value ? "active" : ""} aria-pressed={window === value} onClick={() => setWindow(value)}>{value === "24h" ? "24 小时" : value === "7d" ? "7 天" : "30 天"}</button>)}</div></div>
+      <div className="admin-runtime-strip"><span><i data-status={observability.runtimeStore.status} />{runtimeStoreLabel} {observability.runtimeStore.status === "available" ? "可用" : "降级"}</span>{observability.runtimeStore.usedMemoryBytes !== undefined && <span>{runtimeStoreLabel}内存 {bytes(observability.runtimeStore.usedMemoryBytes)}{observability.runtimeStore.maxMemoryBytes ? ` / ${bytes(observability.runtimeStore.maxMemoryBytes)}` : ""}</span>}{observability.runtimeStore.keyCount !== undefined && <span>短期 Key {observability.runtimeStore.keyCount}</span>}{observability.runtimeStore.connectedClients !== undefined && <span>存储连接 {observability.runtimeStore.connectedClients}</span>}<span>指标覆盖 {telemetrySamples > 0 ? percent(observability.totals.telemetryCoverage) : "—"}</span><span>运行失败 {terminalSamples > 0 ? percent(observability.totals.failureRate) : "—"}</span><span>活跃用户 {activeUsers}/{users.length}</span><span>处理中任务 {runningJobs}</span><span>AI 服务 {modelState}</span>{grafanaUrl && <a href={grafanaUrl} target="_blank" rel="noreferrer">打开 Grafana</a>}</div>
+      {telemetrySamples === 0 ? <div className="runtime-empty"><Activity size={17} /><span><strong>{terminalSamples > 0 ? `已有 ${terminalSamples} 次终态运行，但尚无可分析的 RAG 轨迹` : "还没有可分析的 RAG 运行"}</strong><small>{terminalSamples > 0 ? "这些记录来自可观测性升级前；完成新的问答后会开始形成细分指标。" : "完成一次单篇或跨文献问答后，这里会显示召回、证据和生成链路。"}</small></span></div> : <>
+        {(observability.totals.telemetryCoverage < 1 || observability.limitReached) && <p className="rag-coverage-note">{observability.totals.telemetryCoverage < 1 ? `当前窗口包含升级前记录，已采集 ${telemetrySamples} / ${terminalSamples} 条终态运行（${percent(observability.totals.telemetryCoverage)}）。${observability.totals.telemetryCoverage < 0.8 ? "覆盖不足 80%，细分指标不适合直接比较。" : ""}` : ""}{observability.limitReached ? " 当前窗口运行数达到查询上限，本页所有指标均基于最近 5000 次运行。" : ""}</p>}
+        <div className="rag-dashboard-grid">
+          <article className="rag-panel"><h3>证据漏斗 <small>占已采集运行</small></h3>{observability.funnel.length === 0 ? <p className="rag-empty">当前窗口没有证据漏斗数据。</p> : <ol className="rag-funnel">{observability.funnel.map((step) => <li key={step.key}><span><strong>{step.label}</strong><small>{percent(step.rate)}</small></span><div aria-hidden="true"><i style={{ width: `${Math.max(step.rate * 100, step.count > 0 ? 3 : 0)}%` }} /></div><b>{step.count}</b></li>)}</ol>}</article>
+          <article className="rag-panel"><h3>阶段耗时</h3>{observability.latency.stages.length === 0 ? <p className="rag-empty">当前窗口没有阶段耗时数据。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="RAG 阶段耗时"><thead><tr><th>阶段</th><th>样本</th><th>P50</th><th>P95</th></tr></thead><tbody>{observability.latency.stages.map((item) => <tr key={item.stage}><td>{stageLabels[item.stage] ?? item.stage}</td><td>{item.samples}</td><td>{duration(item.p50Ms)}</td><td>{duration(item.p95Ms)}</td></tr>)}</tbody></table></div>}</article>
+          <article className="rag-panel rag-panel-wide"><h3>召回通道</h3>{observability.retrievalChannels.length === 0 ? <p className="rag-empty">当前窗口没有召回通道数据。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="RAG 召回通道"><thead><tr><th>通道</th><th>参与运行</th><th>证据充足率</th><th>含引用回答率</th><th>召回 P95</th></tr></thead><tbody>{observability.retrievalChannels.map((item) => <tr key={item.channel}><td>{item.label}</td><td>{item.runs}</td><td>{percent(item.sufficientEvidenceRate)}</td><td>{percent(item.citedAnswerRate)}</td><td>{duration(item.retrievalP95Ms)}</td></tr>)}</tbody></table></div>}</article>
+          <article className="rag-panel"><h3>问题意图</h3>{observability.intents.length === 0 ? <p className="rag-empty">当前窗口没有意图分类数据。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="RAG 问题意图"><thead><tr><th>意图</th><th>运行</th><th>含引用回答</th><th>P95</th></tr></thead><tbody>{observability.intents.map((item) => <tr key={item.intent}><td>{item.label}</td><td>{item.runs}</td><td>{percent(item.citedAnswerRate)}</td><td>{duration(item.p95Ms)}</td></tr>)}</tbody></table></div>}</article>
+          <article className="rag-panel"><h3>失败与受限</h3>{observability.failures.length === 0 ? <p className="rag-empty">当前窗口没有失败或受限记录。</p> : <ul className="rag-failures">{observability.failures.map((item) => <li key={item.category}><span>{item.label}<small>{percent(item.rate)}</small></span><strong>{item.count}</strong></li>)}</ul>}<div className="rag-strategies"><span>索引策略</span>{observability.chunkingStrategies.length === 0 ? <small>暂无数据</small> : observability.chunkingStrategies.map((item) => <small key={item.strategy}>{item.strategy} · {item.runs}</small>)}</div></article>
+        </div>
+      </>}
+    </section>
     <Dialog.Root open={Boolean(pendingDeactivation)} onOpenChange={(open) => !open && setPendingDeactivation(null)}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
@@ -153,14 +228,14 @@ export function AdminView() {
     </Dialog.Root>
     <section className="admin-section"><div className="section-bar"><div><span className="eyebrow">账号与访问权限</span><h2>用户与权限</h2></div><button className="primary-button" onClick={() => setShowCreate((value) => !value)}><Plus size={15} />创建用户</button></div>
       {showCreate && <div className="admin-create"><label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>临时密码<input type="password" value={temporaryPassword} onChange={(event) => setTemporaryPassword(event.target.value)} /></label><button className="primary-button" onClick={() => void createUser()}>保存用户</button></div>}
+      {!usersLoaded && <div className="table-message">正在读取用户数据…</div>}
       <div className="table-scroll"><table className="data-table admin-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
     </section>
     <section className="admin-section model-runtime"><div className="section-bar"><div><span className="eyebrow">AI 服务可用性</span><h2>AI 能力状态</h2></div><small>单次调用超时 {modelHealth.policy.timeoutSeconds} 秒 · 每项能力最多尝试 {modelHealth.policy.attemptsPerProvider} 次</small></div>
-      {!modelHealth.configured && <div className="runtime-empty"><Activity size={17} /><span><strong>当前未配置外部模型</strong><small>系统继续使用全文检索与确定性回答，不会产生模型调用费用。</small></span></div>}
-      {runtimeProviders.map((provider, providerIndex) => <div className="runtime-provider" key={provider.provider}><span className="runtime-provider-name"><Activity size={15} /><strong>{provider.provider === "unconfigured" ? "尚未配置 AI 服务" : providerIndex === 0 ? "主要 AI 服务" : `备用 AI 服务 ${providerIndex}`}</strong></span><div className="runtime-purposes">{visiblePurposeNames.map((purposeName) => { const copy = purposeCopy[purposeName]; const purpose = provider.purposes[purposeName]; const state = !purpose?.configured ? "暂不可用 · 尚未配置" : purpose.status === "closed" ? "可用" : purpose.status === "half_open" ? "正在检测恢复" : `暂不可用，${Math.ceil(purpose.retryAfterMs / 1000)} 秒后重试`; const statusName = purpose?.configured ? purpose.status : "unconfigured"; return <span key={purposeName} data-status={statusName} title={copy.description}><i />{copy.label}<small>{state} · {copy.description}</small></span>; })}</div></div>)}
+      {!modelHealthLoaded ? <div className="runtime-empty"><Activity size={17} /><span><strong>正在读取 AI 服务状态</strong><small>读取完成后显示各项能力的真实可用状态。</small></span></div> : <>{!modelHealth.configured && <div className="runtime-empty"><Activity size={17} /><span><strong>当前未配置外部模型</strong><small>系统继续使用全文检索与确定性回答，不会产生模型调用费用。</small></span></div>}{runtimeProviders.map((provider, providerIndex) => <div className="runtime-provider" key={provider.provider}><span className="runtime-provider-name"><Activity size={15} /><strong>{provider.provider === "unconfigured" ? "尚未配置 AI 服务" : providerIndex === 0 ? "主要 AI 服务" : `备用 AI 服务 ${providerIndex}`}</strong></span><div className="runtime-purposes">{visiblePurposeNames.map((purposeName) => { const copy = purposeCopy[purposeName]; const purpose = provider.purposes[purposeName]; const state = !purpose?.configured ? "暂不可用 · 尚未配置" : purpose.status === "closed" ? "可用" : purpose.status === "half_open" ? "正在检测恢复" : `暂不可用，${Math.ceil(purpose.retryAfterMs / 1000)} 秒后重试`; const statusName = purpose?.configured ? purpose.status : "unconfigured"; return <span key={purposeName} data-status={statusName} title={copy.description}><i />{copy.label}<small>{state} · {copy.description}</small></span>; })}</div></div>)}</>}
     </section>
     <section className="admin-section jobs"><div className="section-bar"><div><span className="eyebrow">异步处理队列</span><h2>后台任务</h2><small>上传、导入、删除等耗时操作会在离开页面后继续执行。</small></div><button className="secondary-button" onClick={() => void refresh()}><RefreshCw size={15} />刷新</button></div>
-      {jobs.length === 0 && <div className="table-message">当前没有后台任务。</div>}
+      {!jobsLoaded ? <div className="table-message">正在读取后台任务…</div> : jobs.length === 0 && <div className="table-message">当前没有后台任务。</div>}
       {jobs.map((job) => <div className="job-row" key={job.id}><span className="job-icon"><Activity size={16} /></span><span><strong>{jobTypeLabels[job.type] ?? "其他后台任务"}</strong><small>{jobStatusCopy(job)}</small></span><div className="job-progress" role={job.status === "running" ? "progressbar" : undefined} aria-label={job.status === "running" ? `处理进度 ${job.progress}%` : undefined} aria-valuemin={job.status === "running" ? 0 : undefined} aria-valuemax={job.status === "running" ? 100 : undefined} aria-valuenow={job.status === "running" ? job.progress : undefined}><span style={{ width: `${job.status === "completed" ? 100 : job.progress}%` }} /></div><span className="mono">{jobProgressLabel(job)}</span>{job.status === "failed" && <button className="secondary-button" onClick={async () => { try { const updated = await retryAdminJob(job.id); setJobs((items) => items.map((item) => item.id === updated.id ? updated : item)); } catch (error) { setMessage(error instanceof Error ? error.message : "重试失败"); } }}>重试</button>}</div>)}
     </section>
   </div>;

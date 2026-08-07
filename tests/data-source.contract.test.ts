@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { API_BASE_URL, changePassword, getAdminModelHealth, login, realDataSource, setAdminUserActive } from "@/lib/data-source";
+import { API_BASE_URL, changePassword, getAdminModelHealth, getAdminRagObservability, login, realDataSource, setAdminUserActive } from "@/lib/data-source";
 import { server } from "./test-server";
 
 describe("真实 API 契约", () => {
@@ -71,6 +71,31 @@ describe("真实 API 契约", () => {
       configured: true,
       providers: [{ provider: "primary", purposes: { answer: { status: "open", consecutiveFailures: 3, retryAfterMs: 4200 } } }],
       policy: { timeoutSeconds: 30, attemptsPerProvider: 2, failureThreshold: 3, cooldownSeconds: 60 },
+    });
+  });
+
+  it("管理员 RAG 指标映射召回通道、意图、耗时和失败率", async () => {
+    server.use(http.get(`${API_BASE_URL}/admin/observability`, () => HttpResponse.json({
+      window_hours: 168,
+      generated_at: "2026-08-07T12:00:00Z",
+      totals: { runs: 5, terminal_runs: 5, failed_runs: 1, cited_answers: 3, grounded_answers: 2, rag_issue_runs: 1, telemetry_runs: 5, telemetry_coverage: 1, failure_rate: 0.2, cited_answer_rate: 0.6, rag_issue_rate: 0.2 },
+      funnel: [{ key: "retrieved", label: "召回证据", count: 4, rate: 0.8 }],
+      latency: { overall: { samples: 5, p95_ms: 2400 }, stages: [{ stage: "retrieval", samples: 5, p50_ms: 90, p95_ms: 210 }] },
+      retrieval_channels: [{ channel: "vector", label: "向量检索", runs: 4, cited_answer_rate: 0.75, sufficient_evidence_rate: 0.75, retrieval_p95_ms: 180 }],
+      intents: [{ intent: "comparison", label: "比较分析", runs: 2, cited_answer_rate: 0.5, sufficient_evidence_rate: 1, p95_ms: 2300 }],
+      failures: [{ category: "model_timeout", label: "模型响应超时", count: 1, rate: 0.2 }],
+      chunking_strategies: [{ strategy: "structure_aware_v2", runs: 5 }],
+      runtime_store: { backend: "redis", status: "available" },
+      privacy: { content_collected: false, identifiers_collected: false },
+    })));
+    await expect(getAdminRagObservability("7d")).resolves.toMatchObject({
+      windowHours: 168,
+      totals: { runs: 5, failureRate: 0.2, citedAnswerRate: 0.6, groundedAnswers: 2, ragIssueRate: 0.2 },
+      latency: { overall: { p95Ms: 2400 }, stages: [{ stage: "retrieval", p95Ms: 210 }] },
+      retrievalChannels: [{ channel: "vector", retrievalP95Ms: 180 }],
+      intents: [{ intent: "comparison" }],
+      failures: [{ category: "model_timeout" }],
+      runtimeStore: { backend: "redis", status: "available" },
     });
   });
 

@@ -28,6 +28,7 @@ dependencies = [
   "langchain-openai>=0.2,<1",
   "httpx>=0.27,<1",
   "redis>=5,<7",
+  "prometheus-client>=0.21,<1",
 ]
 
 [project.optional-dependencies]

@@ -266,9 +266,7 @@ class SQLLibrarySearch:
             ).all()
         )
 
-    async def _scoped_overview_evidence(
-        self, request: LibrarySearchInput
-    ) -> list[Evidence]:
+    async def _scoped_overview_evidence(self, request: LibrarySearchInput) -> list[Evidence]:
         """从用户明确选中的单篇论文跨页取样，避免概览问题依赖查询翻译。"""
 
         paper_id = request.paper_ids[0]
@@ -311,6 +309,7 @@ class SQLLibrarySearch:
                 retrieval_channels=("scoped_overview",),
                 channel_scores=(("scoped_overview", 1.0),),
                 retrieval_query=request.query,
+                chunking_strategy=getattr(paper, "chunking_strategy", "unknown"),
             )
             for chunk, paper in selected_rows
         ]
@@ -361,6 +360,7 @@ class SQLLibrarySearch:
                 physical_page=chunk.physical_page,
                 text=chunk.text,
                 retrieval_query=matched_query,
+                chunking_strategy=getattr(paper, "chunking_strategy", "unknown"),
             )
 
         keyword_hits = [
@@ -405,6 +405,7 @@ class SQLLibrarySearch:
                     retrieval_channels=hit_channels,
                     channel_scores=channel_scores,
                     retrieval_query=hit.payload.retrieval_query,
+                    chunking_strategy=hit.payload.chunking_strategy,
                 )
             )
         return deduplicate_evidence_by_page(fused_evidence, limit=request.limit)

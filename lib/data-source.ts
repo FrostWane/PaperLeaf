@@ -2,7 +2,7 @@ import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
 import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
-import type { AdminJob, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperActionInput, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
+import type { AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperActionInput, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -613,6 +613,44 @@ export interface PaperLeafDataSource {
   cancelAgentRun(runId: string): Promise<AgentRunSnapshot>;
   resumeAgentRun(runId: string, actionId: string, decision: string): Promise<AgentRunSnapshot>;
   fileUrl(paperId: string): string;
+}
+
+export async function getAdminRagObservability(window: "24h" | "7d" | "30d" = "24h"): Promise<AdminRagObservability> {
+  const response = await fetch(`${API_BASE_URL}/admin/observability?window=${window}`, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw await apiError(response, "RAG 运行指标读取失败");
+  const raw = await response.json() as Record<string, unknown>;
+  const totals = (raw.totals ?? {}) as Record<string, unknown>;
+  const latency = (raw.latency ?? {}) as Record<string, unknown>;
+  const overall = (latency.overall ?? {}) as Record<string, unknown>;
+  const runtimeStore = (raw.runtime_store ?? {}) as Record<string, unknown>;
+  const privacy = (raw.privacy ?? {}) as Record<string, unknown>;
+  const optionalNumber = (value: unknown): number | undefined => typeof value === "number" ? value : undefined;
+  return {
+    windowHours: Number(raw.window_hours ?? 24),
+    generatedAt: String(raw.generated_at ?? ""),
+    limitReached: raw.limit_reached === true,
+    totals: {
+      runs: Number(totals.runs ?? 0), terminalRuns: Number(totals.terminal_runs ?? 0), completedRuns: Number(totals.completed_runs ?? 0), failedRuns: Number(totals.failed_runs ?? 0), citedAnswers: Number(totals.cited_answers ?? 0), groundedAnswers: Number(totals.grounded_answers ?? 0), ragIssueRuns: Number(totals.rag_issue_runs ?? 0), telemetryRuns: Number(totals.telemetry_runs ?? 0), telemetryCoverage: Number(totals.telemetry_coverage ?? 0), completionRate: Number(totals.completion_rate ?? 0), failureRate: Number(totals.failure_rate ?? 0), citedAnswerRate: Number(totals.cited_answer_rate ?? 0), ragIssueRate: Number(totals.rag_issue_rate ?? 0),
+    },
+    funnel: (Array.isArray(raw.funnel) ? raw.funnel : []).map((entry) => { const item = entry as Record<string, unknown>; return { key: String(item.key), label: String(item.label), count: Number(item.count ?? 0), rate: Number(item.rate ?? 0) }; }),
+    latency: {
+      overall: { samples: Number(overall.samples ?? 0), p50Ms: optionalNumber(overall.p50_ms), p95Ms: optionalNumber(overall.p95_ms) },
+      stages: (Array.isArray(latency.stages) ? latency.stages : []).map((entry) => { const item = entry as Record<string, unknown>; return { stage: String(item.stage), samples: Number(item.samples ?? 0), p50Ms: optionalNumber(item.p50_ms), p95Ms: optionalNumber(item.p95_ms) }; }),
+    },
+    retrievalChannels: (Array.isArray(raw.retrieval_channels) ? raw.retrieval_channels : []).map((entry) => { const item = entry as Record<string, unknown>; return { channel: String(item.channel), label: String(item.label), runs: Number(item.runs ?? 0), citedAnswerRate: Number(item.cited_answer_rate ?? 0), sufficientEvidenceRate: Number(item.sufficient_evidence_rate ?? 0), retrievalP95Ms: optionalNumber(item.retrieval_p95_ms) }; }),
+    intents: (Array.isArray(raw.intents) ? raw.intents : []).map((entry) => { const item = entry as Record<string, unknown>; return { intent: String(item.intent), label: String(item.label), runs: Number(item.runs ?? 0), citedAnswerRate: Number(item.cited_answer_rate ?? 0), sufficientEvidenceRate: Number(item.sufficient_evidence_rate ?? 0), p95Ms: optionalNumber(item.p95_ms) }; }),
+    failures: (Array.isArray(raw.failures) ? raw.failures : []).map((entry) => { const item = entry as Record<string, unknown>; return { category: String(item.category), label: String(item.label), count: Number(item.count ?? 0), rate: Number(item.rate ?? 0) }; }),
+    chunkingStrategies: (Array.isArray(raw.chunking_strategies) ? raw.chunking_strategies : []).map((entry) => { const item = entry as Record<string, unknown>; return { strategy: String(item.strategy), runs: Number(item.runs ?? 0) }; }),
+    runtimeStore: {
+      backend: String(runtimeStore.backend ?? "memory"),
+      status: runtimeStore.status === "available" ? "available" : "degraded",
+      usedMemoryBytes: optionalNumber(runtimeStore.used_memory_bytes),
+      maxMemoryBytes: optionalNumber(runtimeStore.max_memory_bytes),
+      keyCount: optionalNumber(runtimeStore.key_count),
+      connectedClients: optionalNumber(runtimeStore.connected_clients),
+    },
+    privacy: { contentCollected: privacy.content_collected === true, identifiersCollected: privacy.identifiers_collected === true },
+  };
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

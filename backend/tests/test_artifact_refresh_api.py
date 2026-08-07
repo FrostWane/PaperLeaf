@@ -117,7 +117,11 @@ def test_artifact_refresh_query_bypasses_ready_cache(tmp_path, monkeypatch) -> N
                 status=PaperStatus.ready,
             )
         )
-        endpoints = {route.path: route.endpoint for route in app.routes if hasattr(route, "path")}
+        endpoints = {
+            route.path: route.endpoint
+            for route in app.routes
+            if hasattr(route, "path") and hasattr(route, "endpoint")
+        }
         summary = endpoints["/api/v1/papers/{paper_id}/summary"]
         structure = endpoints["/api/v1/papers/{paper_id}/structure-graph"]
 

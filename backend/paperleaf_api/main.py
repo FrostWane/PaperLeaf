@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
@@ -25,6 +26,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from prometheus_client import make_asgi_app
 
 from .agent.graph import (
     build_agent_graph,
@@ -46,6 +48,7 @@ from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
+from .rag_observability import aggregate_rag_runs
 from .repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
@@ -129,9 +132,7 @@ class AppServices:
         self.runtime_store = runtime_store or create_runtime_store(config)
         self.model_router = build_model_router(config)
         self.retriever = (
-            DemoLibrarySearch()
-            if config.is_demo
-            else SQLLibrarySearch(config, self.model_router)
+            DemoLibrarySearch() if config.is_demo else SQLLibrarySearch(config, self.model_router)
         )
         self.agent_graph = self.build_agent_graph()
         self.checkpointer: Optional[Any] = None
@@ -155,9 +156,7 @@ class AppServices:
                 min_claim_lexical_support=self.config.answer_min_claim_lexical_support,
                 min_model_support_confidence=self.config.answer_min_support_confidence,
             ),
-            support_grader=build_configured_evidence_support_grader(
-                self.config, self.model_router
-            ),
+            support_grader=build_configured_evidence_support_grader(self.config, self.model_router),
         )
 
     async def register_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
@@ -191,12 +190,8 @@ class AppServices:
                     claim_token,
                     answer_quality_policy=AnswerQualityPolicy(
                         min_citation_coverage=self.config.answer_min_citation_coverage,
-                        min_claim_lexical_support=(
-                            self.config.answer_min_claim_lexical_support
-                        ),
-                        min_model_support_confidence=(
-                            self.config.answer_min_support_confidence
-                        ),
+                        min_claim_lexical_support=(self.config.answer_min_claim_lexical_support),
+                        min_model_support_confidence=(self.config.answer_min_support_confidence),
                     ),
                 )
             finally:
@@ -230,9 +225,7 @@ def _user_preferences_read(user: UserRecord) -> UserPreferencesRead:
     return UserPreferencesRead(display_name=user.display_name, **preferences.model_dump())
 
 
-def _collection_tree(
-    records: list[Any], memberships: dict[str, list[str]]
-) -> list[CollectionRead]:
+def _collection_tree(records: list[Any], memberships: dict[str, list[str]]) -> list[CollectionRead]:
     """把用户集合构造成树，并对后代论文去重计数。"""
 
     owned_ids = {item.id for item in records}
@@ -392,6 +385,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.services = services
+    app.mount("/metrics", make_asgi_app())
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.allowed_origins,
@@ -603,6 +597,39 @@ def create_app(
                 "cooldown_seconds": config.model_circuit_cooldown_seconds,
             },
         }
+
+    @app.get("/api/v1/admin/observability")
+    async def admin_observability(
+        _: Annotated[UserRecord, Depends(admin_user)],
+        window: str = "24h",
+    ) -> dict[str, Any]:
+        windows = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+        if window not in windows:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "统计窗口仅支持 24h、7d 或 30d"
+            )
+        hours = windows[window]
+        limit = 5000
+        runs = await services.repository.list_agent_runs_for_observability(
+            datetime.now(timezone.utc) - timedelta(hours=hours),
+            limit=limit,
+        )
+        report = aggregate_rag_runs(
+            runs,
+            window_hours=hours,
+            limit_reached=len(runs) >= limit,
+        )
+        runtime_available = await services.runtime_store.ping()
+        runtime_stats = await services.runtime_store.stats()
+        report["runtime_store"] = {
+            **runtime_stats,
+            "status": "available" if runtime_available else "degraded",
+        }
+        report["privacy"] = {
+            "content_collected": False,
+            "identifiers_collected": False,
+        }
+        return report
 
     @app.get("/api/v1/collections", response_model=list[CollectionRead])
     async def list_collections(
@@ -952,6 +979,7 @@ def create_app(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         }
+
         try:
             byte_range = parse_byte_range(range_header, total)
         except ValueError as exc:
@@ -1085,9 +1113,7 @@ def create_app(
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
         revision = await load_paper_source_revision(user.id, paper_id)
-        cached = await services.repository.get_owned_paper_artifact(
-            paper_id, user.id, "summary"
-        )
+        cached = await services.repository.get_owned_paper_artifact(paper_id, user.id, "summary")
         cached_payload = dict(cached.structured_payload or {}) if cached else {}
         validated_cached, _ = validate_summary_payload(cached_payload, evidence)
         cached_is_current = bool(
@@ -1101,11 +1127,15 @@ def create_app(
         )
         if active_job:
             response.status_code = status.HTTP_202_ACCEPTED
-            payload = validated_cached if cached_is_current else {
-                "sections": [],
-                "citations": [],
-                "mode": "model",
-            }
+            payload = (
+                validated_cached
+                if cached_is_current
+                else {
+                    "sections": [],
+                    "citations": [],
+                    "mode": "model",
+                }
+            )
             return SummaryResponse(
                 paper_id=paper_id,
                 status="processing",
@@ -1116,10 +1146,7 @@ def create_app(
                 citations=payload.get("citations", []),
                 mode="model",
             )
-        if (
-            not refresh
-            and cached_is_current
-        ):
+        if not refresh and cached_is_current:
             return SummaryResponse(
                 paper_id=paper_id,
                 status="ready",
@@ -1156,11 +1183,15 @@ def create_app(
         if not queued:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
         response.status_code = status.HTTP_202_ACCEPTED
-        payload = validated_cached if cached_is_current else {
-            "sections": [],
-            "citations": [],
-            "mode": "model",
-        }
+        payload = (
+            validated_cached
+            if cached_is_current
+            else {
+                "sections": [],
+                "citations": [],
+                "mode": "model",
+            }
+        )
         return SummaryResponse(
             paper_id=paper_id,
             status="processing",
@@ -1196,9 +1227,7 @@ def create_app(
         if not evidence:
             raise HTTPException(status.HTTP_409_CONFLICT, "文献尚未完成解析")
         revision = await load_paper_source_revision(user.id, paper_id)
-        cached = await services.repository.get_owned_paper_artifact(
-            paper_id, user.id, "structure"
-        )
+        cached = await services.repository.get_owned_paper_artifact(paper_id, user.id, "structure")
         cached_payload = dict(cached.structured_payload or {}) if cached else {}
         validated_cached, _ = validate_structure_payload(cached_payload, evidence)
         cached_is_current = bool(
@@ -1212,11 +1241,15 @@ def create_app(
         )
         if active_job:
             response.status_code = status.HTTP_202_ACCEPTED
-            payload = validated_cached if cached_is_current else {
-                "nodes": [],
-                "edges": [],
-                "mermaid": "",
-            }
+            payload = (
+                validated_cached
+                if cached_is_current
+                else {
+                    "nodes": [],
+                    "edges": [],
+                    "mermaid": "",
+                }
+            )
             return StructureGraphResponse(
                 paper_id=paper_id,
                 status="processing",
@@ -1227,10 +1260,7 @@ def create_app(
                 mermaid=payload.get("mermaid", ""),
                 evidence_excerpt="",
             )
-        if (
-            not refresh
-            and cached_is_current
-        ):
+        if not refresh and cached_is_current:
             return StructureGraphResponse(
                 paper_id=paper_id,
                 status="ready",
@@ -1267,11 +1297,15 @@ def create_app(
         if not queued:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
         response.status_code = status.HTTP_202_ACCEPTED
-        payload = validated_cached if cached_is_current else {
-            "nodes": [],
-            "edges": [],
-            "mermaid": "",
-        }
+        payload = (
+            validated_cached
+            if cached_is_current
+            else {
+                "nodes": [],
+                "edges": [],
+                "mermaid": "",
+            }
+        )
         return StructureGraphResponse(
             paper_id=paper_id,
             status="processing",
@@ -1336,9 +1370,7 @@ def create_app(
         )
         return ChatSessionRead.model_validate(record)
 
-    @app.get(
-        "/api/v1/chat/sessions/{session_id}", response_model=ChatSessionRead
-    )
+    @app.get("/api/v1/chat/sessions/{session_id}", response_model=ChatSessionRead)
     async def get_chat_session(
         session_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
@@ -1348,9 +1380,7 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
         return ChatSessionRead.model_validate(record)
 
-    @app.patch(
-        "/api/v1/chat/sessions/{session_id}", response_model=ChatSessionRead
-    )
+    @app.patch("/api/v1/chat/sessions/{session_id}", response_model=ChatSessionRead)
     async def update_chat_session(
         session_id: str,
         payload: ChatSessionUpdate,
@@ -1364,17 +1394,13 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
         return ChatSessionRead.model_validate(record)
 
-    @app.delete(
-        "/api/v1/chat/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT
-    )
+    @app.delete("/api/v1/chat/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_chat_session(
         session_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> Response:
-        chat_session = await services.repository.get_owned_chat_session(
-            session_id, user.id
-        )
+        chat_session = await services.repository.get_owned_chat_session(session_id, user.id)
         if not chat_session:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
         if chat_session.current_run_status in {"pending", "running", "interrupted"}:
@@ -1382,9 +1408,7 @@ def create_app(
                 status.HTTP_409_CONFLICT,
                 "会话仍有运行中或等待确认的任务，请先取消",
             )
-        thread_ids = await services.repository.list_session_thread_ids(
-            session_id, user.id
-        )
+        thread_ids = await services.repository.list_session_thread_ids(session_id, user.id)
         if thread_ids is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
         try:
@@ -1395,9 +1419,7 @@ def create_app(
                 "会话 Checkpoint 清理失败，请稍后重试",
             ) from exc
         try:
-            deleted = await services.repository.delete_owned_chat_session(
-                session_id, user.id
-            )
+            deleted = await services.repository.delete_owned_chat_session(session_id, user.id)
         except ChatActiveRunError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         if not deleted:
@@ -1431,15 +1453,11 @@ def create_app(
             str, Header(alias="Idempotency-Key", min_length=1, max_length=100)
         ],
     ) -> ChatSubmissionRead:
-        chat_session = await services.repository.get_owned_chat_session(
-            session_id, user.id
-        )
+        chat_session = await services.repository.get_owned_chat_session(session_id, user.id)
         if not chat_session:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
         if chat_session.type == "paper":
-            paper = await services.repository.get_owned_paper(
-                chat_session.paper_id or "", user.id
-            )
+            paper = await services.repository.get_owned_paper(chat_session.paper_id or "", user.id)
             if not paper or paper.status not in {PaperStatus.ready, PaperStatus.partial}:
                 raise HTTPException(status.HTTP_409_CONFLICT, "绑定论文尚未完成索引")
             paper_ids = [paper.id]
@@ -1538,9 +1556,7 @@ def create_app(
         run_id: str,
         request: Request,
         user: Annotated[UserRecord, Depends(current_user)],
-        last_event_id: Annotated[
-            Optional[str], Header(alias="Last-Event-ID")
-        ] = None,
+        last_event_id: Annotated[Optional[str], Header(alias="Last-Event-ID")] = None,
     ) -> StreamingResponse:
         run = await services.repository.get_owned_agent_run(run_id, user.id)
         if not run:
@@ -1552,9 +1568,7 @@ def create_app(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "Last-Event-ID 必须是事件序号"
             ) from exc
         if after_sequence < 0:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "Last-Event-ID 不能为负数"
-            )
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Last-Event-ID 不能为负数")
 
         async def persisted_events() -> AsyncIterator[str]:
             cursor = after_sequence

@@ -150,16 +150,10 @@ async def claim_job() -> ClaimedJob | None:
             if exhausted and stale.type == "agent_run" and stale.agent_run_id:
                 exhausted_agent_run_ids.append(stale.agent_run_id)
             if exhausted and stale.paper_id and stale.type in ARTIFACT_JOB_TYPES:
-                exhausted_artifacts.append(
-                    (stale.paper_id, ARTIFACT_JOB_TYPES[stale.type])
-                )
+                exhausted_artifacts.append((stale.paper_id, ARTIFACT_JOB_TYPES[stale.type]))
             stale.status = JobStatus.failed if exhausted else JobStatus.queued
-            stale.error_code = (
-                "WORKER_LEASE_EXHAUSTED" if exhausted else stale.error_code
-            )
-            stale.error_message = (
-                "Worker 租约重试次数已耗尽" if exhausted else stale.error_message
-            )
+            stale.error_code = "WORKER_LEASE_EXHAUSTED" if exhausted else stale.error_code
+            stale.error_message = "Worker 租约重试次数已耗尽" if exhausted else stale.error_message
             stale.claimed_at = None
             stale.claim_token = None
             if not exhausted:
@@ -228,9 +222,7 @@ async def _finalize_exhausted_translation_lease(translation_id: str) -> None:
         if not translation_snapshot:
             return
         paper = await session.scalar(
-            select(Paper)
-            .where(Paper.id == translation_snapshot.paper_id)
-            .with_for_update()
+            select(Paper).where(Paper.id == translation_snapshot.paper_id).with_for_update()
         )
         if not paper:
             return
@@ -245,9 +237,7 @@ async def _finalize_exhausted_translation_lease(translation_id: str) -> None:
         if not translation or translation.cancel_requested:
             return
         translation_job = await session.scalar(
-            select(Job)
-            .where(Job.translation_id == translation_id)
-            .with_for_update()
+            select(Job).where(Job.translation_id == translation_id).with_for_update()
         )
         if translation_job and translation_job.status in {
             JobStatus.queued,
@@ -310,9 +300,7 @@ async def _lock_translation_job(
     ):
         return None
     paper = await session.scalar(
-        select(Paper)
-        .where(Paper.id == snapshot.paper_id)
-        .with_for_update()
+        select(Paper).where(Paper.id == snapshot.paper_id).with_for_update()
     )
     if not paper:
         return None
@@ -479,9 +467,7 @@ async def translate_page_text(
             )
 
         response = (
-            await runtime.execute(
-                "translation", invoke, timeout_seconds=timeout_seconds
-            )
+            await runtime.execute("translation", invoke, timeout_seconds=timeout_seconds)
             if timeout_seconds is not None
             else await runtime.execute("translation", invoke)
         )
@@ -532,6 +518,7 @@ async def vision_ocr(png: bytes, router: ModelRouter | None = None) -> str:
     from openai import AsyncOpenAI
 
     image = base64.b64encode(png).decode("ascii")
+
     async def invoke(provider: ModelProvider):
         client = AsyncOpenAI(
             api_key=provider.api_key,
@@ -560,6 +547,7 @@ async def vision_ocr(png: bytes, router: ModelRouter | None = None) -> str:
                 }
             ],
         )
+
     try:
         response = await runtime.execute("vision", invoke)
     except ModelRuntimeError:
@@ -655,9 +643,7 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
         paper.status = PaperStatus.extracting
         translation_ids = list(
             await session.scalars(
-                select(PaperTranslation.id).where(
-                    PaperTranslation.paper_id == paper.id
-                )
+                select(PaperTranslation.id).where(PaperTranslation.paper_id == paper.id)
             )
         )
         if translation_ids:
@@ -781,9 +767,7 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
             else None
         )
         latest_doi = current_paper.doi if current_paper else None
-        latest_publication = (
-            getattr(current_paper, "publication", None) if current_paper else None
-        )
+        latest_publication = getattr(current_paper, "publication", None) if current_paper else None
     crossref_enrichment = await lookup_crossref_publication(
         pdf_metadata,
         latest_doi=latest_doi,
@@ -798,9 +782,7 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
             )
         )
         paper = (
-            await session.scalar(
-                select(Paper).where(Paper.id == job.paper_id).with_for_update()
-            )
+            await session.scalar(select(Paper).where(Paper.id == job.paper_id).with_for_update())
             if job and job.paper_id
             else None
         )
@@ -867,11 +849,7 @@ async def process_translation_job(
             if not locked:
                 return
             job, translation, paper = locked
-            if (
-                not paper
-                or translation.cancel_requested
-                or paper.status == PaperStatus.deleting
-            ):
+            if not paper or translation.cancel_requested or paper.status == PaperStatus.deleting:
                 return
             await session.execute(
                 PaperTranslationPage.__table__.update()
@@ -1025,9 +1003,7 @@ async def process_translation_job(
                 source_text,
                 target_language,
                 runtime,
-                lease_guard=lambda: _heartbeat_translation_job(
-                    job_id, claim_token
-                ),
+                lease_guard=lambda: _heartbeat_translation_job(job_id, claim_token),
                 timeout_seconds=settings.translation_timeout_seconds,
             )
         except JobLeaseLostError:
@@ -1069,9 +1045,8 @@ async def process_translation_job(
                 translation_page.updated_at = utcnow()
                 await session.commit()
                 return
-            if (
-                not source_page
-                or translation_page.source_text_hash != _source_hash(source_page.text)
+            if not source_page or translation_page.source_text_hash != _source_hash(
+                source_page.text
             ):
                 translation_page.status = "failed"
                 translation_page.translated_text = None
@@ -1093,8 +1068,7 @@ async def process_translation_job(
                 }
                 translation_page.status = (
                     "queued"
-                    if retryable
-                    and translation_page.attempts < translation_page.max_attempts
+                    if retryable and translation_page.attempts < translation_page.max_attempts
                     else "failed"
                 )
                 translation_page.error_code = failure_code or "MODEL_EMPTY_RESPONSE"
@@ -1149,9 +1123,7 @@ async def process_translation_job(
         elif failed:
             translation.status = "partial" if completed else "failed"
             translation.error_code = (
-                "PAGE_TRANSLATION_PARTIAL"
-                if completed
-                else "PAGE_TRANSLATION_FAILED"
+                "PAGE_TRANSLATION_PARTIAL" if completed else "PAGE_TRANSLATION_FAILED"
             )
             translation.error_message = "部分页面翻译失败" if completed else "全文翻译失败"
             job.status = JobStatus.failed
@@ -1186,9 +1158,7 @@ def build_worker_agent_graph(checkpointer: object | None = None) -> object:
             min_claim_lexical_support=settings.answer_min_claim_lexical_support,
             min_model_support_confidence=settings.answer_min_support_confidence,
         ),
-        support_grader=build_configured_evidence_support_grader(
-            settings, model_router
-        ),
+        support_grader=build_configured_evidence_support_grader(settings, model_router),
     )
 
 
@@ -1299,9 +1269,7 @@ async def process_delete_job(job_id: str, claim_token: str | None = None) -> Non
             return
         paper = await session.get(Paper, job.paper_id) if job.paper_id else None
         if paper:
-            await session.execute(
-                delete(Job).where(Job.paper_id == paper.id, Job.id != job.id)
-            )
+            await session.execute(delete(Job).where(Job.paper_id == paper.id, Job.id != job.id))
             job.paper_id = None
             await session.flush()
             await session.delete(paper)
@@ -1335,9 +1303,7 @@ async def process_artifact_job(job_id: str, claim_token: str) -> None:
 
     async with get_session_factory()() as session:
         job = await session.scalar(
-            select(Job)
-            .where(Job.id == job_id, Job.claim_token == claim_token)
-            .with_for_update()
+            select(Job).where(Job.id == job_id, Job.claim_token == claim_token).with_for_update()
         )
         if not job or not job.paper_id or job.type not in ARTIFACT_JOB_TYPES:
             return
@@ -1378,9 +1344,7 @@ async def process_artifact_job(job_id: str, claim_token: str) -> None:
 
     async with get_session_factory()() as session:
         job = await session.scalar(
-            select(Job)
-            .where(Job.id == job_id, Job.claim_token == claim_token)
-            .with_for_update()
+            select(Job).where(Job.id == job_id, Job.claim_token == claim_token).with_for_update()
         )
         if not job or not job.paper_id:
             raise JobLeaseLostError("ARTIFACT_JOB_LEASE_LOST")
@@ -1449,9 +1413,7 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
         if snapshot and snapshot.type == "translate_paper":
             # 翻译失败也必须遵循 Paper→Translation→Job。旧 Worker 的 token
             # 即使尚未被轮换，只要租约已过期，也不能再写 Job 或 Translation。
-            locked = await _lock_translation_job(
-                session, claimed_job.id, claimed_job.token
-            )
+            locked = await _lock_translation_job(session, claimed_job.id, claimed_job.token)
             if not locked:
                 return
             job, translation, _paper = locked
@@ -1480,9 +1442,7 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
             "PAPER_NOT_FOUND",
         }
         candidate = str(exc)
-        job.error_code = (
-            candidate if candidate in public_codes else "JOB_EXECUTION_FAILED"
-        )
+        job.error_code = candidate if candidate in public_codes else "JOB_EXECUTION_FAILED"
         if job.type == "translate_paper":
             job.error_code = "PAGE_TRANSLATION_FAILED"
         job.error_message = (
@@ -1491,9 +1451,7 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
             else "作业执行失败，请查看服务日志"
         )
         job.status = JobStatus.queued if job.attempts < job.max_attempts else JobStatus.failed
-        job.available_at = utcnow() + timedelta(
-            seconds=min(60, 2 ** max(1, job.attempts))
-        )
+        job.available_at = utcnow() + timedelta(seconds=min(60, 2 ** max(1, job.attempts)))
         job.claimed_at = None
         job.claim_token = None
         job.updated_at = utcnow()
@@ -1503,11 +1461,7 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
                 paper.status = (
                     PaperStatus.deleting if job.type == "delete_paper" else PaperStatus.failed
                 )
-        if (
-            job.paper_id
-            and job.type in ARTIFACT_JOB_TYPES
-            and job.status == JobStatus.failed
-        ):
+        if job.paper_id and job.type in ARTIFACT_JOB_TYPES and job.status == JobStatus.failed:
             artifact = await session.scalar(
                 select(PaperArtifact)
                 .where(
@@ -1551,12 +1505,13 @@ async def run_worker() -> None:
     global agent_graph
     settings.validate_production()
     logging.basicConfig(level=logging.INFO)
+    from prometheus_client import start_http_server
+
+    start_http_server(settings.worker_metrics_port, addr="0.0.0.0")
     logger.info("PaperLeaf Worker 已启动")
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-    checkpoint_url = settings.database_url.replace(
-        "postgresql+asyncpg://", "postgresql://", 1
-    )
+    checkpoint_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
         await checkpointer.setup()
         agent_graph = build_worker_agent_graph(checkpointer)

@@ -22,10 +22,10 @@ cp .env.example .env
 ```bash
 docker compose up -d --build
 docker compose ps
-docker compose logs --tail=100 migrate redis minio-init api worker web
+docker compose logs --tail=100 migrate redis minio-init api worker prometheus grafana web
 ```
 
-正常情况下，`migrate` 和 `minio-init` 以退出码 0 完成，`postgres`、`redis`、`minio`、`api` 和 `web` 变为健康状态，`worker` 持续运行。
+正常情况下，`migrate` 和 `minio-init` 以退出码 0 完成，`postgres`、`redis`、`minio`、`api` 和 `web` 变为健康状态，`worker`、`prometheus` 与 `grafana` 持续运行。
 
 可使用仓库内的安全冒烟脚本验证临时 PDF 上传、解析、Range 下载和删除。脚本只从环境变量读取管理员凭证，不打印密码，并在完成后清理临时论文：
 
@@ -43,6 +43,8 @@ python scripts/smoke_compose.py
 | MinIO Console | 9001 | 否；仅运维网络 |
 | PostgreSQL | 不映射 | 否 |
 | Redis | 不映射 | 否 |
+| Prometheus | 9090 | 仅运维网络 |
+| Grafana | 3001 | 仅运维网络；必须修改默认密码 |
 
 Compose 默认把公开端口绑定到 `127.0.0.1`。若明确需要从局域网访问，可以设置 `PAPERLEAF_BIND_ADDRESS=0.0.0.0`，同时配置防火墙与 HTTPS；不要因此暴露 MinIO 管理端口。
 
@@ -97,12 +99,28 @@ docker compose up -d web
 | `PAPERLEAF_REDIS_URL` | `redis://redis:6379/0` | 短期运行态连接；留空时使用单进程内存实现 |
 | `PAPERLEAF_REDIS_KEY_PREFIX` | `paperleaf` | 多环境共用 Redis 时必须使用不同前缀 |
 | `PAPERLEAF_REDIS_TIMEOUT_SECONDS` | `0.5` | 单次 Redis 操作超时，范围 `(0, 5]` 秒 |
+| `PAPERLEAF_REDIS_MAXMEMORY` | `256mb` | Compose Redis 内存上限，管理员页会显示当前使用量 |
 | `PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS` | `12` | 每个窗口允许的 Agent 提交次数 |
 | `PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS` | `60` | 固定窗口秒数，范围 `1~3600` |
 
 Redis 数据允许丢失，默认关闭 RDB/AOF。重启 Redis 会清空短期限流窗口，但不会丢失用户、
 消息、任务或 Agent Run。`GET /ready` 会返回运行态存储的 `available/degraded` 状态；Redis
 不可用时 API 继续工作并退化为当前进程内限流。
+
+### RAG 可观测性
+
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `PAPERLEAF_WORKER_METRICS_PORT` | `9101` | Worker 私网 Prometheus 指标端口 |
+| `PAPERLEAF_PROMETHEUS_IMAGE` | GHCR 官方镜像 | 固定 Prometheus 镜像；网络受限时可替换为可信私有镜像 |
+| `PAPERLEAF_GRAFANA_BASE_IMAGE` | AWS Public ECR Debian | 构建 Grafana 配置镜像的可信基础镜像 |
+| `PAPERLEAF_PROMETHEUS_PORT` | `9090` | Prometheus 本机端口 |
+| `PAPERLEAF_GRAFANA_PORT` | `3001` | Grafana 本机端口 |
+| `GRAFANA_ADMIN_USER` | `admin` | Grafana 管理账号 |
+| `GRAFANA_ADMIN_PASSWORD` | — | 必须替换的 Grafana 密码 |
+| `NEXT_PUBLIC_GRAFANA_URL` | 本机面板地址 | 管理员页面的 Grafana 入口 |
+
+Prometheus 默认保留 15 天时序数据。Compose 会把仓库内的采集规则和面板配置烘焙进配置镜像，只把时序数据与 Grafana 数据库写入命名卷，从而避免 Windows 绑定挂载差异。Grafana 配置镜像从 Grafana 官方发布站下载固定版本的 Linux 二进制，并在构建时用官方 SHA-256 校验；它不依赖当前网络不可用的 Docker Hub。Grafana 会自动装载 `PaperLeaf RAG` 面板。公网部署不要直接公开 Prometheus；Grafana 应放在受控运维网络或统一身份代理后。管理员业务聚合来自 PostgreSQL，详细口径和隐私边界见 [RAG 可观测性](observability.md)。
 
 数据库和 MinIO 密码不应重复。Compose 会把 `POSTGRES_PASSWORD` 插入数据库连接 URL，因此应使用 URL-safe 随机字符。若使用外部托管服务，修改 Compose 环境变量或部署平台中的对应连接信息。
 
@@ -196,7 +214,7 @@ Railway 不是默认参考部署。若选择 Railway，需要分别创建 Web、
 
 ```bash
 docker compose ps
-docker compose logs --tail=200 migrate postgres redis minio-init minio api worker web
+docker compose logs --tail=200 migrate postgres redis minio-init minio api worker prometheus grafana web
 docker compose config --quiet
 ```
 

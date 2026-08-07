@@ -21,6 +21,25 @@ const modelHealth = {
   }],
   policy: { timeout_seconds: 30, attempts_per_provider: 2, failure_threshold: 3, cooldown_seconds: 60 },
 };
+const observability = {
+  window_hours: 24,
+  generated_at: "2026-08-07T12:00:00Z",
+  limit_reached: false,
+  totals: { runs: 12, terminal_runs: 12, completed_runs: 10, failed_runs: 2, cited_answers: 8, grounded_answers: 7, rag_issue_runs: 3, telemetry_runs: 12, telemetry_coverage: 1, completion_rate: 0.8333, failure_rate: 0.1667, cited_answer_rate: 0.6667, rag_issue_rate: 0.25 },
+  funnel: [
+    { key: "observed", label: "已采集运行", count: 12, rate: 1 },
+    { key: "retrieved", label: "召回证据", count: 11, rate: 0.9167 },
+    { key: "sufficient", label: "证据充足", count: 9, rate: 0.75 },
+    { key: "cited", label: "引用回答", count: 8, rate: 0.6667 },
+  ],
+  latency: { overall: { samples: 12, p50_ms: 1200, p95_ms: 4300 }, stages: [{ stage: "retrieval", samples: 12, p50_ms: 90, p95_ms: 280 }] },
+  retrieval_channels: [{ channel: "keyword", label: "关键词检索", runs: 10, cited_answer_rate: 0.7, sufficient_evidence_rate: 0.8, retrieval_p95_ms: 230 }],
+  intents: [{ intent: "method", label: "方法与实现", runs: 6, cited_answer_rate: 0.8333, sufficient_evidence_rate: 0.8333, p95_ms: 3500 }],
+  failures: [{ category: "unverified_answer", label: "回答引用未通过", count: 2, rate: 0.1667 }],
+  chunking_strategies: [{ strategy: "structure_aware_v2", runs: 12 }],
+  runtime_store: { backend: "redis", status: "available" },
+  privacy: { content_collected: false, identifiers_collected: false },
+};
 
 describe("AdminView 管理信息语义", () => {
   beforeEach(() => {
@@ -31,6 +50,7 @@ describe("AdminView 管理信息语义", () => {
         { id: "user-1", email: "reader@example.org", role: "user", active: false },
       ])),
       http.get(`${API_BASE_URL}/admin/model-health`, () => HttpResponse.json(modelHealth)),
+      http.get(`${API_BASE_URL}/admin/observability`, () => HttpResponse.json(observability)),
       http.get(`${API_BASE_URL}/admin/jobs`, () => HttpResponse.json([
         { id: "queued", type: "agent_run", status: "queued", progress: 0, attempts: 0, max_attempts: 3 },
         { id: "running", type: "parse_pdf", status: "running", progress: 68, attempts: 1, max_attempts: 3 },
@@ -56,6 +76,15 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getByText("视觉 OCR")).toHaveTextContent("视觉 OCR");
     expect(screen.getByText(/暂不可用 · 尚未配置.*识别扫描版/)).toBeInTheDocument();
     expect(screen.queryByText("其他 AI 能力")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "RAG 运行质量" })).toBeInTheDocument();
+    expect(screen.getByText("关键词检索")).toBeInTheDocument();
+    expect(screen.getByText("回答引用未通过")).toBeInTheDocument();
+    expect(screen.getByText("structure_aware_v2 · 12")).toBeInTheDocument();
+    expect(screen.getByText("Redis 可用")).toBeInTheDocument();
+    expect(screen.getAllByText("含引用回答").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("RAG 异常/受限率")).toBeInTheDocument();
+    expect(screen.getAllByText("66.7%").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("8 / 12 条已采集轨迹")).toBeInTheDocument();
 
     const jobs = screen.getByRole("heading", { name: "后台任务" }).closest("section");
     expect(jobs).not.toBeNull();
@@ -97,5 +126,59 @@ describe("AdminView 管理信息语义", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog", { name: "确认停用用户" })).not.toBeInTheDocument();
     await waitFor(() => expect(updates).toBe(0));
+  });
+
+  it("真实模式不展示演示数据，单个接口失败不阻断 RAG 指标", async () => {
+    server.use(http.get(`${API_BASE_URL}/admin/users`, () => HttpResponse.json(
+      { detail: "用户数据暂不可用" },
+      { status: 503 },
+    )));
+
+    render(<AdminView />);
+
+    expect(screen.queryByText("林研究员")).not.toBeInTheDocument();
+    expect((await screen.findAllByText("66.7%")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("status")).toHaveTextContent("用户数据暂不可用");
+    expect(screen.queryByText("林研究员")).not.toBeInTheDocument();
+  });
+
+  it("快速切换窗口时只接收最后一次请求", async () => {
+    server.use(http.get(`${API_BASE_URL}/admin/observability`, async ({ request }) => {
+      const window = new URL(request.url).searchParams.get("window");
+      if (window === "7d") await new Promise((resolve) => setTimeout(resolve, 100));
+      if (window === "30d") await new Promise((resolve) => setTimeout(resolve, 10));
+      const hours = window === "30d" ? 720 : window === "7d" ? 168 : 24;
+      return HttpResponse.json({ ...observability, window_hours: hours, generated_at: `2026-08-07T${hours === 720 ? "13" : "12"}:00:00Z` });
+    }));
+
+    render(<AdminView />);
+    await screen.findAllByText("66.7%");
+    fireEvent.click(screen.getByRole("button", { name: "7 天" }));
+    fireEvent.click(screen.getByRole("button", { name: "30 天" }));
+
+    await waitFor(() => expect(screen.getByText(/2026\/8\/7 21:00:00/)).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    expect(screen.getByText(/2026\/8\/7 21:00:00/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("没有轨迹样本时显示未知状态而不是零质量", async () => {
+    server.use(http.get(`${API_BASE_URL}/admin/observability`, () => HttpResponse.json({
+      ...observability,
+      totals: { ...observability.totals, runs: 4, terminal_runs: 4, telemetry_runs: 0, telemetry_coverage: 0, cited_answers: 0, grounded_answers: 0, rag_issue_runs: 0, cited_answer_rate: 0, rag_issue_rate: 0 },
+      funnel: [],
+      latency: { overall: { samples: 0 }, stages: [] },
+      retrieval_channels: [],
+      intents: [],
+      failures: [],
+      chunking_strategies: [],
+      runtime_store: { backend: "memory", status: "available" },
+    })));
+
+    render(<AdminView />);
+
+    expect(await screen.findByText("已有 4 次终态运行，但尚无可分析的 RAG 轨迹")).toBeInTheDocument();
+    expect(screen.getByText("进程内状态存储 可用")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 });

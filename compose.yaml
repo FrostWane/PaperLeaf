@@ -8,6 +8,7 @@ x-backend-environment: &backend-environment
   PAPERLEAF_REDIS_TIMEOUT_SECONDS: ${PAPERLEAF_REDIS_TIMEOUT_SECONDS:-0.5}
   PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS: ${PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS:-12}
   PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS: ${PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PAPERLEAF_WORKER_METRICS_PORT: ${PAPERLEAF_WORKER_METRICS_PORT:-9101}
   PAPERLEAF_SESSION_SECRET: ${PAPERLEAF_SESSION_SECRET:-local-demo-only-change-me}
   PAPERLEAF_SECURE_COOKIES: ${PAPERLEAF_SECURE_COOKIES:-false}
   PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL: ${PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL:-admin@paperleaf.local}
@@ -79,6 +80,8 @@ services:
         "",
         "--appendonly",
         "no",
+        "--maxmemory",
+        "${PAPERLEAF_REDIS_MAXMEMORY:-256mb}",
         "--maxmemory-policy",
         "noeviction",
       ]
@@ -180,6 +183,53 @@ services:
   worker:
     <<: *backend-service
     command: ["python", "-m", "paperleaf_api.worker"]
+    expose:
+      - "9101"
+
+  prometheus:
+    build:
+      context: ./ops/prometheus
+      args:
+        PROMETHEUS_BASE_IMAGE: ${PAPERLEAF_PROMETHEUS_IMAGE:-ghcr.io/prometheus/prometheus:v3.13.2}
+    image: paperleaf-prometheus:3.13.2
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - prometheus-data:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    ports:
+      - "${PAPERLEAF_BIND_ADDRESS:-127.0.0.1}:${PAPERLEAF_PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    networks:
+      - paperleaf
+
+  grafana:
+    build:
+      context: ./ops/grafana
+      args:
+        DEBIAN_BASE_IMAGE: ${PAPERLEAF_GRAFANA_BASE_IMAGE:-public.ecr.aws/docker/library/debian:bookworm-slim}
+    image: paperleaf-grafana:13.1.3
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-paperleaf-local-grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "${PAPERLEAF_BIND_ADDRESS:-127.0.0.1}:${PAPERLEAF_GRAFANA_PORT:-3001}:3000"
+    restart: unless-stopped
+    networks:
+      - paperleaf
 
   web:
     build:
@@ -187,9 +237,11 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
         NEXT_PUBLIC_DATA_MODE: real
+        NEXT_PUBLIC_GRAFANA_URL: ${NEXT_PUBLIC_GRAFANA_URL:-http://localhost:3001/d/paperleaf-rag/paperleaf-rag}
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
       NEXT_PUBLIC_DATA_MODE: real
+      NEXT_PUBLIC_GRAFANA_URL: ${NEXT_PUBLIC_GRAFANA_URL:-http://localhost:3001/d/paperleaf-rag/paperleaf-rag}
       PAPERLEAF_API_INTERNAL_URL: http://api:8000
     depends_on:
       api:
@@ -215,6 +267,8 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   paperleaf:

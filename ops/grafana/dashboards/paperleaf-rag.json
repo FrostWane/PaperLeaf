@@ -1,0 +1,110 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto", "wideLayout": true },
+      "targets": [{ "expr": "sum(increase(paperleaf_agent_runs_total[$__range]))", "legendFormat": "运行", "refId": "A" }],
+      "title": "Agent 运行总数",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 1, "max": 1, "min": 0, "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto", "wideLayout": true },
+      "targets": [{ "expr": "sum(increase(paperleaf_agent_runs_total{outcome=\"cited_answer\"}[$__range])) / clamp_min(sum(increase(paperleaf_agent_runs_total[$__range])), 1)", "legendFormat": "引用回答率", "refId": "A" }],
+      "title": "引用回答率",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 1, "max": 1, "min": 0, "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto", "wideLayout": true },
+      "targets": [{ "expr": "sum(increase(paperleaf_agent_runs_total{status=\"failed\"}[$__range])) / clamp_min(sum(increase(paperleaf_agent_runs_total[$__range])), 1)", "legendFormat": "失败率", "refId": "A" }],
+      "title": "运行失败率",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto", "wideLayout": true },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(paperleaf_agent_run_duration_seconds_bucket[$__rate_interval])) by (le))", "legendFormat": "P95", "refId": "A" }],
+      "title": "端到端 P95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(paperleaf_rag_stage_duration_seconds_bucket[$__rate_interval])) by (le, stage))", "legendFormat": "{{stage}}", "refId": "A" }],
+      "title": "RAG 阶段 P95 耗时",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "sum(rate(paperleaf_rag_retrieval_channel_total[$__rate_interval])) by (channel, retrieval_outcome)", "legendFormat": "{{channel}} · {{retrieval_outcome}}", "refId": "A" }],
+      "title": "召回通道与结果",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "id": 7,
+      "options": { "displayMode": "gradient", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "orientation": "horizontal", "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false }, "showUnfilled": true, "valueMode": "color" },
+      "targets": [{ "expr": "sum(increase(paperleaf_agent_runs_total[$__range])) by (intent)", "legendFormat": "{{intent}}", "refId": "A" }],
+      "title": "问题意图分布",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "id": 8,
+      "options": { "displayMode": "gradient", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "orientation": "horizontal", "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false }, "showUnfilled": true, "valueMode": "color" },
+      "targets": [{ "expr": "sum(increase(paperleaf_agent_runs_total{failure_category!=\"none\"}[$__range])) by (failure_category)", "legendFormat": "{{failure_category}}", "refId": "A" }],
+      "title": "失败原因分布",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "paperleaf-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "id": 9,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "process_resident_memory_bytes", "legendFormat": "{{job}}", "refId": "A" }],
+      "title": "API / Worker 常驻内存",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 41,
+  "tags": ["paperleaf", "rag"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "PaperLeaf RAG",
+  "uid": "paperleaf-rag",
+  "version": 1
+}

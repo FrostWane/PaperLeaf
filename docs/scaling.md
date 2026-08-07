@@ -15,20 +15,19 @@
 
 完整取舍见 [ADR-0017：Redis 仅承载短期运行态](decisions/0017-redis-runtime-state.md)。
 
-## 后续阶段 A：全链路可观测
+## 当前已完成：RAG 链路可观测
 
-引入 OpenTelemetry，并为 Web/API、Worker、检索和模型运行时建立统一 Trace ID。至少采集：
+- 每个新 Agent Run 持久保存内容无关的 RAG Trace，覆盖意图、范围、召回通道、证据等级、失败类别、Chunk 策略和阶段耗时；
+- 管理员页面提供 24 小时、7 天、30 天的证据漏斗、P50/P95、通道、意图和失败分布；
+- 管理员可以同时查看 Redis 内存、Key、连接与降级状态，但不能读取问题、PDF 或回答正文；
+- API 与 Worker 暴露低基数 Prometheus 指标，Compose 自动启动 Prometheus 和预置 Grafana 面板；
+- PostgreSQL 持久摘要用于可审计聚合，Prometheus 用于趋势，两者均不记录 Cookie、密钥、提示词、PDF 正文或模型回答正文。
 
-- API 请求量、错误率和 p50/p95/p99 延迟；
-- Agent 从提交到领取的排队时间；
-- 检索、重排、模型首字和完整生成耗时；
-- 各任务类型的等待、执行、重试、失败与租约恢复次数；
-- 模型 Token、超时、429、主备切换和熔断状态；
-- PostgreSQL 连接池、慢查询和 Redis 降级次数。
+详细指标口径见 [RAG 可观测性](observability.md)，取舍见 [ADR-0018](decisions/0018-rag-observability.md)。
 
-指标使用 Prometheus，面板使用 Grafana；结构化日志不记录 Cookie、密钥、提示词、PDF 正文或模型回答正文。
+仍未完成的全链路观测包括 OpenTelemetry Trace ID、API 路由延迟、Agent 排队时间、模型首字/Token 成本、任务租约恢复、PostgreSQL 连接池和慢查询。这些项目应在容量压测证明需要后逐项加入。
 
-## 后续阶段 B：容量基线与压测
+## 下一阶段：容量基线与压测
 
 使用 Locust 建立三组相互独立的负载模型：
 
@@ -65,5 +64,5 @@
 - Redis 断开时 API 仍可用，且状态和降级次数可观测。
 - 多 API 实例对同一用户执行一致限流。
 - 负载测试可以复现，并保留原始配置与结果。
-- 能从一个 Agent Run 定位 API、队列、检索和模型各阶段耗时。
+- 能从聚合视图定位意图、召回、证据、生成、答案支持与引用校验阶段耗时。
 - 至少完成一次单实例与多实例对比，结论包含瓶颈和成本，而不只写“性能提升”。
