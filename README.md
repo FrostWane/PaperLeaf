@@ -28,8 +28,10 @@ PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保�
 - 主/备用 OpenAI-compatible 服务统一经过超时、受控重试和按用途隔离的熔断器
 - 搜索 arXiv，并在用户确认后导入开放 PDF
 - 论文概览按研究问题、方法、实验、结果与局限生成结构化事实，并为每条事实保留页码证据
+- 论文概括与研究结构图由 Worker 后台生成；离开阅读页不会取消任务，返回后自动恢复进度
 - 研究结构图由模型生成 5～12 个语义节点，服务端校验节点引用、连通关系与无环结构后再渲染
-- 总结、结构图和逐页译文持久缓存；论文重新索引后旧产物会明确过期
+- 总结、结构图和逐页译文持久缓存；重新生成失败不会覆盖上一次成功产物，论文重新索引后旧产物会明确过期
+- 概括事实必须通过中文内容与页码引用校验；模型失败时只显示中文状态，不把英文原文 Chunk 冒充总结
 - 管理员创建、停用用户并查看脱敏的模型运行状态；默认不读取用户文献内容
 - 账户菜单提供真实昵称、邮箱、个人设置和退出登录；普通用户不会看到管理入口
 - 个人设置持久保存小/标准/大字号、PDF 默认缩放、阅读器侧栏、翻译语言与 arXiv 搜索偏好
@@ -104,8 +106,8 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_FALLBACK_EMBEDDING_ENABLED` | 备用服务是否提供 Embeddings |
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
-| `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 全文概括与结构图首次生成超时，默认 75 秒 |
-| `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 产物精简证据重试超时，默认 45 秒 |
+| `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括与结构图首次生成超时，默认 120 秒 |
+| `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台产物精简证据重试超时，默认 90 秒 |
 | `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务最多尝试次数，范围 1~3 |
 | `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败多少次后打开熔断器 |
 | `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断后的冷却时间 |
@@ -129,7 +131,7 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 5. 打开文献，通过集中工具栏切页、缩放、适合宽度或收起两侧进入专注阅读；这些布局和缩放偏好会保存到账号。
 6. 点击“翻译全文”核对页数与目标语言。Worker 会优先翻译当前页，离开页面后继续逐页处理；重新进入可恢复进度与已有译文。
 7. 在阅读器右侧新建或恢复对话并提问；离开页面后任务仍会继续，返回后可以补发进度与回答，点击引用可跳转到对应物理页。
-8. 在论文助手中切换“概览”或“结构”，生成带证据页的总结与 Mermaid strict mode 结构图。
+8. 在论文助手中切换“概览”或“结构”，提交后台任务；可离开页面，返回后会自动恢复带证据页的中文总结与 Mermaid strict mode 结构图。
 9. 在左侧“文献设置”中修改元数据；解析失败或部分可用时可重新处理，删除操作需要二次确认。
 10. 在“全库问答”中选择某个集合或全部文献；会话会保存当次服务端解析出的论文范围快照。
 11. 在“发现”中搜索 arXiv；PaperLeaf 只会在确认后创建导入任务。

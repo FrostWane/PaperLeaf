@@ -71,10 +71,10 @@ class Settings:
     )
     model_timeout_seconds: float = float(os.getenv("PAPERLEAF_MODEL_TIMEOUT_SECONDS", "30"))
     artifact_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS", "75")
+        os.getenv("PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS", "120")
     )
     artifact_retry_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS", "45")
+        os.getenv("PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS", "90")
     )
     model_attempts_per_provider: int = int(
         os.getenv("PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER", "1")

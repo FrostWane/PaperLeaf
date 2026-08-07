@@ -34,8 +34,6 @@ from .agent.graph import (
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .agent_execution import execute_agent_run
 from .artifacts import (
-    generate_structure_artifact,
-    generate_summary_artifact,
     load_paper_evidence,
     load_paper_source_revision,
     validate_structure_payload,
@@ -1047,11 +1045,16 @@ def create_app(
             raise HTTPException(status.HTTP_409_CONFLICT, "文献已导入") from exc
         return _paper_read(created)
 
-    @app.post("/api/v1/papers/{paper_id}/summary", response_model=SummaryResponse)
+    @app.post(
+        "/api/v1/papers/{paper_id}/summary",
+        response_model=SummaryResponse,
+        responses={202: {"description": "概括后台任务已创建或仍在运行"}},
+    )
     async def summarize_paper(
         paper_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
+        response: Response,
         refresh: bool = False,
     ) -> SummaryResponse:
         await owned_paper(paper_id, user)
@@ -1071,51 +1074,98 @@ def create_app(
         )
         cached_payload = dict(cached.structured_payload or {}) if cached else {}
         validated_cached, _ = validate_summary_payload(cached_payload, evidence)
-        if (
-            not refresh
-            and cached
+        cached_is_current = bool(
+            cached
             and cached.status == "ready"
             and cached.source_revision == revision
             and validated_cached is not None
+        )
+        active_job = await services.repository.get_active_paper_artifact_job(
+            paper_id, user.id, "summary"
+        )
+        if active_job:
+            response.status_code = status.HTTP_202_ACCEPTED
+            payload = validated_cached if cached_is_current else {
+                "sections": [],
+                "citations": [],
+                "mode": "model",
+            }
+            return SummaryResponse(
+                paper_id=paper_id,
+                status="processing",
+                stale=False,
+                fallback_reason=None,
+                sections=payload.get("sections", []),
+                content=cached.markdown if cached_is_current and cached else "",
+                citations=payload.get("citations", []),
+                mode="model",
+            )
+        if (
+            not refresh
+            and cached_is_current
         ):
-            payload = validated_cached
-            artifact_status = cached.status
-            fallback_reason = cached.fallback_reason
-            content = cached.markdown
-        else:
-            generated = await generate_summary_artifact(
-                evidence, model_router=services.model_router, config=config
+            return SummaryResponse(
+                paper_id=paper_id,
+                status="ready",
+                stale=False,
+                fallback_reason=None,
+                sections=validated_cached.get("sections", []),
+                content=cached.markdown if cached else "",
+                citations=validated_cached.get("citations", []),
+                mode="model",
             )
-            payload = generated.payload
-            artifact_status = generated.status
-            fallback_reason = generated.fallback_reason
-            content = generated.markdown
-            await services.repository.upsert_paper_artifact(
-                paper_id,
-                user.id,
-                "summary",
-                revision,
-                artifact_status,
-                fallback_reason,
-                payload,
-                content,
+        if (
+            not refresh
+            and cached
+            and cached.status == "failed"
+            and cached.source_revision == revision
+        ):
+            return SummaryResponse(
+                paper_id=paper_id,
+                status="failed",
+                stale=False,
+                fallback_reason=cached.fallback_reason,
+                sections=[],
+                content="",
+                citations=[],
+                mode="model",
             )
+        queued = await services.repository.enqueue_paper_artifact(
+            paper_id,
+            user.id,
+            "summary",
+            revision,
+            preserve_existing=cached_is_current,
+        )
+        if not queued:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+        response.status_code = status.HTTP_202_ACCEPTED
+        payload = validated_cached if cached_is_current else {
+            "sections": [],
+            "citations": [],
+            "mode": "model",
+        }
         return SummaryResponse(
             paper_id=paper_id,
-            status=artifact_status,
+            status="processing",
             stale=False,
-            fallback_reason=fallback_reason,
+            fallback_reason=None,
             sections=payload.get("sections", []),
-            content=content,
+            content=cached.markdown if cached_is_current and cached else "",
             citations=payload.get("citations", []),
-            mode=payload.get("mode", "extractive"),
+            mode="model",
         )
 
-    @app.post("/api/v1/papers/{paper_id}/structure-graph", response_model=StructureGraphResponse)
+    @app.post(
+        "/api/v1/papers/{paper_id}/structure-graph",
+        response_model=StructureGraphResponse,
+        responses={202: {"description": "研究脑图后台任务已创建或仍在运行"}},
+    )
     async def build_paper_structure_graph(
         paper_id: str,
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
+        response: Response,
         refresh: bool = False,
     ) -> StructureGraphResponse:
         await owned_paper(paper_id, user)
@@ -1135,42 +1185,86 @@ def create_app(
         )
         cached_payload = dict(cached.structured_payload or {}) if cached else {}
         validated_cached, _ = validate_structure_payload(cached_payload, evidence)
-        if (
-            not refresh
-            and cached
+        cached_is_current = bool(
+            cached
             and cached.status == "ready"
             and cached.source_revision == revision
             and validated_cached is not None
+        )
+        active_job = await services.repository.get_active_paper_artifact_job(
+            paper_id, user.id, "structure"
+        )
+        if active_job:
+            response.status_code = status.HTTP_202_ACCEPTED
+            payload = validated_cached if cached_is_current else {
+                "nodes": [],
+                "edges": [],
+                "mermaid": "",
+            }
+            return StructureGraphResponse(
+                paper_id=paper_id,
+                status="processing",
+                stale=False,
+                fallback_reason=None,
+                nodes=payload.get("nodes", []),
+                edges=payload.get("edges", []),
+                mermaid=payload.get("mermaid", ""),
+                evidence_excerpt="",
+            )
+        if (
+            not refresh
+            and cached_is_current
         ):
-            payload = validated_cached
-            artifact_status = cached.status
-            fallback_reason = cached.fallback_reason
-        else:
-            generated = await generate_structure_artifact(
-                evidence, model_router=services.model_router, config=config
+            return StructureGraphResponse(
+                paper_id=paper_id,
+                status="ready",
+                stale=False,
+                fallback_reason=None,
+                nodes=validated_cached.get("nodes", []),
+                edges=validated_cached.get("edges", []),
+                mermaid=validated_cached.get("mermaid", ""),
+                evidence_excerpt="",
             )
-            payload = generated.payload
-            artifact_status = generated.status
-            fallback_reason = generated.fallback_reason
-            await services.repository.upsert_paper_artifact(
-                paper_id,
-                user.id,
-                "structure",
-                revision,
-                artifact_status,
-                fallback_reason,
-                payload,
-                generated.markdown,
+        if (
+            not refresh
+            and cached
+            and cached.status == "failed"
+            and cached.source_revision == revision
+        ):
+            return StructureGraphResponse(
+                paper_id=paper_id,
+                status="failed",
+                stale=False,
+                fallback_reason=cached.fallback_reason,
+                nodes=[],
+                edges=[],
+                mermaid="",
+                evidence_excerpt="",
             )
+        queued = await services.repository.enqueue_paper_artifact(
+            paper_id,
+            user.id,
+            "structure",
+            revision,
+            preserve_existing=cached_is_current,
+        )
+        if not queued:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+        response.status_code = status.HTTP_202_ACCEPTED
+        payload = validated_cached if cached_is_current else {
+            "nodes": [],
+            "edges": [],
+            "mermaid": "",
+        }
         return StructureGraphResponse(
             paper_id=paper_id,
-            status=artifact_status,
+            status="processing",
             stale=False,
-            fallback_reason=fallback_reason,
+            fallback_reason=None,
             nodes=payload.get("nodes", []),
             edges=payload.get("edges", []),
             mermaid=payload.get("mermaid", ""),
-            evidence_excerpt=payload.get("evidence_excerpt", ""),
+            evidence_excerpt="",
         )
 
     @app.get("/api/v1/chat/sessions", response_model=list[ChatSessionRead])

@@ -13,7 +13,7 @@ import type { Paper, PaperStructureGraph, PaperSummary, PaperTranslation, PaperT
 import { ChatWorkspace } from "./chat-workspace";
 import { PaperDetailsDialog } from "./paper-details-dialog";
 import { StructureDiagram } from "./structure-diagram";
-import { StructuredSummary, SummaryContent } from "./summary-content";
+import { StructuredSummary } from "./summary-content";
 import { TranslationConfirmDialog, translationLanguageLabel } from "./translation-confirm-dialog";
 
 const RealPdfDocument = dynamic(
@@ -82,6 +82,12 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const [assistantView, setAssistantView] = useState<AssistantView>("ask");
   const [summary, setSummary] = useState<PaperSummary | null>(null);
   const [structure, setStructure] = useState<PaperStructureGraph | null>(null);
+  const [summaryPolling, setSummaryPolling] = useState(
+    () => !demo && typeof window !== "undefined" && window.localStorage.getItem(`paperleaf:artifact:${paperId}:summary`) === "pending",
+  );
+  const [structurePolling, setStructurePolling] = useState(
+    () => !demo && typeof window !== "undefined" && window.localStorage.getItem(`paperleaf:artifact:${paperId}:structure`) === "pending",
+  );
   const [busy, setBusy] = useState<"summary" | "structure" | null>(null);
   const [loadMessage, setLoadMessage] = useState("");
   const [artifactMessage, setArtifactMessage] = useState("");
@@ -205,6 +211,50 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   }, [dataSource, paperId]);
 
   useEffect(() => {
+    if (!summaryPolling) return;
+    let stopped = false;
+    async function poll() {
+      try {
+        const next = await dataSource.summarizePaper(paperId, { refresh: false });
+        if (stopped) return;
+        setSummary(next);
+        setArtifactMessage("");
+        if (next.status !== "processing") {
+          window.localStorage.removeItem(`paperleaf:artifact:${paperId}:summary`);
+          setSummaryPolling(false);
+        }
+      } catch {
+        // 网络短暂中断不会取消后台任务；保留 pending 标记供当前页或下次进入时恢复。
+      }
+    }
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [dataSource, paperId, summaryPolling]);
+
+  useEffect(() => {
+    if (!structurePolling) return;
+    let stopped = false;
+    async function poll() {
+      try {
+        const next = await dataSource.buildStructureGraph(paperId, { refresh: false });
+        if (stopped) return;
+        setStructure(next);
+        setArtifactMessage("");
+        if (next.status !== "processing") {
+          window.localStorage.removeItem(`paperleaf:artifact:${paperId}:structure`);
+          setStructurePolling(false);
+        }
+      } catch {
+        // 与概括一致：断线不取消 Worker，回到页面后继续查询持久化结果。
+      }
+    }
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [dataSource, paperId, structurePolling]);
+
+  useEffect(() => {
     if (!translation || (translation.status !== "queued" && translation.status !== "running")) return;
     let stopped = false;
     const timer = window.setInterval(() => {
@@ -236,7 +286,14 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   async function generateSummary(refresh: boolean) {
     setBusy("summary");
     setArtifactMessage("");
-    try { setSummary(await dataSource.summarizePaper(paperId, { refresh })); }
+    try {
+      const next = await dataSource.summarizePaper(paperId, { refresh });
+      setSummary(next);
+      if (next.status === "processing") {
+        window.localStorage.setItem(`paperleaf:artifact:${paperId}:summary`, "pending");
+        setSummaryPolling(true);
+      }
+    }
     catch (error) { setArtifactMessage(artifactFailureMessage(error instanceof Error ? error.message : "论文总结生成失败")); }
     finally { setBusy(null); }
   }
@@ -244,7 +301,14 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   async function generateStructure(refresh: boolean) {
     setBusy("structure");
     setArtifactMessage("");
-    try { setStructure(await dataSource.buildStructureGraph(paperId, { refresh })); }
+    try {
+      const next = await dataSource.buildStructureGraph(paperId, { refresh });
+      setStructure(next);
+      if (next.status === "processing") {
+        window.localStorage.setItem(`paperleaf:artifact:${paperId}:structure`, "pending");
+        setStructurePolling(true);
+      }
+    }
     catch (error) { setArtifactMessage(artifactFailureMessage(error instanceof Error ? error.message : "结构图生成失败")); }
     finally { setBusy(null); }
   }
@@ -414,27 +478,26 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} onOpenCitation={(citation) => openCitation(citation.page)} />;
 
   const summaryContent = <div className="artifact-panel">
-    <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>按研究问题、核心方法、实验设置、主要结果和局限整理，每条事实都能回到原文。</p></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在生成" : summary ? "重新生成" : "生成概览"}</button>}</div>
+    <div className="artifact-heading"><div><span className="eyebrow">证据化概览</span><h3>证据化论文概览</h3><p>按研究问题、核心方法、实验设置、主要结果和局限整理，每条事实都能回到原文。</p></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || summary?.status === "processing"} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在提交" : summary?.status === "processing" ? "后台生成中" : summary ? "重新生成" : "生成概览"}</button>}</div>
     {!summary && !artifactMessage && <div className="artifact-empty"><AlignLeft size={20} /><strong>{readyForArtifacts ? "尚未生成概览" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "生成后，每条事实都会附带可点击的物理页码。" : "PDF 仍可阅读；总结功能会在索引就绪后开放。"}</p></div>}
-    {busy === "summary" && <div className="artifact-state" role="status"><strong>正在阅读全文并生成概括</strong><p>通常需要 30～90 秒；模型响应较慢时会自动使用精简证据重试。</p></div>}
-    {summary?.status === "processing" && <div className="artifact-state" role="status"><strong>概览仍在生成</strong><p>完成后会显示经过页码核验的五部分总结。</p></div>}
+    {busy === "summary" && <div className="artifact-state" role="status"><strong>正在提交后台任务</strong><p>提交后可以离开当前页面，不会中断概括生成。</p></div>}
+    {summary?.status === "processing" && <div className="artifact-state" role="status"><strong>{summary.sections.length > 0 ? "正在后台更新概览" : "概览正在后台生成"}</strong><p>{summary.sections.length > 0 ? "当前继续显示上次成功结果，更新完成后会自动替换。" : "可以继续阅读或离开页面，返回后会恢复进度。通常需要 1～3 分钟。"}</p></div>}
     {summary?.status === "failed" && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactFailureMessage(summary.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
-    {summary && summary.status !== "failed" && summary.status !== "processing" && <article className="summary-artifact">
-      <div className="artifact-mode"><span>{summary.mode === "model" ? "模型归纳" : "证据摘录"}</span><em>{summary.citations.length} 条页码证据</em></div>
+    {summary && summary.status !== "failed" && summary.sections.length > 0 && <article className="summary-artifact">
+      <div className="artifact-mode"><span>模型归纳</span><em>{summary.citations.length} 条页码证据</em></div>
       {summary.stale && <p className="artifact-stale-note" role="status">这份概览基于论文上一次索引生成，当前已过期。重新生成后才会使用最新页面内容。</p>}
-      {summary.mode === "extractive" && <p className="artifact-fallback-note">{artifactFailureMessage(summary.fallbackReason)} 当前仅展示可回读的证据摘录，并明确区别于模型总结。</p>}
-      {summary.sections.length > 0 ? <StructuredSummary sections={summary.sections} onOpenPage={openCitation} /> : summary.mode === "extractive" && summary.content ? <SummaryContent content={summary.content} citations={summary.citations} onOpenPage={openCitation} /> : null}
+      <StructuredSummary sections={summary.sections} onOpenPage={openCitation} />
       <div className="artifact-citations" aria-label="概览全部证据页">{summary.citations.map((citation, index) => <button key={`${citation.chunkId}-${citation.physicalPage}`} onClick={() => openCitation(citation.physicalPage)}><span>{String(index + 1).padStart(2, "0")}</span>PDF {citation.physicalPage}<small className="mono">{citation.chunkId}</small></button>)}</div>
     </article>}
     {artifactMessage && <div className="artifact-state error" role="alert"><strong>概览未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateSummary(true)}>稍后重试</button></div>}
   </div>;
 
   const structureContent = <div className="artifact-panel">
-    <div className="artifact-heading"><div><span className="eyebrow">研究逻辑脑图</span><h3>问题到局限的证据链</h3><p>由模型提炼问题、方法、实验、结果与局限；节点引用必须通过物理页校验。</p></div>{structure?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy)} onClick={() => void generateStructure(Boolean(structure))}>{busy === "structure" ? "正在构建" : structure ? "重新构建" : "构建结构"}</button>}</div>
+    <div className="artifact-heading"><div><span className="eyebrow">研究逻辑脑图</span><h3>问题到局限的证据链</h3><p>由模型提炼问题、方法、实验、结果与局限；节点引用必须通过物理页校验。</p></div>{structure?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || structure?.status === "processing"} onClick={() => void generateStructure(Boolean(structure))}>{busy === "structure" ? "正在提交" : structure?.status === "processing" ? "后台生成中" : structure ? "重新构建" : "构建结构"}</button>}</div>
     {!structure && !artifactMessage && <div className="artifact-empty"><Network size={20} /><strong>{readyForArtifacts ? "尚未构建研究脑图" : "等待论文完成索引"}</strong><p>{readyForArtifacts ? "研究逻辑与页码证据全部通过核验后才会显示。" : "索引完成后再提取论文研究逻辑。"}</p></div>}
-    {structure?.status === "processing" && <div className="artifact-state" role="status"><strong>研究脑图仍在生成</strong><p>节点与引用核验通过后才会显示。</p></div>}
-    {structure?.status === "failed" && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactFailureMessage(structure.fallbackReason)}</p>{structure.evidenceExcerpt && <p className="artifact-evidence-excerpt"><span>可用证据摘录</span>{structure.evidenceExcerpt.replace(/\s*\[chunk:[^\]]+\]/g, "")}</p>}<button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
-    {structure && structure.status !== "failed" && structure.status !== "processing" && <>{structure.stale && <p className="artifact-stale-note" role="status">这份研究脑图基于旧索引，重新构建后才会使用最新页面内容。</p>}<StructureDiagram key={structure.mermaid} graph={structure} onOpenPage={openCitation} /></>}
+    {structure?.status === "processing" && <div className="artifact-state" role="status"><strong>研究脑图正在后台生成</strong><p>可以离开页面；返回后会继续查询，节点与页码核验通过后才会显示。</p></div>}
+    {structure?.status === "failed" && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactFailureMessage(structure.fallbackReason)}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
+    {structure && structure.status !== "failed" && structure.nodes.length > 0 && <>{structure.stale && <p className="artifact-stale-note" role="status">这份研究脑图基于旧索引，重新构建后才会使用最新页面内容。</p>}<StructureDiagram key={structure.mermaid} graph={structure} onOpenPage={openCitation} /></>}
     {artifactMessage && <div className="artifact-state error" role="alert"><strong>研究脑图未生成</strong><p>{artifactMessage}</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void generateStructure(true)}>稍后重试</button></div>}
   </div>;
 

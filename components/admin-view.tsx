@@ -36,6 +36,8 @@ const jobTypeLabels: Record<string, string> = {
   import_paper: "导入论文",
   translate_paper: "翻译全文",
   agent_run: "运行问答",
+  summarize_paper: "生成论文概括",
+  build_structure_graph: "生成研究脑图",
 };
 
 const jobErrorLabels: Record<string, string> = {

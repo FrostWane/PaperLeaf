@@ -103,8 +103,8 @@ docker compose up -d web
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用嵌入模型，维度必须与主模型一致 |
 | `PAPERLEAF_FALLBACK_VISION_MODEL` | 可选备用 OCR 视觉模型 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 每次模型调用的超时秒数 |
-| `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 全文概括与结构图首次生成超时，默认 75 秒 |
-| `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 产物精简证据重试超时，默认 45 秒且不得大于首次超时 |
+| `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括与结构图首次生成超时，默认 120 秒 |
+| `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台产物精简证据重试超时，默认 90 秒且不得大于首次超时 |
 | `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务的最大尝试次数，范围 1~3 |
 | `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败熔断阈值 |
 | `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断冷却秒数 |
@@ -118,7 +118,7 @@ docker compose up -d web
 
 全文翻译会把已解析的单页文本发送给聊天模型，并把译文逐页保存在 PostgreSQL。它不会生成新的 PDF。生产部署应按最大 500 页文献估算数据库容量与模型费用，并确保 Worker 持续运行；API 重启或浏览器离开不会中止已创建的翻译作业。
 
-论文总结与结构图会把当前论文的代表性页级证据发送给总结模型，并把验证后的结构化产物保存在 PostgreSQL。修改或重新解析页文本后旧产物会标记过期；部署者应把 `paper_artifacts` 纳入数据库备份和保留策略。
+论文总结与结构图会由 Worker 把当前论文的代表性页级证据发送给总结模型，并把验证后的结构化产物保存在 PostgreSQL。Web 请求只创建后台任务，不需要为反向代理开放数分钟的同步响应时间。修改或重新解析页文本后旧产物会标记过期；部署者应把 `paper_artifacts` 和 `jobs` 纳入数据库备份和保留策略。首次生成失败只保存中文原因和空产物，刷新失败则保留上一次成功结果。
 
 ## 反向代理
 

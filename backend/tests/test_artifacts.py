@@ -282,7 +282,7 @@ def test_structured_summary_retries_format_once_but_not_invalid_citation() -> No
     retried = SequenceSummaryRouter(["not-json", _summary_json()])
     result = asyncio.run(generate_summary_artifact(_evidence(), model_router=retried))
     assert retried.calls == 2
-    assert retried.timeouts == [75, 45]
+    assert retried.timeouts == [120, 90]
     assert result.status == "ready"
 
     invalid = json.loads(_summary_json())
@@ -290,9 +290,10 @@ def test_structured_summary_retries_format_once_but_not_invalid_citation() -> No
     router = SequenceSummaryRouter([json.dumps(invalid, ensure_ascii=False)])
     result = asyncio.run(generate_summary_artifact(_evidence(), model_router=router))
     assert router.calls == 1
-    assert result.status == "fallback"
+    assert result.status == "failed"
     assert result.fallback_reason == "模型引用未通过证据校验"
-    assert "提取式概览" in result.markdown
+    assert result.markdown == ""
+    assert result.payload["citations"] == []
 
 
 def test_structured_summary_requires_a_fact_in_every_section() -> None:
@@ -304,8 +305,26 @@ def test_structured_summary_requires_a_fact_in_every_section() -> None:
     result = asyncio.run(generate_summary_artifact(_evidence(), model_router=router))
 
     assert router.calls == 2
-    assert result.status == "fallback"
+    assert result.status == "failed"
     assert result.fallback_reason == "模型输出格式不合法"
+
+
+def test_structured_summary_rejects_english_only_facts_without_exposing_excerpts() -> None:
+    english = json.loads(_summary_json())
+    for section in english["sections"]:
+        section["facts"][0]["text"] = "This is an English-only generated fact."
+    raw = json.dumps(english, ensure_ascii=False)
+
+    result = asyncio.run(
+        generate_summary_artifact(
+            _evidence(), model_router=SequenceSummaryRouter([raw, raw])
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.markdown == ""
+    assert result.payload["sections"]
+    assert all(not section["facts"] for section in result.payload["sections"])
 
 
 def test_structure_requires_valid_semantic_nodes_and_acyclic_edges() -> None:
@@ -359,7 +378,7 @@ def test_structure_without_model_never_builds_sequential_chunk_graph() -> None:
     assert result.status == "failed"
     assert result.fallback_reason == "尚未配置可用的论文结构图模型"
     assert result.payload["nodes"] == []
-    assert "[chunk:c1]" in result.payload["evidence_excerpt"]
+    assert result.payload["evidence_excerpt"] == ""
 
 
 def test_artifact_source_revision_changes_with_page_evidence() -> None:

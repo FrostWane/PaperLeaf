@@ -64,7 +64,8 @@ flowchart TB
 ### PostgreSQL 与 MinIO
 
 - PostgreSQL 保存身份、文献元数据、层级集合、页、Chunk、向量、任务、Agent Run 和 LangGraph Checkpoint。
-- 结构化总结和研究结构图保存为用户私有 `paper_artifacts`；来源修订由全部物理页文本计算，重索引会使旧产物进入 `stale`。
+- 结构化总结和研究结构图通过 `summarize_paper`、`build_structure_graph` 作业交给 Worker；API 只负责幂等入队并返回 `processing`。
+- 产物保存为用户私有 `paper_artifacts`；来源修订由全部物理页文本计算，重索引会使旧产物进入 `stale`。刷新生成期间继续保留上一次成功产物，失败不会覆盖它。
 - pgvector 负责精确向量检索，PostgreSQL 全文索引负责关键词检索。
 - MinIO 保存 PDF 原件；Bucket 初始化为私有。
 - 数据库记录对象键，不将预签名链接作为持久数据。
@@ -177,7 +178,8 @@ sequenceDiagram
 
 - 总结模型只能输出固定五节 JSON：研究问题、核心方法、实验设置、主要结果、局限与适用范围。每个事实独立携带引用数组，服务端校验 Chunk 所有权和物理页后生成 Markdown。
 - 结构图模型输出 5～12 个受控语义节点和边。服务端检查节点类型、引用、未知端点、孤立节点与有向环，再生成经过字符约束的 Mermaid `flowchart TD`；前端仍使用 strict 安全模式渲染。
-- 模型超时或 JSON 格式错误只进行一次更小上下文重试。总结失败时保留可回读证据摘录并标出原因；结构图失败时返回空图、证据摘录和原因，不用 Chunk 顺序连线伪装模型结构。
+- 模型超时或 JSON 格式错误会使用更小上下文重试，作业还可由 Worker 按租约恢复。总结事实必须含中文且引用合法；结构图节点摘要也必须含中文。
+- 首次生成最终失败时只保存中文失败原因和空产物，不保存或展示英文 Chunk 摘录。刷新生成失败时继续返回上一次成功的中文产物，不用原文摘录或 Chunk 顺序连线伪装模型结果。
 - 产物以 `paper_id + type` 唯一保存，记录来源修订、状态、结构化 payload、稳定 Markdown 和降级原因。只有来源修订一致的 ready 产物可直接复用。
 
 ## 模型运行时

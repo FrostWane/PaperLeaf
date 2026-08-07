@@ -25,6 +25,12 @@ from .agent.graph import (
 )
 from .agent.tools import SQLLibrarySearch
 from .agent_execution import execute_agent_run
+from .artifacts import (
+    generate_structure_artifact,
+    generate_summary_artifact,
+    load_paper_evidence,
+    load_paper_source_revision,
+)
 from .config import settings
 from .crossref_service import crossref_client
 from .db import get_session_factory
@@ -63,6 +69,10 @@ JOB_LEASE = timedelta(minutes=30)
 MAX_TRANSLATION_PAGE_CHARS = 48_000
 MAX_TRANSLATION_CHUNKS = 6
 MAX_TRANSLATION_OUTPUT_TOKENS = 4096
+ARTIFACT_JOB_TYPES = {
+    "summarize_paper": "summary",
+    "build_structure_graph": "structure",
+}
 
 
 class JobLeaseLostError(RuntimeError):
@@ -71,6 +81,15 @@ class JobLeaseLostError(RuntimeError):
 
 class TranslationInputLimitError(ValueError):
     """单页文本超过翻译成本上限。"""
+
+
+class ArtifactJobError(RuntimeError):
+    """可安全展示给用户的论文产物生成失败。"""
+
+    def __init__(self, error_code: str, public_reason: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+        self.public_reason = public_reason
 
 
 @dataclass(frozen=True)
@@ -97,6 +116,7 @@ async def claim_job() -> ClaimedJob | None:
     exhausted_translation_ids: list[str] = []
     exhausted_parse_paper_ids: list[str] = []
     exhausted_agent_run_ids: list[str] = []
+    exhausted_artifacts: list[tuple[str, str]] = []
     claimed: ClaimedJob | None = None
     async with get_session_factory()() as session:
         # Worker 异常退出后，租约到期的 running 作业可重新领取；旧 Worker 的
@@ -120,6 +140,10 @@ async def claim_job() -> ClaimedJob | None:
                 exhausted_parse_paper_ids.append(stale.paper_id)
             if exhausted and stale.type == "agent_run" and stale.agent_run_id:
                 exhausted_agent_run_ids.append(stale.agent_run_id)
+            if exhausted and stale.paper_id and stale.type in ARTIFACT_JOB_TYPES:
+                exhausted_artifacts.append(
+                    (stale.paper_id, ARTIFACT_JOB_TYPES[stale.type])
+                )
             stale.status = JobStatus.failed if exhausted else JobStatus.queued
             stale.error_code = (
                 "WORKER_LEASE_EXHAUSTED" if exhausted else stale.error_code
@@ -165,6 +189,25 @@ async def claim_job() -> ClaimedJob | None:
             result_summary={"answer": "", "citations": []},
             force=True,
         )
+    if exhausted_artifacts:
+        async with get_session_factory()() as session:
+            for paper_id, artifact_type in exhausted_artifacts:
+                await session.execute(
+                    update(PaperArtifact)
+                    .where(
+                        PaperArtifact.paper_id == paper_id,
+                        PaperArtifact.type == artifact_type,
+                        PaperArtifact.status != "ready",
+                    )
+                    .values(
+                        status="failed",
+                        fallback_reason="后台任务重试次数已耗尽，请稍后重新生成",
+                        structured_payload={},
+                        markdown="",
+                        updated_at=utcnow(),
+                    )
+                )
+            await session.commit()
     return claimed
 
 
@@ -1194,6 +1237,112 @@ async def process_delete_job(job_id: str, claim_token: str | None = None) -> Non
         await session.commit()
 
 
+def _artifact_failure(reason: str | None) -> ArtifactJobError:
+    public_reason = reason or "论文分析模型暂时无法完成生成，请稍后重试"
+    if "超时" in public_reason:
+        code = "MODEL_TIMEOUT"
+    elif "配置" in public_reason:
+        code = "MODEL_NOT_CONFIGURED"
+    elif "引用" in public_reason:
+        code = "CITATION_VALIDATION_FAILED"
+    elif "格式" in public_reason or "结构图" in public_reason:
+        code = "INVALID_OUTPUT"
+    else:
+        code = "MODEL_UNAVAILABLE"
+    return ArtifactJobError(code, public_reason)
+
+
+async def process_artifact_job(job_id: str, claim_token: str) -> None:
+    """在 Worker 中生成概括或研究脑图，并以租约令牌保护最终写入。"""
+
+    async with get_session_factory()() as session:
+        job = await session.scalar(
+            select(Job)
+            .where(Job.id == job_id, Job.claim_token == claim_token)
+            .with_for_update()
+        )
+        if not job or not job.paper_id or job.type not in ARTIFACT_JOB_TYPES:
+            return
+        paper = await session.get(Paper, job.paper_id)
+        if not paper:
+            raise ArtifactJobError("PAPER_NOT_FOUND", "关联文献不存在")
+        paper_id = paper.id
+        owner_id = paper.owner_id
+        artifact_type = ARTIFACT_JOB_TYPES[job.type]
+        job.progress = 10
+        job.updated_at = utcnow()
+        await session.commit()
+
+    evidence = await load_paper_evidence(
+        owner_id,
+        paper_id,
+        limit=settings.max_pdf_pages,
+        first_chunk_per_page=True,
+    )
+    if not evidence:
+        raise ArtifactJobError("SOURCE_UNAVAILABLE", "文献尚未完成解析")
+    revision = await load_paper_source_revision(owner_id, paper_id)
+    if artifact_type == "summary":
+        generated = await generate_summary_artifact(
+            evidence, model_router=model_router, config=settings
+        )
+    else:
+        generated = await generate_structure_artifact(
+            evidence, model_router=model_router, config=settings
+        )
+    if generated.status != "ready":
+        raise _artifact_failure(generated.fallback_reason)
+    if await load_paper_source_revision(owner_id, paper_id) != revision:
+        raise ArtifactJobError(
+            "SOURCE_CHANGED",
+            "论文在生成期间重新建立了索引，请使用最新内容重新生成",
+        )
+
+    async with get_session_factory()() as session:
+        job = await session.scalar(
+            select(Job)
+            .where(Job.id == job_id, Job.claim_token == claim_token)
+            .with_for_update()
+        )
+        if not job or not job.paper_id:
+            raise JobLeaseLostError("ARTIFACT_JOB_LEASE_LOST")
+        artifact = await session.scalar(
+            select(PaperArtifact)
+            .where(
+                PaperArtifact.paper_id == paper_id,
+                PaperArtifact.type == artifact_type,
+            )
+            .with_for_update()
+        )
+        if artifact is None:
+            artifact = PaperArtifact(
+                paper_id=paper_id,
+                owner_id=owner_id,
+                type=artifact_type,
+                source_revision=revision,
+                status="ready",
+                fallback_reason=None,
+                structured_payload=dict(generated.payload),
+                markdown=generated.markdown,
+            )
+            session.add(artifact)
+        else:
+            artifact.source_revision = revision
+            artifact.status = "ready"
+            artifact.fallback_reason = None
+            artifact.structured_payload = dict(generated.payload)
+            artifact.markdown = generated.markdown
+            artifact.updated_at = utcnow()
+        job.status = JobStatus.completed
+        job.progress = 100
+        job.error_code = None
+        job.error_message = None
+        job.claimed_at = None
+        job.claim_token = None
+        job.updated_at = utcnow()
+        await session.commit()
+
+
 async def process_job(claimed_job: ClaimedJob) -> None:
     async with get_session_factory()() as session:
         job_type = await session.scalar(
@@ -1210,6 +1359,8 @@ async def process_job(claimed_job: ClaimedJob) -> None:
         await process_translation_job(claimed_job.id, claimed_job.token)
     elif job_type == "agent_run":
         await process_agent_run_job(claimed_job.id, claimed_job.token)
+    elif job_type in ARTIFACT_JOB_TYPES:
+        await process_artifact_job(claimed_job.id, claimed_job.token)
     else:
         raise RuntimeError("UNKNOWN_JOB_TYPE")
 
@@ -1238,14 +1389,29 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
             if not job:
                 return
             translation = None
-        public_codes = {"PDF_PARSE_FAILED", "UNKNOWN_JOB_TYPE"}
+        public_codes = {
+            "PDF_PARSE_FAILED",
+            "UNKNOWN_JOB_TYPE",
+            "MODEL_TIMEOUT",
+            "MODEL_NOT_CONFIGURED",
+            "MODEL_UNAVAILABLE",
+            "CITATION_VALIDATION_FAILED",
+            "INVALID_OUTPUT",
+            "SOURCE_UNAVAILABLE",
+            "SOURCE_CHANGED",
+            "PAPER_NOT_FOUND",
+        }
         candidate = str(exc)
         job.error_code = (
             candidate if candidate in public_codes else "JOB_EXECUTION_FAILED"
         )
         if job.type == "translate_paper":
             job.error_code = "PAGE_TRANSLATION_FAILED"
-        job.error_message = "作业执行失败，请查看服务日志"
+        job.error_message = (
+            exc.public_reason
+            if isinstance(exc, ArtifactJobError)
+            else "作业执行失败，请查看服务日志"
+        )
         job.status = JobStatus.queued if job.attempts < job.max_attempts else JobStatus.failed
         job.available_at = utcnow() + timedelta(
             seconds=min(60, 2 ** max(1, job.attempts))
@@ -1259,6 +1425,25 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
                 paper.status = (
                     PaperStatus.deleting if job.type == "delete_paper" else PaperStatus.failed
                 )
+        if (
+            job.paper_id
+            and job.type in ARTIFACT_JOB_TYPES
+            and job.status == JobStatus.failed
+        ):
+            artifact = await session.scalar(
+                select(PaperArtifact)
+                .where(
+                    PaperArtifact.paper_id == job.paper_id,
+                    PaperArtifact.type == ARTIFACT_JOB_TYPES[job.type],
+                )
+                .with_for_update()
+            )
+            if artifact and artifact.status != "ready":
+                artifact.status = "failed"
+                artifact.fallback_reason = job.error_message
+                artifact.structured_payload = {}
+                artifact.markdown = ""
+                artifact.updated_at = utcnow()
         if job.type == "agent_run" and job.agent_run_id and job.status == JobStatus.failed:
             repository = SQLAlchemyRepository(settings.session_secret)
             await session.commit()

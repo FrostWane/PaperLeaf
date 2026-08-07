@@ -44,6 +44,12 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+ARTIFACT_JOB_TYPES = {
+    "summary": "summarize_paper",
+    "structure": "build_structure_graph",
+}
+
+
 @dataclass
 class UserRecord:
     id: str
@@ -365,6 +371,18 @@ class Repository(Protocol):
     async def requeue_owned_paper(
         self, paper_id: str, owner_id: str
     ) -> PaperRecord | None: ...
+    async def get_active_paper_artifact_job(
+        self, paper_id: str, owner_id: str, artifact_type: str
+    ) -> JobRecord | Job | None: ...
+    async def enqueue_paper_artifact(
+        self,
+        paper_id: str,
+        owner_id: str,
+        artifact_type: str,
+        source_revision_value: str,
+        *,
+        preserve_existing: bool,
+    ) -> JobRecord | Job | None: ...
     async def delete_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def touch_paper_opened(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def set_papers_archived(
@@ -692,6 +710,63 @@ class MemoryRepository:
             record.markdown = markdown
             record.updated_at = now()
         return record
+
+    async def get_active_paper_artifact_job(
+        self, paper_id: str, owner_id: str, artifact_type: str
+    ) -> JobRecord | None:
+        if artifact_type not in ARTIFACT_JOB_TYPES:
+            return None
+        if not await self.get_owned_paper(paper_id, owner_id):
+            return None
+        job_type = ARTIFACT_JOB_TYPES[artifact_type]
+        return next(
+            (
+                job
+                for job in self.jobs.values()
+                if job.paper_id == paper_id
+                and job.type == job_type
+                and job.status in {JobStatus.queued, JobStatus.running}
+            ),
+            None,
+        )
+
+    async def enqueue_paper_artifact(
+        self,
+        paper_id: str,
+        owner_id: str,
+        artifact_type: str,
+        source_revision_value: str,
+        *,
+        preserve_existing: bool,
+    ) -> JobRecord | None:
+        if artifact_type not in ARTIFACT_JOB_TYPES:
+            return None
+        if not await self.get_owned_paper(paper_id, owner_id):
+            return None
+        active = await self.get_active_paper_artifact_job(
+            paper_id, owner_id, artifact_type
+        )
+        if active:
+            return active
+        if not preserve_existing:
+            await self.upsert_paper_artifact(
+                paper_id,
+                owner_id,
+                artifact_type,
+                source_revision_value,
+                "processing",
+                None,
+                {},
+                "",
+            )
+        job = JobRecord(
+            id=str(uuid.uuid4()),
+            paper_id=paper_id,
+            type=ARTIFACT_JOB_TYPES[artifact_type],
+            max_attempts=2,
+        )
+        self.jobs[job.id] = job
+        return job
 
     async def mark_paper_artifacts_stale(self, paper_id: str) -> None:
         for record in self.paper_artifacts.values():
@@ -1185,7 +1260,28 @@ class MemoryRepository:
         job.attempts = 0
         job.error_code = None
         job.error_message = None
+        job.available_at = now()
+        job.claimed_at = None
+        job.claim_token = None
         job.updated_at = now()
+        if job.paper_id and job.type in ARTIFACT_JOB_TYPES.values():
+            artifact_type = next(
+                key for key, value in ARTIFACT_JOB_TYPES.items() if value == job.type
+            )
+            paper = self.papers.get(job.paper_id)
+            artifact = (
+                await self.get_owned_paper_artifact(
+                    job.paper_id, paper.owner_id, artifact_type
+                )
+                if paper
+                else None
+            )
+            if artifact and artifact.status != "ready":
+                artifact.status = "processing"
+                artifact.fallback_reason = None
+                artifact.structured_payload = {}
+                artifact.markdown = ""
+                artifact.updated_at = now()
         if job.type == "translate_paper" and job.translation_id:
             if translation:
                 translation.status = "queued"
@@ -2109,6 +2205,98 @@ class SQLAlchemyRepository:
             await session.commit()
             await session.refresh(record)
             return record
+
+    async def get_active_paper_artifact_job(
+        self, paper_id: str, owner_id: str, artifact_type: str
+    ) -> Job | None:
+        job_type = ARTIFACT_JOB_TYPES.get(artifact_type)
+        if not job_type:
+            return None
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(Job)
+                .join(Paper, Paper.id == Job.paper_id)
+                .where(
+                    Job.paper_id == paper_id,
+                    Paper.owner_id == owner_id,
+                    Job.type == job_type,
+                    Job.status.in_([JobStatus.queued, JobStatus.running]),
+                )
+                .order_by(Job.created_at.desc())
+                .limit(1)
+            )
+
+    async def enqueue_paper_artifact(
+        self,
+        paper_id: str,
+        owner_id: str,
+        artifact_type: str,
+        source_revision_value: str,
+        *,
+        preserve_existing: bool,
+    ) -> Job | None:
+        job_type = ARTIFACT_JOB_TYPES.get(artifact_type)
+        if not job_type:
+            return None
+        async with get_session_factory()() as session:
+            paper = await session.scalar(
+                select(Paper)
+                .where(Paper.id == paper_id, Paper.owner_id == owner_id)
+                .with_for_update()
+            )
+            if not paper:
+                return None
+            active = await session.scalar(
+                select(Job)
+                .where(
+                    Job.paper_id == paper_id,
+                    Job.type == job_type,
+                    Job.status.in_([JobStatus.queued, JobStatus.running]),
+                )
+                .order_by(Job.created_at.desc())
+                .with_for_update()
+                .limit(1)
+            )
+            if active:
+                return active
+            artifact = await session.scalar(
+                select(PaperArtifact)
+                .where(
+                    PaperArtifact.paper_id == paper_id,
+                    PaperArtifact.type == artifact_type,
+                )
+                .with_for_update()
+            )
+            if not preserve_existing:
+                if artifact is None:
+                    artifact = PaperArtifact(
+                        paper_id=paper_id,
+                        owner_id=owner_id,
+                        type=artifact_type,
+                        source_revision=source_revision_value,
+                        status="processing",
+                        fallback_reason=None,
+                        structured_payload={},
+                        markdown="",
+                    )
+                    session.add(artifact)
+                else:
+                    artifact.source_revision = source_revision_value
+                    artifact.status = "processing"
+                    artifact.fallback_reason = None
+                    artifact.structured_payload = {}
+                    artifact.markdown = ""
+                    artifact.updated_at = now()
+            job = Job(
+                paper_id=paper_id,
+                type=job_type,
+                max_attempts=2,
+                status=JobStatus.queued,
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            return job
 
     async def mark_paper_artifacts_stale(self, paper_id: str) -> None:
         async with get_session_factory()() as session:
@@ -3429,6 +3617,26 @@ class SQLAlchemyRepository:
             job.claimed_at = None
             job.claim_token = None
             job.updated_at = now()
+            if job.paper_id and job.type in ARTIFACT_JOB_TYPES.values():
+                artifact_type = next(
+                    key
+                    for key, value in ARTIFACT_JOB_TYPES.items()
+                    if value == job.type
+                )
+                artifact = await session.scalar(
+                    select(PaperArtifact)
+                    .where(
+                        PaperArtifact.paper_id == job.paper_id,
+                        PaperArtifact.type == artifact_type,
+                    )
+                    .with_for_update()
+                )
+                if artifact and artifact.status != "ready":
+                    artifact.status = "processing"
+                    artifact.fallback_reason = None
+                    artifact.structured_payload = {}
+                    artifact.markdown = ""
+                    artifact.updated_at = now()
             if job.type == "translate_paper" and job.translation_id:
                 if translation:
                     translation.status = "queued"

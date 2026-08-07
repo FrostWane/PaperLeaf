@@ -278,7 +278,7 @@ class SummarySection(BaseModel):
 
 class SummaryResponse(BaseModel):
     paper_id: str
-    status: Literal["ready", "fallback", "stale", "failed"]
+    status: Literal["ready", "processing", "stale", "failed"]
     stale: bool = False
     fallback_reason: Optional[str] = None
     sections: list[SummarySection]
@@ -302,7 +302,7 @@ class StructureEdge(BaseModel):
 
 class StructureGraphResponse(BaseModel):
     paper_id: str
-    status: Literal["ready", "failed", "stale"]
+    status: Literal["ready", "processing", "failed", "stale"]
     stale: bool = False
     fallback_reason: Optional[str] = None
     nodes: list[StructureNode]

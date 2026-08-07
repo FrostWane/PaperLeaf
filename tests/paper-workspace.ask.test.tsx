@@ -13,7 +13,12 @@ describe("PaperWorkspace 统一持久化问答", () => {
       disconnect() { /* 测试不需要尺寸通知。 */ }
     });
   });
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
 
   it("单篇助手恢复绑定当前论文的历史会话，并且只挂载一个事件订阅实例", async () => {
     const listSessions = vi.spyOn(demoDataSource, "listChatSessions");

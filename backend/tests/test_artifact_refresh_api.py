@@ -2,10 +2,11 @@ import asyncio
 import uuid
 from dataclasses import replace
 
-from paperleaf_api.artifacts import ArtifactGeneration
+from fastapi import Response
+
 from paperleaf_api.config import settings
 from paperleaf_api.main import create_app
-from paperleaf_api.models import PaperStatus
+from paperleaf_api.models import JobStatus, PaperStatus
 from paperleaf_api.rag.citations import Evidence
 from paperleaf_api.repository import MemoryRepository, PaperRecord
 from paperleaf_api.storage import LocalObjectStorage
@@ -73,7 +74,6 @@ def test_artifact_refresh_query_bypasses_ready_cache(tmp_path, monkeypatch) -> N
         storage=LocalObjectStorage(tmp_path),
     )
     evidence = [Evidence("c1", "paper", "测试论文", 1, "可核验证据")]
-    calls = {"summary": 0, "structure": 0}
 
     async def load_evidence(*args, **kwargs):
         return evidence
@@ -81,23 +81,8 @@ def test_artifact_refresh_query_bypasses_ready_cache(tmp_path, monkeypatch) -> N
     async def load_revision(*args, **kwargs):
         return "revision-1"
 
-    async def generate_summary(*args, **kwargs):
-        calls["summary"] += 1
-        payload = _summary_payload(calls["summary"])
-        return ArtifactGeneration("ready", None, payload, "稳定总结")
-
-    async def generate_structure(*args, **kwargs):
-        calls["structure"] += 1
-        return ArtifactGeneration(
-            "ready", None, _structure_payload(calls["structure"]), ""
-        )
-
     monkeypatch.setattr("paperleaf_api.main.load_paper_evidence", load_evidence)
     monkeypatch.setattr("paperleaf_api.main.load_paper_source_revision", load_revision)
-    monkeypatch.setattr("paperleaf_api.main.generate_summary_artifact", generate_summary)
-    monkeypatch.setattr(
-        "paperleaf_api.main.generate_structure_artifact", generate_structure
-    )
 
     paths = app.openapi()["paths"]
     assert any(
@@ -136,24 +121,46 @@ def test_artifact_refresh_query_bypasses_ready_cache(tmp_path, monkeypatch) -> N
         summary = endpoints["/api/v1/papers/{paper_id}/summary"]
         structure = endpoints["/api/v1/papers/{paper_id}/structure-graph"]
 
-        await summary(paper.id, user, None, refresh=False)
-        await summary(paper.id, user, None, refresh=False)
-        assert calls["summary"] == 1
-        await summary(paper.id, user, None, refresh=True)
-        assert calls["summary"] == 2
+        first_http = Response()
+        first = await summary(paper.id, user, None, first_http, refresh=False)
+        second = await summary(paper.id, user, None, Response(), refresh=False)
+        summary_jobs = [job for job in repository.jobs.values() if job.type == "summarize_paper"]
+        assert first.status == second.status == "processing"
+        assert first_http.status_code == 202
+        assert len(summary_jobs) == 1
 
-        await structure(paper.id, user, None, refresh=False)
-        await structure(paper.id, user, None, refresh=False)
-        assert calls["structure"] == 1
-        await structure(paper.id, user, None, refresh=True)
-        assert calls["structure"] == 2
+        summary_jobs[0].status = JobStatus.completed
+        await repository.upsert_paper_artifact(
+            paper.id, user.id, "summary", "revision-1", "ready", None,
+            _summary_payload(1), "稳定中文总结",
+        )
+        cached = await summary(paper.id, user, None, Response(), refresh=False)
+        assert cached.status == "ready"
+        assert cached.sections[0].facts[0].text == "第 1 次生成"
+
+        refreshed = await summary(paper.id, user, None, Response(), refresh=True)
+        assert refreshed.status == "processing"
+        assert refreshed.sections[0].facts[0].text == "第 1 次生成"
+        assert len([job for job in repository.jobs.values() if job.type == "summarize_paper"]) == 2
+
+        first_structure = await structure(
+            paper.id, user, None, Response(), refresh=False
+        )
+        second_structure = await structure(
+            paper.id, user, None, Response(), refresh=False
+        )
+        assert first_structure.status == second_structure.status == "processing"
+        structure_jobs = [
+            job
+            for job in repository.jobs.values()
+            if job.type == "build_structure_graph"
+        ]
+        assert len(structure_jobs) == 1
 
         cached_summary = await repository.get_owned_paper_artifact(
             paper.id, user.id, "summary"
         )
         assert cached_summary is not None
-        cached_summary.structured_payload["sections"][0]["facts"] = []
-        await summary(paper.id, user, None, refresh=False)
-        assert calls["summary"] == 3
+        assert cached_summary.status == "ready"
 
     asyncio.run(exercise())

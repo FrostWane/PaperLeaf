@@ -52,4 +52,32 @@ describe("PaperWorkspace 证据化产物", () => {
     expect(assistant.getByRole("button", { name: "稍后重试" })).toBeInTheDocument();
     expect(assistant.queryByText("模型归纳")).not.toBeInTheDocument();
   });
+
+  it("后台概括完成后自动恢复中文五节，不展示英文证据摘录", async () => {
+    const ready = await demoDataSource.summarizePaper("attention", { refresh: false });
+    let finishPolling: (value: typeof ready) => void = () => undefined;
+    const pendingResult = new Promise<typeof ready>((resolve) => { finishPolling = resolve; });
+    const summarize = vi.spyOn(demoDataSource, "summarizePaper")
+      .mockResolvedValueOnce({
+        ...ready,
+        status: "processing",
+        sections: [],
+        citations: [],
+        content: "Raw English abstract must never be rendered.",
+      })
+      .mockImplementationOnce(() => pendingResult)
+      .mockResolvedValue(ready);
+    const { container } = render(<PaperWorkspace demo paperId="attention" />);
+    const assistant = within(container.querySelector(".workspace-desktop .workspace-assistant") as HTMLElement);
+
+    fireEvent.click(assistant.getByRole("button", { name: "概览" }));
+    fireEvent.click(assistant.getByRole("button", { name: "生成概览" }));
+
+    expect(await assistant.findByText("概览正在后台生成")).toBeInTheDocument();
+    expect(assistant.queryByText(/Raw English abstract/)).not.toBeInTheDocument();
+    finishPolling(ready);
+    expect(await assistant.findByRole("region", { name: "研究问题" }, { timeout: 5_000 })).toBeInTheDocument();
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem("paperleaf:artifact:attention:summary")).toBeNull();
+  }, 8_000);
 });

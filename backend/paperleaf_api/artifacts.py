@@ -21,6 +21,7 @@ _TRAILING_CITATIONS_RE = re.compile(
     r"(?:\s*\[chunk:[^\[\]\r\n]+\])+\s*$"
 )
 _MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
 def _spread_evidence(evidence: list[Evidence], limit: int) -> list[Evidence]:
@@ -312,24 +313,14 @@ def _citation_values(raw: Any, evidence: list[Evidence]) -> list[dict[str, Any]]
 
 
 def _summary_fallback(evidence: list[Evidence], reason: str) -> ArtifactGeneration:
-    content = extractive_summary(evidence)
     empty_sections = [
         {"key": key, "title": title, "facts": []} for key, title in SUMMARY_SECTIONS
     ]
-    citations = [
-        {
-            "chunk_id": chunk_id,
-            "physical_page": next(
-                item.physical_page for item in evidence if item.chunk_id == chunk_id
-            ),
-        }
-        for chunk_id in cited_chunk_ids(content, evidence)
-    ]
     return ArtifactGeneration(
-        "fallback",
+        "failed",
         reason,
-        {"sections": empty_sections, "citations": citations, "mode": "extractive"},
-        content,
+        {"sections": empty_sections, "citations": [], "mode": "model"},
+        "",
     )
 
 
@@ -360,7 +351,12 @@ def validate_summary_payload(
             if not isinstance(fact, dict):
                 return None, "模型输出格式不合法"
             text = fact.get("text")
-            if not isinstance(text, str) or not text.strip() or len(text) > 1200:
+            if (
+                not isinstance(text, str)
+                or not text.strip()
+                or len(text) > 1200
+                or not _CJK_RE.search(text)
+            ):
                 return None, "模型输出格式不合法"
             citations = _citation_values(fact.get("citations"), evidence)
             if citations is None:
@@ -455,13 +451,14 @@ async def generate_summary_artifact(
     if not router.has_provider("summary"):
         return _summary_fallback(evidence, "尚未配置可用的论文总结模型")
     prompt = (
-        "生成论文五节结构化总结。根对象必须是 sections 数组，且恰好各含一次 key："
+        "使用简体中文生成论文五节结构化总结，专业缩写可保留英文，但每条事实必须是中文完整句子。"
+        "根对象必须是 sections 数组，且恰好各含一次 key："
         "research_question、core_method、experimental_setup、main_results、limitations_scope。"
         "每节含 facts 数组；每个事实为 {text,citations}，citations 至少一个，"
         "每项必须逐字复制证据的 chunk_id 与 physical_page。"
     )
-    full_timeout = float(getattr(config, "artifact_timeout_seconds", 75))
-    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 45))
+    full_timeout = float(getattr(config, "artifact_timeout_seconds", 120))
+    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 90))
     for attempt in range(2):
         try:
             response = await _invoke_artifact_model(
@@ -495,12 +492,11 @@ async def generate_summary_artifact(
 
 
 def _structure_fallback(evidence: list[Evidence], reason: str) -> ArtifactGeneration:
-    excerpt = extractive_summary(evidence, max_chars=1200)
     return ArtifactGeneration(
         "failed",
         reason,
-        {"nodes": [], "edges": [], "mermaid": "", "evidence_excerpt": excerpt},
-        excerpt,
+        {"nodes": [], "edges": [], "mermaid": "", "evidence_excerpt": ""},
+        "",
     )
 
 
@@ -598,6 +594,7 @@ def validate_structure_payload(
             or not label.strip()
             or not isinstance(summary, str)
             or not summary.strip()
+            or not _CJK_RE.search(summary)
         ):
             return None, "模型输出格式不合法"
         citations = _citation_values(node.get("citations"), evidence)
@@ -661,14 +658,15 @@ async def generate_structure_artifact(
     if not router.has_provider("summary"):
         return _structure_fallback(evidence, "尚未配置可用的论文结构图模型")
     prompt = (
-        "生成论文研究逻辑图 JSON：nodes 5-12 个，id 只能依次使用 n1 至 n12，"
+        "使用简体中文生成论文研究逻辑图 JSON，所有 label 与 summary 必须便于中文用户阅读："
+        "nodes 5-12 个，id 只能依次使用 n1 至 n12，"
         "字段为 id,type,label,summary,citations；"
         "type 只能是研究问题、背景、方法、数据、实验、结果、局限，且至少包含研究问题、"
         "方法、实验、结果、局限。edges 只含 source,target。每节点至少一个合法证据引用；"
         "所有节点必须连通，边构成无环的 问题→方法→实验→结果→局限 逻辑。"
     )
-    full_timeout = float(getattr(config, "artifact_timeout_seconds", 75))
-    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 45))
+    full_timeout = float(getattr(config, "artifact_timeout_seconds", 120))
+    retry_timeout = float(getattr(config, "artifact_retry_timeout_seconds", 90))
     for attempt in range(2):
         try:
             response = await _invoke_artifact_model(
