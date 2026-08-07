@@ -74,6 +74,10 @@ GitHub Actions 对拉取请求执行上述检查并运行密钥扫描。后端�
 
 当前 Pytest 主要使用内存仓储和本地临时对象存储；可选 PostgreSQL 集成用例会拒绝连接名称不含 `test` 的数据库，并通过真实行锁验证最后一名管理员保护和改密响应一致性。本轮本地临时 PostgreSQL 结果为 2 项通过。上述 Compose 冒烟还补充验证了 PostgreSQL/pgvector、MinIO、真实迁移和 Worker 领取任务；故障注入与完整 Testcontainers 编排仍待扩充。后续自动化容器测试必须使用临时数据库与独立 Bucket，不能连接开发者的真实数据。
 
+Redis 专项覆盖固定窗口、幂等键不重复计数、标识哈希、`429 + Retry-After` 契约以及连接故障后的进程内降级。Compose 验证还必须检查 `redis-cli ping`、`/ready` 的 `available` 状态，并在停止 Redis 后验证 API 不因短期运行态故障退出。多 API 实例共享配额将在容量里程碑的负载测试中验证，未完成前不宣称已有跨机器压测结果。
+
+2026-08-07 Redis 基础落地验证：后端完整回归 206 passed / 6 skipped；真实 Redis 7.4.10 返回 `PONG`，正常 `/ready` 为 `available`。停止 Redis 后 `/ready` 为 `degraded`，限流退化为 `memory-fallback` 且 API 保持运行；恢复 Redis 后重新可用。真实 TTL 冒烟确认同一幂等键在窗口内不重复计数，窗口结束后不会被旧判定继续阻塞。本轮没有执行并发容量压测，因此不报告吞吐或延迟提升。
+
 ## RAG 评测
 
 `backend/evaluation/datasets/paperleaf-rag-v1` 已冻结 20 篇 arXiv 精确版本和 120 个问题。仓库只分发注释与官方下载链接，不重新分发论文 PDF。问题覆盖：

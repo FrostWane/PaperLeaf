@@ -21,6 +21,7 @@ flowchart TB
     subgraph Data["数据层"]
         DB[("PostgreSQL + pgvector")]
         Store[("MinIO 私有对象存储")]
+        Redis[("Redis\n限流 / 短期运行态")]
     end
     Model["OpenAI-compatible 模型"]
     Arxiv["arXiv API / 开放 PDF"]
@@ -28,6 +29,7 @@ flowchart TB
     Web -->|"REST / SSE / Range"| API
     API --> DB
     API --> Store
+    API --> Redis
     Worker --> Graph
     Graph --> RAG
     Graph --> Arxiv
@@ -70,6 +72,14 @@ flowchart TB
 - pgvector 负责精确向量检索，PostgreSQL 全文索引负责关键词检索。
 - MinIO 保存 PDF 原件；Bucket 初始化为私有。
 - 数据库记录对象键，不将预签名链接作为持久数据。
+
+### Redis 运行态边界
+
+- Redis 只保存 Agent 提交的短期限流计数和幂等判定，所有 Key 使用前缀并哈希用户标识。
+- 限流计数通过单段 Lua 脚本原子完成读取、递增、过期和判定，避免多个 API 实例超卖配额。
+- Redis 不保存用户、会话、论文、消息、任务、Agent Run、Checkpoint、引用或 PDF 内容；这些数据仍以 PostgreSQL/MinIO 为真相源。
+- Redis 不可用时 API 降级为当前进程内限流并在 `/ready` 标记 `degraded`，不会让短期缓存故障中断文献管理和已持久化任务。
+- 当前 SSE 仍从 PostgreSQL 事件表补发；未来即使使用 Redis 加速唤醒，也不能绕过持久事件序列。
 
 ## 文献导入数据流
 
@@ -230,3 +240,4 @@ arXiv 下载由独立、鉴权且需要 CSRF 的导入接口完成；论文总�
 - 检索器与重排器保持独立接口，可用固定评测集比较。
 - 新文献来源必须实现来源白名单、重定向复验、文件校验和用户确认。
 - 对象存储可替换为兼容 S3 的服务，但必须保持私有访问语义。
+- 容量演进、观测指标和消息队列触发条件见[容量与可观测性里程碑](scaling.md)。

@@ -58,6 +58,7 @@ from .repository import (
     TranslationSourceUnavailableError,
     UserRecord,
 )
+from .runtime_store import RuntimeStore, create_runtime_store
 from .schemas import (
     AgentResumeRequest,
     AgentRunEventRead,
@@ -116,6 +117,7 @@ class AppServices:
         config: Settings,
         repository: Optional[MemoryRepository] = None,
         storage: Optional[ObjectStorage] = None,
+        runtime_store: Optional[RuntimeStore] = None,
     ) -> None:
         self.config = config
         self.repository = repository or (
@@ -124,6 +126,7 @@ class AppServices:
             else SQLAlchemyRepository(config.session_secret)
         )
         self.storage = storage or create_storage(config)
+        self.runtime_store = runtime_store or create_runtime_store(config)
         self.model_router = build_model_router(config)
         self.retriever = (
             DemoLibrarySearch()
@@ -352,9 +355,10 @@ def create_app(
     *,
     repository: Optional[MemoryRepository] = None,
     storage: Optional[ObjectStorage] = None,
+    runtime_store: Optional[RuntimeStore] = None,
 ) -> FastAPI:
     config.validate_production()
-    services = AppServices(config, repository, storage)
+    services = AppServices(config, repository, storage, runtime_store)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -362,7 +366,10 @@ def create_app(
             config.bootstrap_admin_email, config.bootstrap_admin_password
         )
         if config.is_demo:
-            yield
+            try:
+                yield
+            finally:
+                await services.runtime_store.close()
             return
         # LangGraph 使用独立的 PostgreSQL Checkpointer，业务表不存放隐藏推理内容。
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -376,6 +383,7 @@ def create_app(
                 yield
             finally:
                 services.checkpointer = None
+                await services.runtime_store.close()
 
     app = FastAPI(
         title="PaperLeaf API",
@@ -440,8 +448,15 @@ def create_app(
         return {"status": "ok", "mode": config.mode}
 
     @app.get("/ready")
-    async def ready() -> dict[str, str]:
-        return {"status": "ready"}
+    async def ready() -> dict[str, Any]:
+        runtime_available = await services.runtime_store.ping()
+        return {
+            "status": "ready",
+            "runtime_store": {
+                "backend": services.runtime_store.backend,
+                "status": "available" if runtime_available else "degraded",
+            },
+        }
 
     @app.post("/api/v1/auth/login", response_model=UserRead)
     async def login(payload: LoginRequest, response: Response) -> UserRead:
@@ -1455,6 +1470,23 @@ def create_app(
                 ).arxiv_search_enabled
             ),
         }
+        rate_limit = await services.runtime_store.acquire_rate_limit(
+            "agent-submit",
+            user.id,
+            limit=config.agent_rate_limit_requests,
+            window_seconds=config.agent_rate_limit_window_seconds,
+            idempotency_key=f"{session_id}:{client_message_id}",
+        )
+        if not rate_limit.allowed:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "AGENT_RATE_LIMITED",
+                    "message": "提问过于频繁，请稍后再试",
+                    "retry_after_seconds": rate_limit.retry_after_seconds,
+                },
+                headers={"Retry-After": str(rate_limit.retry_after_seconds)},
+            )
         request_hash = hashlib.sha256(
             json.dumps(
                 {

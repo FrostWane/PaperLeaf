@@ -26,6 +26,17 @@ class Settings:
     database_url: str = os.getenv(
         "PAPERLEAF_DATABASE_URL", "postgresql+asyncpg://paperleaf:paperleaf@db:5432/paperleaf"
     )
+    redis_url: str | None = os.getenv("PAPERLEAF_REDIS_URL") or None
+    redis_key_prefix: str = os.getenv("PAPERLEAF_REDIS_KEY_PREFIX", "paperleaf")
+    redis_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_REDIS_TIMEOUT_SECONDS", "0.5")
+    )
+    agent_rate_limit_requests: int = int(
+        os.getenv("PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS", "12")
+    )
+    agent_rate_limit_window_seconds: int = int(
+        os.getenv("PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")
+    )
     session_secret: str = os.getenv("PAPERLEAF_SESSION_SECRET", "local-demo-only-change-me")
     session_cookie: str = "paperleaf_session"
     csrf_cookie: str = "paperleaf_csrf"
@@ -163,6 +174,14 @@ class Settings:
             raise RuntimeError("模型断路器失败阈值必须至少为 1")
         if self.model_circuit_cooldown_seconds <= 0:
             raise RuntimeError("模型断路器冷却时间必须大于 0")
+        if self.redis_timeout_seconds <= 0 or self.redis_timeout_seconds > 5:
+            raise RuntimeError("Redis 超时必须位于 0 到 5 秒之间")
+        if self.agent_rate_limit_requests < 1:
+            raise RuntimeError("Agent 限流次数必须至少为 1")
+        if not 1 <= self.agent_rate_limit_window_seconds <= 3600:
+            raise RuntimeError("Agent 限流窗口必须位于 1 到 3600 秒之间")
+        if not self.redis_key_prefix.strip():
+            raise RuntimeError("Redis Key 前缀不能为空")
         if self.mode != "production":
             return
         weak = {"local-demo-only-change-me", "paperleaf-dev-admin", "paperleaf-local"}

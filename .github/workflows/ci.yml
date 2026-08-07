@@ -49,9 +49,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       PAPERLEAF_DATABASE_URL: postgresql+asyncpg://paperleaf:paperleaf-ci-only@127.0.0.1:5432/paperleaf_test
       PAPERLEAF_TEST_DATABASE_URL: postgresql+asyncpg://paperleaf:paperleaf-ci-only@127.0.0.1:5432/paperleaf_test
+      PAPERLEAF_TEST_REDIS_URL: redis://127.0.0.1:6379/0
     defaults:
       run:
         working-directory: backend

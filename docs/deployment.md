@@ -22,10 +22,10 @@ cp .env.example .env
 ```bash
 docker compose up -d --build
 docker compose ps
-docker compose logs --tail=100 migrate minio-init api worker web
+docker compose logs --tail=100 migrate redis minio-init api worker web
 ```
 
-正常情况下，`migrate` 和 `minio-init` 以退出码 0 完成，`postgres`、`minio`、`api` 和 `web` 变为健康状态，`worker` 持续运行。
+正常情况下，`migrate` 和 `minio-init` 以退出码 0 完成，`postgres`、`redis`、`minio`、`api` 和 `web` 变为健康状态，`worker` 持续运行。
 
 可使用仓库内的安全冒烟脚本验证临时 PDF 上传、解析、Range 下载和删除。脚本只从环境变量读取管理员凭证，不打印密码，并在完成后清理临时论文：
 
@@ -42,8 +42,13 @@ python scripts/smoke_compose.py
 | MinIO API | 9000 | 否 |
 | MinIO Console | 9001 | 否；仅运维网络 |
 | PostgreSQL | 不映射 | 否 |
+| Redis | 不映射 | 否 |
 
 Compose 默认把公开端口绑定到 `127.0.0.1`。若明确需要从局域网访问，可以设置 `PAPERLEAF_BIND_ADDRESS=0.0.0.0`，同时配置防火墙与 HTTPS；不要因此暴露 MinIO 管理端口。
+
+API/Worker 通过 Compose 内部网络访问 Redis；需要检查时使用
+`docker compose exec -T redis redis-cli ping`。公网部署不得直接暴露 6379；跨主机时应改用
+受控私网中的 Redis，并配置认证和 TLS。
 
 生产部署应让 Web 与 API 同域，或将 `PAPERLEAF_CORS_ORIGINS` 设置为明确的 HTTPS 来源。带凭据请求禁止使用 `*`。启用 HTTPS 后设置：
 
@@ -84,6 +89,20 @@ docker compose up -d web
 | `PAPERLEAF_MINIO_BUCKET` | `paperleaf-pdfs` | 私有 Bucket |
 | `POSTGRES_DB` | `paperleaf` | 数据库名 |
 | `POSTGRES_USER` | `paperleaf` | 数据库用户 |
+
+### Redis 与 Agent 限流
+
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `PAPERLEAF_REDIS_URL` | `redis://redis:6379/0` | 短期运行态连接；留空时使用单进程内存实现 |
+| `PAPERLEAF_REDIS_KEY_PREFIX` | `paperleaf` | 多环境共用 Redis 时必须使用不同前缀 |
+| `PAPERLEAF_REDIS_TIMEOUT_SECONDS` | `0.5` | 单次 Redis 操作超时，范围 `(0, 5]` 秒 |
+| `PAPERLEAF_AGENT_RATE_LIMIT_REQUESTS` | `12` | 每个窗口允许的 Agent 提交次数 |
+| `PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS` | `60` | 固定窗口秒数，范围 `1~3600` |
+
+Redis 数据允许丢失，默认关闭 RDB/AOF。重启 Redis 会清空短期限流窗口，但不会丢失用户、
+消息、任务或 Agent Run。`GET /ready` 会返回运行态存储的 `available/degraded` 状态；Redis
+不可用时 API 继续工作并退化为当前进程内限流。
 
 数据库和 MinIO 密码不应重复。Compose 会把 `POSTGRES_PASSWORD` 插入数据库连接 URL，因此应使用 URL-safe 随机字符。若使用外部托管服务，修改 Compose 环境变量或部署平台中的对应连接信息。
 
@@ -133,7 +152,7 @@ docker compose up -d web
 - 上传大小不低于 `PAPERLEAF_MAX_PDF_BYTES`
 - WebSocket 不是当前 SSE 流的必需条件
 
-不要经反向代理公开 PostgreSQL、MinIO API 或 MinIO Console。
+不要经反向代理公开 PostgreSQL、Redis、MinIO API 或 MinIO Console。
 
 ## 备份与恢复
 
@@ -177,12 +196,13 @@ Railway 不是默认参考部署。若选择 Railway，需要分别创建 Web、
 
 ```bash
 docker compose ps
-docker compose logs --tail=200 migrate postgres minio-init minio api worker web
+docker compose logs --tail=200 migrate postgres redis minio-init minio api worker web
 docker compose config --quiet
 ```
 
 - `migrate` 失败：检查数据库连接、凭据和迁移日志。
 - `minio-init` 失败：检查 MinIO 健康状态、账号密码和 Bucket 名。
+- `/ready` 中 Redis 为 `degraded`：检查 `redis-cli ping`、连接 URL 和容器网络；API 会暂时使用单进程限流，多副本配额在恢复前不保证全局一致。
 - Web 无法请求 API：检查构建时 API URL、CORS、HTTPS 混合内容和代理 SSE 配置。
 - PDF 可读但无法检索：检查 Worker、解析状态、嵌入配置与向量维度。
 - 扫描 PDF 检索为空：配置视觉模型或确认状态是否为 `ocr_unavailable`。

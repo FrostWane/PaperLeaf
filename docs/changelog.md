@@ -1,5 +1,12 @@
 # 更新记录
 
+## 未发布：Redis 运行态与容量里程碑
+
+- Compose 增加 Redis，作为可丢失的短期运行态存储，不替代 PostgreSQL/MinIO 的业务真相。
+- Agent 提交按用户执行原子固定窗口限流；相同幂等键不重复计数，超限返回中文 `429` 与 `Retry-After`。
+- Redis Key 对用户和幂等标识做 SHA-256 摘要；连接故障时降级为当前 API 进程内限流，并由 `/ready` 公开脱敏状态。
+- 新增容量与可观测性里程碑，后续按证据引入 OpenTelemetry、Prometheus/Grafana、Locust、Worker 隔离和水平扩容。
+
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。早期开发阶段的接口仍可能调整，升级前请阅读对应版本说明并备份数据。
 
 ## 未发布

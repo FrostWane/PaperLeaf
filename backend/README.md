@@ -20,6 +20,7 @@ python -m venv .venv
 - `PAPERLEAF_MODE=production`
 - `PAPERLEAF_DATABASE_URL=postgresql+asyncpg://...`
 - `PAPERLEAF_SESSION_SECRET=...`
+- `PAPERLEAF_REDIS_URL=redis://...`（多 API 实例共享限流；单进程可不配置）
 - `PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD=...`
 - MinIO 与 OpenAI-compatible 服务相关变量
 
@@ -99,6 +100,10 @@ RAG 检索与引用校验是独立实现；LangGraph 只负责状态、条件路
 
 重复键且请求内容一致时返回原结果；同一键对应不同内容时返回 `409`。真正的 LangGraph 运行由
 Worker 领取 `agent_run` 作业执行，不依赖原 HTTP 请求或浏览器连接继续存活。
+
+提交入口按用户执行固定窗口限流，默认每 60 秒 12 次。Redis 通过 Lua 原子保存计数与幂等
+判定；相同 `Idempotency-Key` 不重复计数。超过限制返回 `429`、`AGENT_RATE_LIMITED` 和
+`Retry-After`。Redis 不可用时退回当前 API 进程内限流，PostgreSQL 中的消息和 Run 不受影响。
 
 前端随后连接 `GET /api/v1/agent/runs/{run_id}/events`。事件先写入 PostgreSQL，再以
 `text/event-stream` 返回；断线重连可用 `Last-Event-ID` 补发遗漏事件。每帧保持以下格式：

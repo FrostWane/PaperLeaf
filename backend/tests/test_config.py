@@ -64,6 +64,12 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
         ({"model_attempts_per_provider": 4}, "尝试次数"),
         ({"model_circuit_failure_threshold": 0}, "失败阈值"),
         ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),
+        ({"redis_timeout_seconds": 0}, "Redis 超时"),
+        ({"redis_timeout_seconds": 6}, "Redis 超时"),
+        ({"agent_rate_limit_requests": 0}, "限流次数"),
+        ({"agent_rate_limit_window_seconds": 0}, "限流窗口"),
+        ({"agent_rate_limit_window_seconds": 3601}, "限流窗口"),
+        ({"redis_key_prefix": "   "}, "Key 前缀"),
     ],
 )
 def test_model_runtime_policy_rejects_invalid_values(changes: dict, message: str) -> None:
