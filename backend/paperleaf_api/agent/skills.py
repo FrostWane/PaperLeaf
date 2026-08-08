@@ -118,7 +118,10 @@ class SkillRegistry:
     def route(self, query: str, *, intent: str, scope: str, web_enabled: bool) -> SkillDefinition:
         """确定性保底路由；Function Calling 阶段可由模型从同一 Catalog 选择。"""
 
-        normalized = query.casefold()
+        # Context Engine 的受信标签不是用户意图，不能让“已验证阅读上下文”等
+        # 内部说明污染 Skill 分类。
+        user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
+        normalized = user_query.casefold()
         if any(marker in normalized for marker in ("原文", "哪一页", "出处", "怎么写")):
             selected = "trace_original"
         elif intent == "comparison" or any(marker in normalized for marker in ("比较", "对比")):

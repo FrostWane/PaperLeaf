@@ -205,6 +205,15 @@ sequenceDiagram
 - 常驻上下文只暴露 Skill 名称、版本和一句描述。每轮选出一个主 Skill 后才加载其完整指令，避免把所有工作流一次性塞进模型上下文。
 - 当前提供 `paper_qa`、`trace_original`、`compare_papers`、`find_related_papers`、`verify_claim`、`summarize_paper` 与 `build_research_map`。Run 会保存最终选择、版本、路由来源和置信度，但不保存隐藏推理。
 - Skill 关闭时仍走 `legacy_agent`；开启后先使用可复现的确定性保底路由。模型驱动路由与强类型工具循环由 Function Calling 里程碑接管，仍受同一 Manifest 权限约束。
+
+### 受控 Function Calling
+
+- 支持原生工具调用的模型先从精简 Catalog 选择一个主 Skill，再只能看到该 Skill 白名单中的 JSON Schema。模型参数中不存在 `user_id`、数据库连接或任意 URL；用户身份、论文范围和联网授权由服务端注入。
+- Tool Registry 固定声明版本、输入模型、读写属性、超时、重试、幂等和审批策略。单次 Run 最多四个工具步骤；一批最多并行三个互不依赖的只读工具；非法参数只允许修正一次。
+- `search_current_paper`、`search_library`、`get_page_text` 返回经过所有权复核的页级证据；arXiv 与 Crossref 只返回公开元数据，不能充当已读论文全文引用。工具结果始终以不可信数据交给后续模型。
+- `request_import` 只会写入中断状态。用户批准后，Worker 才按服务端白名单和 arXiv ID 下载 PDF；模型提供的下载 URL 不会被使用。拒绝、重复 Resume、租约失效和取消都不会产生越权写入。
+- 每次调用持久化到 `agent_tool_calls`。超过 8000 Token 的结果外置到用户隔离的 `agent_tool_artifacts`，当前上下文只保留短预览；Prometheus 和管理员聚合不记录原始参数或正文。
+- Provider 没有原生 `tool_calls`、选出未知 Skill 或工具循环失败时，Harness 会记录降级原因并回退原固定 Graph，不通过自由文本猜测函数调用。
 - 模型通过兼容接口内部流式返回，但未经核验的 token 只保留在 Worker 内存。完整事实段落通过引用来源检查后才追加到助手消息与 `message_delta` 事件，前端再用稳定的自适应字符步长逐步呈现。失败、取消和过期租约不能写入未经核验的尾部内容。
 - arXiv 候选通过 `interrupt` 进入持久等待状态。批准或拒绝动作携带 `action_id`，相同决定可幂等重放；恢复后清除待确认动作并重新入队同一 Run。
 - 取消请求先持久化。Worker 在节点和写入边界检查取消与租约；失去租约的旧 Worker 不能取消或覆盖后来领取者的结果。

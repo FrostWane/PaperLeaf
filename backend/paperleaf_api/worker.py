@@ -18,6 +18,7 @@ from typing import Protocol
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .agent.function_tools import FunctionToolHarness
 from .agent.graph import (
     build_agent_graph,
     build_configured_answerer,
@@ -32,6 +33,7 @@ from .artifacts import (
     load_paper_evidence,
     load_paper_source_revision,
 )
+from .arxiv_import import import_arxiv_paper
 from .config import settings
 from .crossref_service import crossref_client
 from .db import get_session_factory
@@ -65,8 +67,28 @@ from .storage import create_storage
 
 logger = logging.getLogger("paperleaf.worker")
 model_router = build_model_router(settings)
+agent_retriever = SQLLibrarySearch(settings, model_router)
+agent_storage = create_storage(settings)
+
+
+async def confirmed_agent_import(user_id: str, candidate: dict) -> object:
+    return await import_arxiv_paper(
+        str(candidate.get("arxiv_id", "")),
+        user_id,
+        config=settings,
+        repository=SQLAlchemyRepository(settings.session_secret),
+        storage=agent_storage,
+    )
+
+
 agent_graph: object | None = None
 skill_registry = SkillRegistry.default()
+function_tool_harness = FunctionToolHarness(
+    SQLAlchemyRepository(settings.session_secret),
+    agent_retriever,
+    model_router,
+    confirmed_importer=confirmed_agent_import,
+)
 JOB_LEASE = timedelta(minutes=30)
 MAX_TRANSLATION_PAGE_CHARS = 48_000
 MAX_TRANSLATION_CHUNKS = 6
@@ -1159,9 +1181,8 @@ async def process_translation_job(
 
 
 def build_worker_agent_graph(checkpointer: object | None = None) -> object:
-    retriever = SQLLibrarySearch(settings, model_router)
     return build_agent_graph(
-        retriever=retriever,
+        retriever=agent_retriever,
         answerer=build_configured_answerer(settings, model_router),
         checkpointer=checkpointer,
         quality_policy=EvidenceQualityPolicy(
@@ -1233,6 +1254,7 @@ async def process_agent_run_job(
             ),
             harness_config=settings,
             skill_registry=skill_registry,
+            function_tool_harness=function_tool_harness,
         )
     )
     while True:

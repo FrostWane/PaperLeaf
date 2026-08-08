@@ -556,6 +556,47 @@ class AgentRunEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AgentToolCall(Base):
+    __tablename__ = "agent_tool_calls"
+    __table_args__ = (
+        UniqueConstraint("run_id", "call_id", name="uq_agent_tool_call_run_call"),
+        Index("ix_agent_tool_calls_run_created", "run_id", "created_at"),
+        Index("ix_agent_tool_calls_name_status", "tool_name", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    call_id: Mapped[str] = mapped_column(String(100))
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    skill_name: Mapped[str] = mapped_column(String(64))
+    tool_name: Mapped[str] = mapped_column(String(80))
+    tool_version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict)
+    result_preview: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentToolArtifact(Base):
+    __tablename__ = "agent_tool_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tool_call_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_tool_calls.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MemoryItem(Base):
     __tablename__ = "memory_items"
     __table_args__ = (

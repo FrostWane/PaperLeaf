@@ -450,8 +450,8 @@ def test_arxiv_import_persists_exact_metadata_publication(
             journal_ref="Journal of Reliable Systems 12 (2025) 1-9",
         )
 
-    monkeypatch.setattr("paperleaf_api.main.fetch_arxiv_pdf", fake_pdf)
-    monkeypatch.setattr("paperleaf_api.main.get_arxiv_paper", fake_metadata)
+    monkeypatch.setattr("paperleaf_api.arxiv_import.fetch_arxiv_pdf", fake_pdf)
+    monkeypatch.setattr("paperleaf_api.arxiv_import.get_arxiv_paper", fake_metadata)
     app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
     with TestClient(app) as client:
         csrf = _login(client, "admin@example.com", "admin-password-123")

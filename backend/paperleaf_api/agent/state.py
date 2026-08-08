@@ -33,6 +33,9 @@ class AgentState(TypedDict, total=False):
     skill_route_source: str
     skill_route_confidence: float
     tool_calls: list[dict[str, Any]]
+    tool_mode_active: bool
+    pre_retrieved_evidence: list[Evidence]
+    pre_arxiv_candidates: list[dict[str, Any]]
     clarification_question: str | None
     clarification_requested: bool
     retrieved_evidence: list[Evidence]

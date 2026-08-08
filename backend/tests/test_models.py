@@ -2,6 +2,8 @@ from sqlalchemy import create_engine
 
 from paperleaf_api.models import (
     AgentRun,
+    AgentToolArtifact,
+    AgentToolCall,
     Base,
     ChatSession,
     DiscoveryBatch,
@@ -72,3 +74,11 @@ def test_context_summary_and_versioned_memory_are_persistent_models() -> None:
     assert {constraint.name for constraint in MemoryItemVersion.__table__.constraints} >= {
         "uq_memory_item_version"
     }
+
+
+def test_function_tool_calls_and_large_artifacts_are_persistent_models() -> None:
+    assert {constraint.name for constraint in AgentToolCall.__table__.constraints} >= {
+        "uq_agent_tool_call_run_call"
+    }
+    assert AgentToolCall.__table__.c.arguments.nullable is False
+    assert AgentToolArtifact.__table__.c.tool_call_id.nullable is False
