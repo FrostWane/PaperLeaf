@@ -52,30 +52,37 @@ test("2K 工作台使用可读的宽屏字号", async ({ page }) => {
   }
 
   await page.goto("/admin");
-  for (const selector of [".metric-row span", ".metric-row small", ".data-table th", ".runtime-purposes small", ".job-row small"]) {
+  for (const selector of [".metric-row span", ".metric-row small", ".runtime-purposes small"]) {
     const size = await page.locator(selector).first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
     expect(size, selector).toBeGreaterThanOrEqual(12);
   }
   await expect(page.locator(".metric-row strong").first()).toHaveCSS("font-size", "24px");
+  await page.getByRole("tab", { name: "用户与权限" }).click();
+  expect(await page.locator(".data-table th").first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
   const adminHierarchy = await page.evaluate(() => {
     const sectionTitle = getComputedStyle(document.querySelector(".section-bar h2")!);
     const itemTitle = getComputedStyle(document.querySelector(".admin-user strong")!);
-    const jobStatus = document.querySelector(".job-row > .mono") as HTMLElement;
-    const statusStyle = getComputedStyle(jobStatus);
     return {
       sectionSize: Number.parseFloat(sectionTitle.fontSize),
       sectionWeight: Number.parseInt(sectionTitle.fontWeight, 10),
       itemSize: Number.parseFloat(itemTitle.fontSize),
       itemWeight: Number.parseInt(itemTitle.fontWeight, 10),
-      jobHeight: jobStatus.getBoundingClientRect().height,
-      jobLineHeight: Number.parseFloat(statusStyle.lineHeight),
-      jobWhiteSpace: statusStyle.whiteSpace,
     };
   });
   expect(adminHierarchy.sectionSize).toBeGreaterThan(adminHierarchy.itemSize);
   expect(adminHierarchy.sectionWeight).toBeGreaterThanOrEqual(adminHierarchy.itemWeight);
-  expect(adminHierarchy.jobWhiteSpace).toBe("nowrap");
-  expect(adminHierarchy.jobHeight).toBeLessThanOrEqual(adminHierarchy.jobLineHeight * 1.5);
+  await page.getByRole("tab", { name: "后台任务" }).click();
+  expect(await page.locator(".job-row small").first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
+  const jobStatus = await page.locator(".job-row > .mono").first().evaluate((element) => {
+    const statusStyle = getComputedStyle(element);
+    return {
+      height: element.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(statusStyle.lineHeight),
+      whiteSpace: statusStyle.whiteSpace,
+    };
+  });
+  expect(jobStatus.whiteSpace).toBe("nowrap");
+  expect(jobStatus.height).toBeLessThanOrEqual(jobStatus.lineHeight * 1.5);
 
   await page.goto("/library?demo=1");
   for (const selector of [".collection-tabs span", ".collection-tree-item small", ".data-table th"]) {
