@@ -93,7 +93,7 @@ test("公开演示可以生成证据化概览和结构图", async ({ page }) => 
 
   await assistant.getByRole("button", { name: "概览" }).click();
   await assistant.getByRole("button", { name: "生成概览" }).click();
-  await expect(assistant.getByText("模型归纳")).toBeVisible();
+  await expect(assistant.getByText("已生成", { exact: true })).toBeVisible();
   for (const section of ["研究问题", "核心方法", "实验设置", "主要结果", "局限与适用范围"]) await expect(assistant.getByRole("region", { name: section })).toBeVisible();
   await assistant.getByRole("button", { name: /引用 \[\d+\]，查看 PDF 第 12 页/ }).click();
   if (mobile) await expect(page.locator('.mobile-workspace-tabs button[aria-current="page"]')).toContainText("论文");
@@ -180,7 +180,7 @@ test("PDF 工具栏支持缩放、专注阅读和可恢复的逐页双栏翻译"
   expect(geometry.right).toBeLessThanOrEqual(geometry.hostRight + 1);
   const translatedAxe = await new AxeBuilder({ page }).include(".workspace-reader").withTags(["wcag2a", "wcag2aa"]).analyze();
   expect(translatedAxe.violations.filter((item) => item.impact === "serious" || item.impact === "critical")).toEqual([]);
-  await reader.getByRole("button", { name: "下一页" }).click();
+  await reader.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(reader.getByLabel("简体中文译文，第 3 页")).toBeVisible();
   await expect(reader.getByText("第 3 页译文已缓存。公式、引用编号与专有名词会尽量保持原样。")).toBeVisible();
 
