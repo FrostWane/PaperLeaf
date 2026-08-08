@@ -2,7 +2,7 @@ import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
 import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
-import type { AdminDiscoveryMetrics, AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
+import type { AdminDiscoveryMetrics, AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatClientContext, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -392,6 +392,7 @@ function mapAgentRun(item: Record<string, unknown>): AgentRunSnapshot {
     answer: visibleAgentAnswer(String(item.answer ?? "")),
     citations: rawCitations.map((citation, index) => mapAgentCitation(citation as Record<string, unknown>, index)),
     evidenceQuality: rawQuality && typeof rawQuality === "object" ? mapEvidenceQuality(rawQuality as Record<string, unknown>) : undefined,
+    contextSnapshot: item.context_snapshot && typeof item.context_snapshot === "object" ? item.context_snapshot as Record<string, unknown> : undefined,
     error: publicAgentError(item.error),
     createdAt: String(item.created_at ?? new Date(0).toISOString()),
     updatedAt: String(item.updated_at ?? item.created_at ?? new Date(0).toISOString()),
@@ -626,7 +627,7 @@ export interface PaperLeafDataSource {
   updateChatSession(sessionId: string, title: string): Promise<ChatSession>;
   deleteChatSession(sessionId: string): Promise<void>;
   listChatMessages(sessionId: string): Promise<ChatMessage[]>;
-  submitChatMessage(sessionId: string, content: string, idempotencyKey: string, options?: { webEnabled?: boolean }): Promise<ChatMessageSubmission>;
+  submitChatMessage(sessionId: string, content: string, idempotencyKey: string, options?: { webEnabled?: boolean; clientContext?: ChatClientContext }): Promise<ChatMessageSubmission>;
   getAgentRun(runId: string): Promise<AgentRunSnapshot>;
   subscribeAgentRun(runId: string, handlers: AgentEventSubscriptionHandlers, options?: { signal?: AbortSignal; lastEventId?: number }): Promise<void>;
   cancelAgentRun(runId: string): Promise<AgentRunSnapshot>;
@@ -1422,11 +1423,25 @@ export const realDataSource: PaperLeafDataSource = {
     return (await response.json() as Array<Record<string, unknown>>).map(mapChatMessage);
   },
   async submitChatMessage(sessionId, content, idempotencyKey, options) {
+    const context = options?.clientContext;
     const response = await fetch(`${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       credentials: "include",
       headers: mutationHeaders({ "content-type": "application/json", "Idempotency-Key": idempotencyKey }),
-      body: JSON.stringify({ content, web_enabled: options?.webEnabled === true }),
+      body: JSON.stringify({
+        content,
+        web_enabled: options?.webEnabled === true,
+        client_context: context ? {
+          route: context.route,
+          paper_id: context.paperId,
+          physical_page: context.physicalPage,
+          collection_id: context.collectionId,
+          selected_text: context.selectedText,
+          selected_text_hash: context.selectedTextHash,
+          active_panel: context.activePanel,
+          active_artifact: context.activeArtifact,
+        } : undefined,
+      }),
     });
     if (!response.ok) throw await apiError(response, response.status === 409 ? "当前对话仍在运行，请等待完成或主动取消" : "问题提交失败");
     const item = await response.json() as Record<string, unknown>;

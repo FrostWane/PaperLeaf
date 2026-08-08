@@ -12,6 +12,7 @@ class AgentState(TypedDict, total=False):
     session_id: str
     user_id: str
     query: str
+    original_query: str
     messages: list[dict[str, Any]]
     message_ids: list[str]
     intent: str
@@ -19,6 +20,14 @@ class AgentState(TypedDict, total=False):
     scope: Literal["paper", "selection", "collection", "library"]
     selected_paper_ids: list[str]
     web_enabled: bool
+    client_context: dict[str, Any]
+    resolved_query: str
+    resolved_references: dict[str, Any]
+    reference_confidence: float
+    context_snapshot: dict[str, Any]
+    context_budget: dict[str, int]
+    clarification_question: str | None
+    clarification_requested: bool
     retrieved_evidence: list[Evidence]
     arxiv_candidates: list[dict[str, Any]]
     evidence_grade: Literal["sufficient", "insufficient"]

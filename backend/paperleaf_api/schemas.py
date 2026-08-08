@@ -40,6 +40,7 @@ class UserPreferences(BaseModel):
     assistant_panel_open: bool = True
     translation_language: TranslationLanguage = "zh-CN"
     arxiv_search_enabled: bool = False
+    memory_enabled: bool = True
 
 
 class UserPreferencesUpdate(BaseModel):
@@ -52,6 +53,7 @@ class UserPreferencesUpdate(BaseModel):
     assistant_panel_open: Optional[bool] = None
     translation_language: Optional[TranslationLanguage] = None
     arxiv_search_enabled: Optional[bool] = None
+    memory_enabled: Optional[bool] = None
 
 
 class UserPreferencesRead(UserPreferences):
@@ -122,9 +124,25 @@ class PaperBulkActionResponse(BaseModel):
     paper_ids: list[str]
 
 
+class ChatClientContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    route: Optional[str] = Field(default=None, max_length=500)
+    paper_id: Optional[str] = Field(default=None, max_length=100)
+    physical_page: Optional[int] = Field(default=None, ge=1, le=500)
+    collection_id: Optional[str] = Field(default=None, max_length=100)
+    selected_text: Optional[str] = Field(default=None, max_length=4000)
+    selected_text_hash: Optional[str] = Field(default=None, min_length=64, max_length=64)
+    active_panel: Optional[Literal["chat", "summary", "structure", "translation"]] = None
+    active_artifact: Optional[str] = Field(default=None, max_length=100)
+
+
 class ChatMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     content: str = Field(min_length=1, max_length=12_000)
     web_enabled: bool = False
+    client_context: Optional[ChatClientContext] = None
 
 
 class ChatSessionCreate(BaseModel):
@@ -203,6 +221,7 @@ class AgentRunRead(BaseModel):
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]
     cancel_requested: bool = False
     scope_snapshot: dict[str, Any] = Field(default_factory=dict)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
     pending_action: Optional[dict[str, Any]] = None
     answer: str = ""
     citations: list[dict[str, Any]] = Field(default_factory=list)

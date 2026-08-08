@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any
 
+from .agent.context import ContextResolution, resolve_context
 from .model_runtime import ModelRuntimeError, collect_model_attempts
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import CitationClaim, Evidence, validate_citations
@@ -205,50 +206,87 @@ async def execute_agent_run(
     run = started
     snapshot = dict(run.scope_snapshot or {})
     scope = str(snapshot.get("type", "library"))
+    visible_history = await repository.list_chat_messages(run.session_id, run.user_id)
+    history = [
+        {"role": item.role, "content": item.content}
+        for item in (visible_history or [])
+        if item.content.strip() and item.id != run.assistant_message_id
+    ]
+    context_started_at = time.perf_counter()
+    harness_flags = dict(snapshot.get("harness", {}))
+    if harness_flags.get("context_engine_enabled"):
+        resolution = resolve_context(
+            query,
+            dict(snapshot.get("client_context", {})),
+            history,
+            session_type=scope,
+        )
+    else:
+        resolution = ContextResolution(query, query, {}, 1.0, ("legacy_agent",))
+    context_snapshot = resolution.snapshot(dict(snapshot.get("client_context", {})))
+    context_ms = round((time.perf_counter() - context_started_at) * 1000)
+    updated_run = await repository.update_agent_context(
+        run.id,
+        claim_token,
+        context_snapshot=context_snapshot,
+        resolved_query=resolution.resolved_query,
+        reference_confidence=resolution.confidence,
+    )
+    if not updated_run:
+        return
+    run = updated_run
     intent_started_at = time.perf_counter()
     intent = classify_intent(
-        query,
+        resolution.resolved_query,
         scope=scope,
         selected_paper_count=len(snapshot.get("paper_ids", [])),
         web_enabled=bool(snapshot.get("web_enabled", False)),
     )
     intent_ms = round((time.perf_counter() - intent_started_at) * 1000)
-    visible_history = await repository.list_chat_messages(run.session_id, run.user_id)
     initial = {
         "run_id": run.id,
         "session_id": run.session_id,
         "user_id": run.user_id,
-        "query": query,
-        "messages": [
-            {
-                "role": item.role,
-                "content": item.content,
-            }
-            for item in (visible_history or [])
-            if item.content.strip() and item.id != run.assistant_message_id
-        ][-9:],
+        "query": resolution.resolved_query,
+        "original_query": query,
+        "messages": history[-9:],
         "intent": intent,
         "scope": scope,
         "selected_paper_ids": list(snapshot.get("paper_ids", [])),
         "web_enabled": bool(snapshot.get("web_enabled", False)),
+        "client_context": dict(snapshot.get("client_context", {})),
+        "resolved_query": resolution.resolved_query,
+        "resolved_references": resolution.references,
+        "reference_confidence": resolution.confidence,
+        "context_snapshot": context_snapshot,
+        "clarification_question": resolution.clarification_question,
         "tool_steps": 0,
-        "stage_timings_ms": {"intent": intent_ms},
+        "stage_timings_ms": {"context": context_ms, "intent": intent_ms},
         "status": "pending",
     }
-    await repository.append_agent_run_event(
-        run_id,
-        "node_started",
-        {"node": "retrieve_library", "stage": "检索文献证据"},
-        event_key="stage:retrieve:start",
-        claim_token=claim_token,
-    )
-    await repository.append_agent_run_event(
-        run_id,
-        "tool_started",
-        {"tool": "search_library"},
-        event_key="stage:tool:search:start",
-        claim_token=claim_token,
-    )
+    if resolution.needs_clarification:
+        await repository.append_agent_run_event(
+            run_id,
+            "node_started",
+            {"node": "resolve_context", "stage": "确认问题所指内容"},
+            event_key="stage:context:start",
+            claim_token=claim_token,
+        )
+    else:
+        await repository.append_agent_run_event(
+            run_id,
+            "node_started",
+            {"node": "retrieve_library", "stage": "检索文献证据"},
+            event_key="stage:retrieve:start",
+            claim_token=claim_token,
+        )
+        await repository.append_agent_run_event(
+            run_id,
+            "tool_started",
+            {"tool": "search_library"},
+            event_key="stage:tool:search:start",
+            claim_token=claim_token,
+        )
     with collect_model_attempts() as attempts:
         try:
             result = await _invoke_with_cancel(repository, graph, run, initial)
@@ -297,28 +335,37 @@ async def execute_agent_run(
             return
     model_attempts = [item.as_dict() for item in attempts]
     stage_timings = dict(result.get("stage_timings_ms", {}))
-    await repository.append_agent_run_event(
-        run_id,
-        "tool_finished",
-        {
-            "tool": "search_library",
-            "evidence_count": len(result.get("retrieved_evidence", [])),
-            "duration_ms": stage_timings.get("retrieval"),
-        },
-        event_key="stage:tool:search:finish",
-        claim_token=claim_token,
-    )
-    await repository.append_agent_run_event(
-        run_id,
-        "node_finished",
-        {
-            "node": "retrieve_library",
-            "stage": "检索文献证据",
-            "duration_ms": stage_timings.get("retrieval"),
-        },
-        event_key="stage:retrieve:finish",
-        claim_token=claim_token,
-    )
+    if resolution.needs_clarification:
+        await repository.append_agent_run_event(
+            run_id,
+            "node_finished",
+            {"node": "resolve_context", "stage": "需要补充上下文", "duration_ms": context_ms},
+            event_key="stage:context:finish",
+            claim_token=claim_token,
+        )
+    else:
+        await repository.append_agent_run_event(
+            run_id,
+            "tool_finished",
+            {
+                "tool": "search_library",
+                "evidence_count": len(result.get("retrieved_evidence", [])),
+                "duration_ms": stage_timings.get("retrieval"),
+            },
+            event_key="stage:tool:search:finish",
+            claim_token=claim_token,
+        )
+        await repository.append_agent_run_event(
+            run_id,
+            "node_finished",
+            {
+                "node": "retrieve_library",
+                "stage": "检索文献证据",
+                "duration_ms": stage_timings.get("retrieval"),
+            },
+            event_key="stage:retrieve:finish",
+            claim_token=claim_token,
+        )
     interrupts = result.get("__interrupt__", [])
     pending_action = result.get("pending_action")
     if interrupts:

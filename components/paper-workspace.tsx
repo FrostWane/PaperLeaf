@@ -79,6 +79,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const fallbackPaper = papers.find((item) => item.id === paperId) ?? papers[0];
   const [paper, setPaper] = useState<Paper | null>(isReal ? null : fallbackPaper);
   const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage ?? (demo ? 2 : 1)));
+  const [selectedText, setSelectedText] = useState("");
   const [mobilePane, setMobilePane] = useState<MobilePane>("pdf");
   const [assistantView, setAssistantView] = useState<AssistantView>("ask");
   const [summary, setSummary] = useState<PaperSummary | null>(null);
@@ -378,6 +379,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   }
 
   function goToPage(page: number) {
+    setSelectedText("");
     setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
   }
 
@@ -479,7 +481,11 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
       </details>
     </div>
     <div className={translation && translationVisible ? "document-stage translation-stage" : "document-stage"} tabIndex={0} aria-label="PDF 页面，可滚动浏览">
-      <div className="translation-original" tabIndex={0} aria-label={`原始 PDF，第 ${currentPage} 页`}>{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
+      <div className="translation-original" tabIndex={0} aria-label={`原始 PDF，第 ${currentPage} 页`} onMouseUp={(event) => {
+        const selection = window.getSelection();
+        const text = selection?.toString().replace(/\s+/g, " ").trim() ?? "";
+        if (text.length >= 2 && event.currentTarget.contains(selection?.anchorNode ?? null)) setSelectedText(text.slice(0, 4000));
+      }}>{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
       {translation && translationVisible && <aside className="translation-page" aria-label={`${translationLanguageLabel(translation.targetLanguage)}译文，第 ${currentPage} 页`}>
         <div className="translation-page-head"><div><span>{translationLanguageLabel(translation.targetLanguage)}译文</span><strong>第 {currentPage} / {paper.pages || translation.totalPages} 页</strong></div><div className="translation-page-nav"><button type="button" className="icon-button" aria-label="上一页译文" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}><ChevronLeft size={16} /></button><button type="button" className="icon-button" aria-label="下一页译文" disabled={Boolean((paper.pages || translation.totalPages) && currentPage >= (paper.pages || translation.totalPages))} onClick={() => goToPage(currentPage + 1)}><ChevronRight size={16} /></button><button type="button" className="icon-button" aria-label="关闭译文双栏" onClick={() => setTranslationVisible(false)}><X size={16} /></button></div></div>
         <div className="translation-progress" role="status"><span>{translationStatusLabel(translation)}</span><progress aria-label={`翻译进度 ${translation.progress}%`} max={100} value={translation.progress}>{translation.progress}%</progress></div>
@@ -495,7 +501,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     <div className="reader-status"><strong>{evidencePages.includes(currentPage) ? "证据页已定位" : "论文页面"}</strong><span>第 {currentPage} 页</span><span>{translation && translationVisible ? `原文 + ${translationLanguageLabel(translation.targetLanguage)}译文` : isReal ? "原始 PDF" : "模拟文本层"}</span></div>
   </section>;
 
-  const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} onOpenCitation={(citation) => openCitation(citation.page)} />;
+  const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} clientContext={{ route: `/library/${paperId}`, paperId, paperTitle: paper.title, physicalPage: currentPage, selectedText: selectedText || undefined, activePanel: "chat" }} onOpenCitation={(citation) => openCitation(citation.page)} />;
 
   const summaryContent = <div className="artifact-panel">
     <div className="artifact-heading"><div><h3>论文概览</h3></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || summary?.status === "processing"} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在提交" : summary?.status === "processing" ? "后台生成中" : summary ? "重新生成" : "生成概览"}</button>}</div>

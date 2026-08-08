@@ -417,6 +417,18 @@ export interface ChatMessageSubmission {
   replayed: boolean;
 }
 
+export interface ChatClientContext {
+  route?: string;
+  paperId?: string;
+  physicalPage?: number;
+  collectionId?: string;
+  selectedText?: string;
+  selectedTextHash?: string;
+  activePanel?: "chat" | "summary" | "structure" | "translation";
+  activeArtifact?: string;
+  paperTitle?: string;
+}
+
 export interface AgentRunSnapshot {
   runId: string;
   sessionId: string;
@@ -432,6 +444,7 @@ export interface AgentRunSnapshot {
   answer: string;
   citations: Citation[];
   evidenceQuality?: AgentEvidenceQuality;
+  contextSnapshot?: Record<string, unknown>;
   error?: string;
   createdAt: string;
   updatedAt: string;

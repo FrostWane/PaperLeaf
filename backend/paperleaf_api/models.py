@@ -493,6 +493,10 @@ class AgentRun(Base):
     pending_action: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     scope_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    context_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    context_version: Mapped[int] = mapped_column(Integer, default=1)
+    resolved_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reference_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     user_message_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey(
             "chat_messages.id",

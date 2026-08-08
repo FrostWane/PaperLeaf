@@ -3,7 +3,7 @@
 import { Check, ChevronLeft, ChevronRight, History, LoaderCircle, MessageSquarePlus, Pencil, RotateCw, Send, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getDataSource, type PaperLeafDataSource } from "@/lib/data-source";
-import type { AgentActivity, AgentRunSnapshot, ChatMessage, ChatSession, ChatSessionInput, Citation } from "@/lib/types";
+import type { AgentActivity, AgentRunSnapshot, ChatClientContext, ChatMessage, ChatSession, ChatSessionInput, Citation } from "@/lib/types";
 import { chatCitationSources, CitationSources } from "./citation-sources";
 import { SafeMarkdown } from "./safe-markdown";
 
@@ -200,6 +200,7 @@ export function ChatWorkspace({
   dataSource = getDataSource(),
   onBindingChange,
   onOpenCitation,
+  clientContext,
 }: {
   binding: ChatBinding;
   scopeLabel: string;
@@ -209,6 +210,7 @@ export function ChatWorkspace({
   dataSource?: PaperLeafDataSource;
   onBindingChange?: (binding: ChatBinding) => void;
   onOpenCitation?: (citation: Citation) => void;
+  clientContext?: ChatClientContext;
 }) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -227,6 +229,7 @@ export function ChatWorkspace({
   const [connection, setConnection] = useState<"connected" | "reconnecting">("connected");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [dismissedContext, setDismissedContext] = useState<Set<"page" | "selection">>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const terminalReloadRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
@@ -235,6 +238,22 @@ export function ChatWorkspace({
   const selectedIdRef = useRef<string | null>(null);
   const narrowViewport = useSyncExternalStore(subscribeChatNarrow, getChatNarrow, () => false);
   const historyOpen = historyOverride ?? (!compact && !narrowViewport);
+
+  useEffect(() => {
+    setDismissedContext(new Set());
+  }, [clientContext?.paperId, clientContext?.physicalPage, clientContext?.selectedText]);
+
+  const effectiveClientContext = useMemo<ChatClientContext>(() => ({
+    ...clientContext,
+    paperId: binding.type === "paper" ? binding.paperId : clientContext?.paperId,
+    collectionId: binding.type === "collection" ? binding.collectionId : clientContext?.collectionId,
+    paperTitle: binding.type === "paper" ? scopeLabel : clientContext?.paperTitle,
+    physicalPage: dismissedContext.has("page") ? undefined : clientContext?.physicalPage,
+    selectedText: dismissedContext.has("selection") ? undefined : clientContext?.selectedText,
+    selectedTextHash: dismissedContext.has("selection") ? undefined : clientContext?.selectedTextHash,
+    activePanel: clientContext?.activePanel ?? "chat",
+  }), [binding, clientContext, dismissedContext, scopeLabel]);
+  const shouldSubmitClientContext = Boolean(clientContext || binding.type !== "library");
 
   const workspaceKey = binding.type === "paper" ? `paper:${binding.paperId}` : "library";
   const bindingKey = binding.type === "paper" ? `paper:${binding.paperId}` : binding.type === "collection" ? `collection:${binding.collectionId}` : "library";
@@ -444,7 +463,10 @@ export function ChatWorkspace({
       const previousAttempt = submissionAttemptRef.current;
       const idempotencyKey = previousAttempt?.sessionId === session.id && previousAttempt.content === question ? previousAttempt.key : createIdempotencyKey();
       submissionAttemptRef.current = { sessionId: session.id, content: question, key: idempotencyKey };
-      const submission = await dataSource.submitChatMessage(session.id, question, idempotencyKey, { webEnabled });
+      const submission = await dataSource.submitChatMessage(session.id, question, idempotencyKey, {
+        webEnabled,
+        ...(shouldSubmitClientContext ? { clientContext: effectiveClientContext } : {}),
+      });
       submissionAttemptRef.current = null;
       const timestamp = new Date().toISOString();
       const pendingRun: AgentRunSnapshot = { runId: submission.runId, sessionId: session.id, status: "pending", cancelRequested: false, answer: "", citations: [], createdAt: timestamp, updatedAt: timestamp };
@@ -576,6 +598,11 @@ export function ChatWorkspace({
       </div>
 
       <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void submitQuestion(); }}>
+        {(effectiveClientContext.paperTitle || effectiveClientContext.physicalPage || effectiveClientContext.selectedText) && <div className="chat-context-chips" aria-label="本次提问上下文">
+          {effectiveClientContext.paperTitle && <span>{effectiveClientContext.paperTitle}</span>}
+          {effectiveClientContext.physicalPage && <button type="button" onClick={() => setDismissedContext((items) => new Set([...items, "page"]))}>PDF 第 {effectiveClientContext.physicalPage} 页<X size={12} aria-hidden="true" /></button>}
+          {effectiveClientContext.selectedText && <button type="button" title={effectiveClientContext.selectedText} onClick={() => setDismissedContext((items) => new Set([...items, "selection"]))}>已选原文<X size={12} aria-hidden="true" /></button>}
+        </div>}
         <label><span className="sr-only">向文献提问</span><textarea ref={textareaRef} rows={compact ? 2 : 3} value={draft} disabled={disabled || creatingSession} onChange={(event) => { setDraft(event.target.value); if (error) setError(""); }} onKeyDown={(event) => {
           if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
           event.preventDefault();

@@ -113,6 +113,7 @@ from .security import csrf_matches, new_csrf_token, new_session_token, verify_pa
 from .storage import ObjectStorage, create_storage, parse_byte_range, validate_pdf
 
 _PUBLIC_AGENT_NODES = {
+    "resolve_context",
     "validate_request",
     "retrieve_library",
     "grade_evidence",
@@ -379,6 +380,7 @@ def _agent_run_read(record: Any) -> AgentRunRead:
         status=record.status,
         cancel_requested=bool(getattr(record, "cancel_requested", False)),
         scope_snapshot=dict(getattr(record, "scope_snapshot", {}) or {}),
+        context_snapshot=dict(getattr(record, "context_snapshot", {}) or {}),
         pending_action=pending_action,
         answer=summary.get("answer", ""),
         citations=summary.get("citations", []),
@@ -1690,11 +1692,13 @@ def create_app(
         chat_session = await services.repository.get_owned_chat_session(session_id, user.id)
         if not chat_session:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        context_paper = None
         if chat_session.type == "paper":
             paper = await services.repository.get_owned_paper(chat_session.paper_id or "", user.id)
             if not paper or paper.status not in {PaperStatus.ready, PaperStatus.partial}:
                 raise HTTPException(status.HTTP_409_CONFLICT, "绑定论文尚未完成索引")
             paper_ids = [paper.id]
+            context_paper = paper
         elif chat_session.type == "collection":
             resolved = await services.repository.resolve_collection_paper_ids(
                 chat_session.collection_id or "", user.id, ready_only=True
@@ -1710,6 +1714,54 @@ def create_app(
                 for item in await services.repository.list_papers(user.id)
                 if item.status in {PaperStatus.ready, PaperStatus.partial}
             ]
+        client_context = (
+            payload.client_context.model_dump(exclude_none=True)
+            if payload.client_context is not None
+            else {}
+        )
+        context_paper_id = str(client_context.get("paper_id", "")).strip()
+        if context_paper_id:
+            if context_paper_id not in paper_ids:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "当前会话不能访问该上下文论文")
+            context_paper = await services.repository.get_owned_paper(context_paper_id, user.id)
+            if not context_paper:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "上下文论文不存在")
+        elif chat_session.type == "paper" and context_paper is not None:
+            client_context["paper_id"] = context_paper.id
+        context_collection_id = str(client_context.get("collection_id", "")).strip()
+        if context_collection_id and context_collection_id != (chat_session.collection_id or ""):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "当前会话不能访问该上下文集合")
+        physical_page = client_context.get("physical_page")
+        selected_text = str(client_context.get("selected_text", "")).strip()
+        if physical_page is not None and context_paper is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "页码上下文必须指定论文")
+        if context_paper is not None:
+            client_context["paper_title"] = context_paper.title
+            if physical_page is not None and context_paper.page_count:
+                if int(physical_page) > int(context_paper.page_count):
+                    raise HTTPException(
+                        status.HTTP_422_UNPROCESSABLE_ENTITY, "上下文页码超出论文范围"
+                    )
+        if selected_text:
+            if context_paper is None or physical_page is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "选中文字必须同时指定论文和物理页",
+                )
+            normalized_selection = " ".join(selected_text.split())
+            supplied_hash = str(client_context.get("selected_text_hash", "")).lower()
+            actual_hash = hashlib.sha256(normalized_selection.encode("utf-8")).hexdigest()
+            if supplied_hash and supplied_hash != actual_hash:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "选中文字校验失败")
+            page_text = await services.repository.get_owned_paper_page_text(
+                context_paper.id, int(physical_page), user.id
+            )
+            if page_text is None or normalized_selection not in " ".join(page_text.split()):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, "选中文字不属于当前 PDF 页"
+                )
+            client_context["selected_text"] = normalized_selection
+            client_context["selected_text_hash"] = actual_hash
         scope_snapshot = {
             "type": chat_session.type,
             "paper_id": chat_session.paper_id,
@@ -1721,6 +1773,14 @@ def create_app(
                     getattr(user, "preferences", {}) or {}
                 ).arxiv_search_enabled
             ),
+            "client_context": client_context,
+            "harness": {
+                "context_engine_enabled": config.context_engine_enabled,
+                "memory_enabled": config.memory_enabled,
+                "skills_enabled": config.skills_enabled,
+                "function_tools_enabled": config.function_tools_enabled,
+                "mcp_enabled": config.mcp_enabled,
+            },
         }
         rate_limit = await services.runtime_store.acquire_rate_limit(
             "agent-submit",

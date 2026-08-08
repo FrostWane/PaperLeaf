@@ -317,6 +317,23 @@ class AgentRuntime:
         user_id = str(state.get("user_id", "")).strip()
         if not query or not user_id:
             return {"status": "failed", "error": "缺少用户或问题"}
+        clarification = str(state.get("clarification_question") or "").strip()
+        if clarification:
+            return {
+                "status": "completed",
+                "answer": clarification,
+                "citations": [],
+                "retrieved_evidence": [],
+                "evidence_grade": "insufficient",
+                "evidence_quality": {
+                    "grade": "insufficient",
+                    "reason_code": "context_clarification_required",
+                    "summary": "问题中的指代缺少可靠上下文",
+                },
+                "clarification_requested": True,
+                "error": None,
+                "tool_steps": state.get("tool_steps", 0),
+            }
         return {"status": "running", "error": None, "tool_steps": state.get("tool_steps", 0)}
 
     async def retrieve_library(self, state: AgentState) -> AgentState:
@@ -501,8 +518,8 @@ class AgentRuntime:
         state: AgentState = dict(initial)
         for node in (self.validate_request, self.retrieve_library, self.grade_evidence):
             state.update(await node(state))
-        if state.get("status") == "failed":
-            return state
+            if state.get("status") in {"failed", "completed"}:
+                return state
         if not state.get("retrieved_evidence") and state.get("web_enabled"):
             try:
                 state.update(await self.search_arxiv(state))
@@ -582,7 +599,11 @@ def build_agent_graph(
     graph.add_node("propose_import", runtime.propose_import)
     graph.add_node("validate_citations", runtime.validate_answer_citations)
     graph.add_edge(START, "validate_request")
-    graph.add_edge("validate_request", "retrieve_library")
+    graph.add_conditional_edges(
+        "validate_request",
+        lambda state: "end" if state.get("status") in {"failed", "completed"} else "retrieve",
+        {"retrieve": "retrieve_library", "end": END},
+    )
     graph.add_edge("retrieve_library", "grade_evidence")
     graph.add_conditional_edges(
         "grade_evidence",

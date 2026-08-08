@@ -816,6 +816,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .chat-pending-action > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .chat-error { margin: 14px 0 0; }
 .chat-composer { padding: 10px 14px 12px; border-top: 1px solid var(--border); background: #fbfcfa; }
+.chat-context-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 8px; }
+.chat-context-chips > span, .chat-context-chips > button { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--blue-line); border-radius: 999px; background: var(--blue-soft); color: var(--blue-ink); font: inherit; font-size: 12px; }
+.chat-context-chips > span { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-composer > label { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: end; gap: 8px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: white; }
 .chat-composer > label:focus-within { border-color: var(--focus); }
 .chat-composer textarea { min-width: 0; max-height: 180px; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 14px; line-height: 1.55; }

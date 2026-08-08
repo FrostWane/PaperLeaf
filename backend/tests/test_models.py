@@ -1,6 +1,13 @@
 from sqlalchemy import create_engine
 
-from paperleaf_api.models import Base, DiscoveryBatch, DiscoveryItem, PaperArtifact, PaperChunk
+from paperleaf_api.models import (
+    AgentRun,
+    Base,
+    DiscoveryBatch,
+    DiscoveryItem,
+    PaperArtifact,
+    PaperChunk,
+)
 
 
 def test_postgres_retrieval_indexes_are_part_of_model_metadata() -> None:
@@ -33,3 +40,9 @@ def test_discovery_schema_keeps_batches_feedback_and_unique_items() -> None:
     assert DiscoveryItem.__table__.c.feedback.nullable is True
     assert DiscoveryItem.__table__.c.opened_at.nullable is True
     assert DiscoveryItem.__table__.c.imported_at.nullable is True
+
+
+def test_agent_run_schema_contains_context_snapshot_fields() -> None:
+    assert {"context_snapshot", "context_version", "resolved_query", "reference_confidence"} <= {
+        column.name for column in AgentRun.__table__.columns
+    }

@@ -201,6 +201,10 @@ class AgentRunRecord:
     pending_action: dict | None = None
     cancel_requested: bool = False
     scope_snapshot: dict = field(default_factory=dict)
+    context_snapshot: dict = field(default_factory=dict)
+    context_version: int = 1
+    resolved_query: str | None = None
+    reference_confidence: float | None = None
     user_message_id: str | None = None
     assistant_message_id: str | None = None
     request_hash: str | None = None
@@ -444,6 +448,9 @@ class Repository(Protocol):
     ) -> DiscoveryItemRecord | DiscoveryItem | None: ...
     async def discovery_metrics(self, since: datetime) -> dict[str, int | float]: ...
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
+    async def get_owned_paper_page_text(
+        self, paper_id: str, physical_page: int, owner_id: str
+    ) -> str | None: ...
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
     ) -> PaperRecord | None: ...
@@ -494,6 +501,15 @@ class Repository(Protocol):
     async def list_agent_runs_for_observability(
         self, since: datetime, *, limit: int = 5000
     ) -> list[AgentRunRecord | AgentRun]: ...
+    async def update_agent_context(
+        self,
+        run_id: str,
+        claim_token: str,
+        *,
+        context_snapshot: dict,
+        resolved_query: str,
+        reference_confidence: float,
+    ) -> AgentRunRecord | AgentRun | None: ...
 
 
 class MemoryRepository:
@@ -764,6 +780,13 @@ class MemoryRepository:
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None:
         paper = self.papers.get(paper_id)
         return paper if paper and paper.owner_id == owner_id else None
+
+    async def get_owned_paper_page_text(
+        self, paper_id: str, physical_page: int, owner_id: str
+    ) -> str | None:
+        if not await self.get_owned_paper(paper_id, owner_id):
+            return None
+        return self.paper_pages.get(paper_id, {}).get(physical_page)
 
     async def requeue_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None:
         paper = await self.get_owned_paper(paper_id, owner_id)
@@ -1808,6 +1831,25 @@ class MemoryRepository:
         )
         return run
 
+    async def update_agent_context(
+        self,
+        run_id: str,
+        claim_token: str,
+        *,
+        context_snapshot: dict,
+        resolved_query: str,
+        reference_confidence: float,
+    ) -> AgentRunRecord | None:
+        run = self.agent_runs.get(run_id)
+        if not run or not self._agent_claim_is_current(run_id, claim_token):
+            return None
+        run.context_snapshot = dict(context_snapshot)
+        run.context_version = int(context_snapshot.get("version", 1))
+        run.resolved_query = resolved_query
+        run.reference_confidence = reference_confidence
+        run.updated_at = now()
+        return run
+
     async def publish_agent_paragraph(
         self,
         run_id: str,
@@ -2402,6 +2444,20 @@ class SQLAlchemyRepository:
         async with get_session_factory()() as session:
             return await session.scalar(
                 select(Paper).where(Paper.id == paper_id, Paper.owner_id == owner_id)
+            )
+
+    async def get_owned_paper_page_text(
+        self, paper_id: str, physical_page: int, owner_id: str
+    ) -> str | None:
+        async with get_session_factory()() as session:
+            return await session.scalar(
+                select(PaperPage.text)
+                .join(Paper, Paper.id == PaperPage.paper_id)
+                .where(
+                    PaperPage.paper_id == paper_id,
+                    PaperPage.physical_page == physical_page,
+                    Paper.owner_id == owner_id,
+                )
             )
 
     async def update_owned_paper(
@@ -3001,6 +3057,30 @@ class SQLAlchemyRepository:
                 {"status": "running"},
                 "run_started",
             )
+            await session.commit()
+            await session.refresh(run)
+            return run
+
+    async def update_agent_context(
+        self,
+        run_id: str,
+        claim_token: str,
+        *,
+        context_snapshot: dict,
+        resolved_query: str,
+        reference_confidence: float,
+    ) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if not run or not await self._sql_agent_claim_current(session, run_id, claim_token):
+                return None
+            run.context_snapshot = dict(context_snapshot)
+            run.context_version = int(context_snapshot.get("version", 1))
+            run.resolved_query = resolved_query
+            run.reference_confidence = reference_confidence
+            run.updated_at = now()
             await session.commit()
             await session.refresh(run)
             return run
