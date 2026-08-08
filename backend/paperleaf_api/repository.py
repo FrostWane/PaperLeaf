@@ -21,6 +21,8 @@ from .db import get_session_factory
 from .models import (
     AgentRun,
     AgentRunEvent,
+    AgentToolArtifact,
+    AgentToolCall,
     ChatMessage,
     ChatSession,
     Collection,
@@ -300,6 +302,36 @@ class AgentRunEventRecord:
 
 
 @dataclass
+class AgentToolCallRecord:
+    id: str
+    call_id: str
+    run_id: str
+    user_id: str
+    skill_name: str
+    tool_name: str
+    tool_version: int = 1
+    status: str = "running"
+    arguments: dict = field(default_factory=dict)
+    result_preview: dict | None = None
+    attempt: int = 1
+    duration_ms: int | None = None
+    error_code: str | None = None
+    requires_approval: bool = False
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class AgentToolArtifactRecord:
+    id: str
+    tool_call_id: str
+    user_id: str
+    content: dict
+    token_count: int
+    created_at: datetime = field(default_factory=now)
+
+
+@dataclass
 class MemoryItemRecord:
     id: str
     user_id: str
@@ -492,6 +524,9 @@ class Repository(Protocol):
     async def get_owned_paper_page_text(
         self, paper_id: str, physical_page: int, owner_id: str
     ) -> str | None: ...
+    async def get_owned_paper_artifact(
+        self, paper_id: str, owner_id: str, artifact_type: str
+    ) -> PaperArtifactRecord | PaperArtifact | None: ...
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
     ) -> PaperRecord | None: ...
@@ -560,6 +595,28 @@ class Repository(Protocol):
         skill_version: int,
         harness_trace: dict,
     ) -> AgentRunRecord | AgentRun | None: ...
+    async def start_agent_tool_call(
+        self,
+        record: AgentToolCallRecord,
+        claim_token: str,
+    ) -> AgentToolCallRecord | AgentToolCall | None: ...
+    async def finish_agent_tool_call(
+        self,
+        tool_call_id: str,
+        run_id: str,
+        claim_token: str,
+        *,
+        status: str,
+        attempt: int,
+        duration_ms: int,
+        result_preview: dict | None,
+        error_code: str | None,
+    ) -> AgentToolCallRecord | AgentToolCall | None: ...
+    async def create_agent_tool_artifact(
+        self,
+        record: AgentToolArtifactRecord,
+        claim_token: str,
+    ) -> AgentToolArtifactRecord | AgentToolArtifact | None: ...
     async def update_session_compaction(
         self,
         session_id: str,
@@ -602,6 +659,8 @@ class MemoryRepository:
         self.chat_messages: dict[str, ChatMessageRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
         self.agent_run_events: dict[int, AgentRunEventRecord] = {}
+        self.agent_tool_calls: dict[str, AgentToolCallRecord] = {}
+        self.agent_tool_artifacts: dict[str, AgentToolArtifactRecord] = {}
         self.memory_items: dict[str, MemoryItemRecord] = {}
         self.memory_item_versions: dict[str, MemoryItemVersionRecord] = {}
         self._next_agent_event_id = 1
@@ -2074,6 +2133,62 @@ class MemoryRepository:
         run.updated_at = now()
         return run
 
+    async def start_agent_tool_call(
+        self,
+        record: AgentToolCallRecord,
+        claim_token: str,
+    ) -> AgentToolCallRecord | None:
+        if not self._agent_claim_is_current(record.run_id, claim_token):
+            return None
+        duplicate = next(
+            (
+                item
+                for item in self.agent_tool_calls.values()
+                if item.run_id == record.run_id and item.call_id == record.call_id
+            ),
+            None,
+        )
+        if duplicate:
+            return duplicate
+        self.agent_tool_calls[record.id] = record
+        return record
+
+    async def finish_agent_tool_call(
+        self,
+        tool_call_id: str,
+        run_id: str,
+        claim_token: str,
+        *,
+        status: str,
+        attempt: int,
+        duration_ms: int,
+        result_preview: dict | None,
+        error_code: str | None,
+    ) -> AgentToolCallRecord | None:
+        if not self._agent_claim_is_current(run_id, claim_token):
+            return None
+        record = self.agent_tool_calls.get(tool_call_id)
+        if not record or record.run_id != run_id:
+            return None
+        record.status = status
+        record.attempt = attempt
+        record.duration_ms = duration_ms
+        record.result_preview = result_preview
+        record.error_code = error_code
+        record.updated_at = now()
+        return record
+
+    async def create_agent_tool_artifact(
+        self,
+        record: AgentToolArtifactRecord,
+        claim_token: str,
+    ) -> AgentToolArtifactRecord | None:
+        tool_call = self.agent_tool_calls.get(record.tool_call_id)
+        if not tool_call or not self._agent_claim_is_current(tool_call.run_id, claim_token):
+            return None
+        self.agent_tool_artifacts[record.id] = record
+        return record
+
     async def publish_agent_paragraph(
         self,
         run_id: str,
@@ -2246,6 +2361,7 @@ class MemoryRepository:
         run.scope_snapshot = {
             **run.scope_snapshot,
             "resume_decision": decision,
+            "resumed_action": pending,
         }
         run.status = "pending"
         run.pending_action = None
@@ -3332,6 +3448,80 @@ class SQLAlchemyRepository:
             await session.refresh(run)
             return run
 
+    async def start_agent_tool_call(
+        self,
+        record: AgentToolCallRecord,
+        claim_token: str,
+    ) -> AgentToolCall | None:
+        async with get_session_factory()() as session:
+            if not await self._sql_agent_claim_current(session, record.run_id, claim_token):
+                return None
+            existing = await session.scalar(
+                select(AgentToolCall).where(
+                    AgentToolCall.run_id == record.run_id,
+                    AgentToolCall.call_id == record.call_id,
+                )
+            )
+            if existing:
+                return existing
+            value = AgentToolCall(**record.__dict__)
+            session.add(value)
+            await session.commit()
+            await session.refresh(value)
+            return value
+
+    async def finish_agent_tool_call(
+        self,
+        tool_call_id: str,
+        run_id: str,
+        claim_token: str,
+        *,
+        status: str,
+        attempt: int,
+        duration_ms: int,
+        result_preview: dict | None,
+        error_code: str | None,
+    ) -> AgentToolCall | None:
+        async with get_session_factory()() as session:
+            if not await self._sql_agent_claim_current(session, run_id, claim_token):
+                return None
+            value = await session.scalar(
+                select(AgentToolCall).where(
+                    AgentToolCall.id == tool_call_id,
+                    AgentToolCall.run_id == run_id,
+                )
+            )
+            if not value:
+                return None
+            value.status = status
+            value.attempt = attempt
+            value.duration_ms = duration_ms
+            value.result_preview = result_preview
+            value.error_code = error_code
+            value.updated_at = now()
+            await session.commit()
+            await session.refresh(value)
+            return value
+
+    async def create_agent_tool_artifact(
+        self,
+        record: AgentToolArtifactRecord,
+        claim_token: str,
+    ) -> AgentToolArtifact | None:
+        async with get_session_factory()() as session:
+            tool_call = await session.scalar(
+                select(AgentToolCall).where(AgentToolCall.id == record.tool_call_id)
+            )
+            if not tool_call or not await self._sql_agent_claim_current(
+                session, tool_call.run_id, claim_token
+            ):
+                return None
+            value = AgentToolArtifact(**record.__dict__)
+            session.add(value)
+            await session.commit()
+            await session.refresh(value)
+            return value
+
     async def publish_agent_paragraph(
         self,
         run_id: str,
@@ -3577,6 +3767,7 @@ class SQLAlchemyRepository:
             run.scope_snapshot = {
                 **(run.scope_snapshot or {}),
                 "resume_decision": decision,
+                "resumed_action": pending,
             }
             run.status = "pending"
             run.pending_action = None

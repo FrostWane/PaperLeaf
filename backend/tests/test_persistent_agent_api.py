@@ -200,3 +200,10 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
         )
         assert resumed_run.status_code == 200
         assert resumed_run.json()["pending_action"] is None
+        persisted_resume = asyncio.run(
+            repository.get_owned_agent_run(interrupted_submission.run.id, user["id"])
+        )
+        assert persisted_resume is not None
+        assert persisted_resume.scope_snapshot["resumed_action"]["action_id"] == (
+            "approve-arxiv-1"
+        )

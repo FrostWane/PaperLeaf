@@ -11,6 +11,7 @@ from typing import Any
 
 from .agent.context import ContextResolution, resolve_context
 from .agent.context_budget import allocate_context_budget, compact_conversation
+from .agent.function_tools import FunctionToolHarness, ToolExecutionContext, ToolLoopResult
 from .agent.memory import (
     extract_memory_candidates,
     memory_hash,
@@ -191,6 +192,39 @@ async def _invoke_with_cancel(
         raise
 
 
+async def _invoke_tools_with_cancel(
+    repository: Any,
+    run: Any,
+    harness: FunctionToolHarness,
+    query: str,
+    context: ToolExecutionContext,
+) -> ToolLoopResult:
+    """工具循环与 Graph 使用相同的持久取消语义。"""
+
+    task = asyncio.create_task(harness.run(query, context))
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=0.2)
+            if done:
+                return await task
+            current = await repository.get_agent_run(run.id)
+            if not current or current.cancel_requested or current.status == "cancelled":
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise asyncio.CancelledError
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        raise
+
+
 async def _finish_observed_run(
     repository: Any,
     run_id: str,
@@ -247,6 +281,7 @@ async def execute_agent_run(
     answer_quality_policy: AnswerQualityPolicy,
     harness_config: Any = settings,
     skill_registry: SkillRegistry | None = None,
+    function_tool_harness: FunctionToolHarness | None = None,
 ) -> None:
     """执行 Graph；只把通过 citation + support 的完整段落写入持久层。"""
 
@@ -261,6 +296,73 @@ async def execute_agent_run(
     run = started
     snapshot = dict(run.scope_snapshot or {})
     scope = str(snapshot.get("type", "library"))
+    resumed_action = snapshot.get("resumed_action")
+    resume_decision = str(snapshot.get("resume_decision", ""))
+    if (
+        isinstance(resumed_action, dict)
+        and resumed_action.get("type") == "confirm_arxiv_import"
+        and resume_decision in {"approve", "reject"}
+        and function_tool_harness is not None
+    ):
+        message, action_error = await function_tool_harness.resume_confirmed_action(
+            run.user_id,
+            resumed_action,
+            resume_decision,
+        )
+        await repository.publish_agent_paragraph(
+            run.id,
+            0,
+            message,
+            [],
+            "controlled_notice",
+            claim_token,
+        )
+        tool_call_record_id = str(resumed_action.get("tool_call_record_id", ""))
+        if tool_call_record_id:
+            await repository.finish_agent_tool_call(
+                tool_call_record_id,
+                run.id,
+                claim_token,
+                status=(
+                    "cancelled"
+                    if resume_decision == "reject"
+                    else "failed"
+                    if action_error
+                    else "succeeded"
+                ),
+                attempt=1,
+                duration_ms=0,
+                result_preview={
+                    "tool": "request_import",
+                    "status": "failed" if action_error else "finished",
+                },
+                error_code=action_error,
+            )
+        intent = classify_intent(
+            query,
+            scope=scope,
+            selected_paper_count=len(snapshot.get("paper_ids", [])),
+            web_enabled=bool(snapshot.get("web_enabled", False)),
+        )
+        await _finish_observed_run(
+            repository,
+            run.id,
+            claim_token,
+            started_at=started_at,
+            status="completed",
+            intent=intent,
+            scope=scope,
+            outcome="tool_action",
+            error_code=None,
+            result={"status": "completed", "answer": message, "citations": []},
+            tool_steps=max(1, int(getattr(run, "tool_steps", 0) or 0)),
+            result_summary={
+                "answer": message,
+                "citations": [],
+                "tool_action_error": action_error,
+            },
+        )
+        return
     visible_history = await repository.list_chat_messages(run.session_id, run.user_id)
     history_records = [
         item
@@ -359,19 +461,42 @@ async def execute_agent_run(
     skill_instructions = ""
     route_source = "feature_flag_disabled"
     route_confidence = 1.0
+    definition = None
     if harness_flags.get("skills_enabled"):
         registry = skill_registry or SkillRegistry.default()
-        definition = registry.route(
-            resolution.resolved_query,
-            intent=intent,
-            scope=scope,
-            web_enabled=bool(snapshot.get("web_enabled", False)),
-        )
+        if harness_flags.get("function_tools_enabled") and function_tool_harness is not None:
+            try:
+                definition, route_source, route_confidence = (
+                    await function_tool_harness.select_skill(
+                        registry,
+                        resolution.original_query,
+                        intent=intent,
+                        scope=scope,
+                        web_enabled=bool(snapshot.get("web_enabled", False)),
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                definition = registry.route(
+                    resolution.original_query,
+                    intent=intent,
+                    scope=scope,
+                    web_enabled=bool(snapshot.get("web_enabled", False)),
+                )
+        else:
+            definition = registry.route(
+                resolution.original_query,
+                intent=intent,
+                scope=scope,
+                web_enabled=bool(snapshot.get("web_enabled", False)),
+            )
         selected_skill = definition.manifest.name
         skill_version = definition.manifest.version
         skill_instructions = definition.instructions
-        route_source = "deterministic_fallback"
-        route_confidence = 0.85
+        if route_source == "feature_flag_disabled":
+            route_source = "deterministic_fallback"
+            route_confidence = 0.85
         history.insert(0, {"role": "skill", "content": skill_instructions})
     context_snapshot["skill"] = {
         "name": selected_skill,
@@ -396,6 +521,9 @@ async def execute_agent_run(
         "skill_route_source": route_source,
         "skill_route_confidence": route_confidence,
         "tool_calls": [],
+        "tool_mode_active": False,
+        "pre_retrieved_evidence": [],
+        "pre_arxiv_candidates": [],
     }
     updated_run = await repository.update_agent_skill(
         run.id,
@@ -457,30 +585,146 @@ async def execute_agent_run(
             event_key="stage:skill:finish",
             claim_token=claim_token,
         )
-    if resolution.needs_clarification:
-        await repository.append_agent_run_event(
-            run_id,
-            "node_started",
-            {"node": "resolve_context", "stage": "确认问题所指内容"},
-            event_key="stage:context:start",
-            claim_token=claim_token,
-        )
-    else:
-        await repository.append_agent_run_event(
-            run_id,
-            "node_started",
-            {"node": "retrieve_library", "stage": "检索文献证据"},
-            event_key="stage:retrieve:start",
-            claim_token=claim_token,
-        )
-        await repository.append_agent_run_event(
-            run_id,
-            "tool_started",
-            {"tool": "search_library"},
-            event_key="stage:tool:search:start",
-            claim_token=claim_token,
-        )
     with collect_model_attempts() as attempts:
+        tool_mode_active = False
+        tool_loop_result = None
+        if (
+            not resolution.needs_clarification
+            and harness_flags.get("function_tools_enabled")
+            and definition is not None
+            and function_tool_harness is not None
+        ):
+            tool_started_at = time.perf_counter()
+            try:
+                tool_loop_result = await _invoke_tools_with_cancel(
+                    repository,
+                    run,
+                    function_tool_harness,
+                    resolution.resolved_query,
+                    ToolExecutionContext(
+                        run_id=run.id,
+                        claim_token=claim_token,
+                        user_id=run.user_id,
+                        skill=definition,
+                        allowed_paper_ids=tuple(snapshot.get("paper_ids", [])),
+                        current_paper_id=str(
+                            dict(snapshot.get("client_context", {})).get("paper_id") or ""
+                        )
+                        or (
+                            str(snapshot.get("paper_ids", [""])[0])
+                            if len(snapshot.get("paper_ids", [])) == 1
+                            else None
+                        ),
+                        web_enabled=bool(snapshot.get("web_enabled", False)),
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                tool_loop_result = ToolLoopResult(
+                    provider_supported=False,
+                    fallback_reason="function_tool_loop_failed",
+                )
+            tool_mode_active = bool(tool_loop_result.provider_supported and tool_loop_result.calls)
+            harness_trace["tool_mode_active"] = tool_mode_active
+            if tool_mode_active:
+                initial["tool_mode_active"] = True
+                initial["pre_retrieved_evidence"] = list(tool_loop_result.evidence)
+                initial["pre_arxiv_candidates"] = list(tool_loop_result.arxiv_candidates)
+                initial["tool_steps"] = tool_loop_result.steps
+                initial["tool_calls"] = list(tool_loop_result.calls)
+                initial["stage_timings_ms"]["retrieval"] = round(
+                    (time.perf_counter() - tool_started_at) * 1000
+                )
+                harness_trace["tool_calls"] = [
+                    {
+                        "tool": str(item.get("tool", "unknown")),
+                        "status": str(item.get("status", "unknown")),
+                    }
+                    for item in tool_loop_result.calls
+                ]
+                harness_trace["function_calling"] = "native"
+            else:
+                harness_trace["function_calling"] = "legacy_fallback"
+                harness_trace["function_fallback_reason"] = (
+                    tool_loop_result.fallback_reason or "model_selected_no_tool"
+                )
+            await repository.update_agent_skill(
+                run.id,
+                claim_token,
+                selected_skill=selected_skill,
+                skill_version=skill_version,
+                harness_trace=harness_trace,
+            )
+
+        if resolution.needs_clarification:
+            await repository.append_agent_run_event(
+                run_id,
+                "node_started",
+                {"node": "resolve_context", "stage": "确认问题所指内容"},
+                event_key="stage:context:start",
+                claim_token=claim_token,
+            )
+        else:
+            await repository.append_agent_run_event(
+                run_id,
+                "node_started",
+                {"node": "retrieve_library", "stage": "检索文献证据"},
+                event_key="stage:retrieve:start",
+                claim_token=claim_token,
+            )
+            if tool_mode_active and tool_loop_result is not None:
+                for index, item in enumerate(tool_loop_result.calls):
+                    await repository.append_agent_run_event(
+                        run_id,
+                        "tool_started",
+                        {"tool": item.get("tool", "unknown")},
+                        event_key=f"stage:function_tool:{index}:start",
+                        claim_token=claim_token,
+                    )
+                    await repository.append_agent_run_event(
+                        run_id,
+                        "tool_finished",
+                        {
+                            "tool": item.get("tool", "unknown"),
+                            "status": item.get("status", "unknown"),
+                            "evidence_count": item.get("evidence_count", 0),
+                        },
+                        event_key=f"stage:function_tool:{index}:finish",
+                        claim_token=claim_token,
+                    )
+            else:
+                await repository.append_agent_run_event(
+                    run_id,
+                    "tool_started",
+                    {"tool": "search_library"},
+                    event_key="stage:tool:search:start",
+                    claim_token=claim_token,
+                )
+        if tool_loop_result is not None and tool_loop_result.pending_action:
+            await _finish_observed_run(
+                repository,
+                run_id,
+                claim_token,
+                started_at=started_at,
+                status="interrupted",
+                intent=intent,
+                scope=scope,
+                outcome="interrupted",
+                result={
+                    "status": "interrupted",
+                    "tool_steps": tool_loop_result.steps,
+                    "retrieved_evidence": list(tool_loop_result.evidence),
+                },
+                pending_action=tool_loop_result.pending_action,
+                tool_steps=tool_loop_result.steps,
+                result_summary={
+                    "answer": "",
+                    "citations": [],
+                    "model_attempts": [item.as_dict() for item in attempts],
+                },
+            )
+            return
         try:
             result = await _invoke_with_cancel(repository, graph, run, initial)
         except asyncio.CancelledError:
@@ -537,17 +781,18 @@ async def execute_agent_run(
             claim_token=claim_token,
         )
     else:
-        await repository.append_agent_run_event(
-            run_id,
-            "tool_finished",
-            {
-                "tool": "search_library",
-                "evidence_count": len(result.get("retrieved_evidence", [])),
-                "duration_ms": stage_timings.get("retrieval"),
-            },
-            event_key="stage:tool:search:finish",
-            claim_token=claim_token,
-        )
+        if not tool_mode_active:
+            await repository.append_agent_run_event(
+                run_id,
+                "tool_finished",
+                {
+                    "tool": "search_library",
+                    "evidence_count": len(result.get("retrieved_evidence", [])),
+                    "duration_ms": stage_timings.get("retrieval"),
+                },
+                event_key="stage:tool:search:finish",
+                claim_token=claim_token,
+            )
         await repository.append_agent_run_event(
             run_id,
             "node_finished",

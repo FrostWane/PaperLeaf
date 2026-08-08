@@ -366,6 +366,11 @@ class AgentRuntime:
     async def retrieve_library(self, state: AgentState) -> AgentState:
         if state.get("status") == "failed":
             return {}
+        if state.get("tool_mode_active"):
+            return {
+                "retrieved_evidence": list(state.get("pre_retrieved_evidence", [])),
+                "tool_steps": state.get("tool_steps", 0),
+            }
         started_at = time.perf_counter()
         evidence = await self.retriever(
             LibrarySearchInput(
@@ -481,6 +486,11 @@ class AgentRuntime:
         }
 
     async def search_arxiv(self, state: AgentState) -> AgentState:
+        if state.get("tool_mode_active") and state.get("pre_arxiv_candidates"):
+            return {
+                "arxiv_candidates": list(state.get("pre_arxiv_candidates", [])),
+                "tool_steps": state.get("tool_steps", 0),
+            }
         result = await self.arxiv_search(ArxivSearchInput(query=state["query"], limit=5))
         return {
             "arxiv_candidates": result.data,

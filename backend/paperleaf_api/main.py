@@ -28,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from prometheus_client import make_asgi_app
 
+from .agent.function_tools import FunctionToolHarness
 from .agent.graph import (
     build_agent_graph,
     build_configured_answerer,
@@ -43,9 +44,8 @@ from .artifacts import (
     validate_structure_payload,
     validate_summary_payload,
 )
+from .arxiv_import import import_arxiv_paper
 from .arxiv_service import (
-    fetch_arxiv_pdf,
-    get_arxiv_paper,
     search_arxiv,
     search_related_arxiv,
 )
@@ -159,6 +159,22 @@ class AppServices:
         )
         self.agent_graph = self.build_agent_graph()
         self.skill_registry = SkillRegistry.default()
+
+        async def confirmed_importer(user_id: str, candidate: dict[str, Any]) -> Any:
+            return await import_arxiv_paper(
+                str(candidate.get("arxiv_id", "")),
+                user_id,
+                config=self.config,
+                repository=self.repository,
+                storage=self.storage,
+            )
+
+        self.function_tool_harness = FunctionToolHarness(
+            self.repository,
+            self.retriever,
+            self.model_router,
+            confirmed_importer=confirmed_importer,
+        )
         self.checkpointer: Optional[Any] = None
         self._agent_tasks: dict[str, asyncio.Task[Any]] = {}
         self._agent_tasks_lock = asyncio.Lock()
@@ -219,6 +235,7 @@ class AppServices:
                     ),
                     harness_config=self.config,
                     skill_registry=self.skill_registry,
+                    function_tool_harness=self.function_tool_harness,
                 )
             finally:
                 task = asyncio.current_task()
@@ -1370,56 +1387,20 @@ def create_app(
         user: Annotated[UserRecord, Depends(current_user)],
         _: Annotated[None, Depends(csrf_protected)],
     ) -> PaperRead:
-        content_result, metadata_result = await asyncio.gather(
-            fetch_arxiv_pdf(payload.arxiv_id, config.max_pdf_bytes),
-            get_arxiv_paper(payload.arxiv_id),
-            return_exceptions=True,
-        )
-        if isinstance(content_result, ValueError):
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, str(content_result)
-            ) from content_result
-        if isinstance(content_result, Exception):
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY, "arXiv PDF 下载失败"
-            ) from content_result
-        content = content_result
-        metadata = metadata_result if not isinstance(metadata_result, Exception) else None
         try:
-            validate_pdf(content, f"{payload.arxiv_id}.pdf", config.max_pdf_bytes)
+            created = await import_arxiv_paper(
+                payload.arxiv_id,
+                user.id,
+                config=config,
+                repository=services.repository,
+                storage=services.storage,
+            )
         except ValueError as exc:
+            if "已存在" in str(exc) or "重复" in str(exc):
+                raise HTTPException(status.HTTP_409_CONFLICT, "文献已导入") from exc
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-        sha256 = hashlib.sha256(content).hexdigest()
-        paper_id = str(uuid.uuid4())
-        storage_key = f"{user.id}/{paper_id}/{sha256}.pdf"
-        await services.storage.put(storage_key, content, "application/pdf")
-        record = PaperRecord(
-            id=paper_id,
-            owner_id=user.id,
-            title=(getattr(metadata, "title", None) or f"arXiv {payload.arxiv_id}"),
-            authors=list(getattr(metadata, "authors", None) or []),
-            year=(
-                int(metadata.published[:4])
-                if getattr(metadata, "published", "")[:4].isdigit()
-                else None
-            ),
-            abstract=getattr(metadata, "abstract", None),
-            doi=None,
-            publication=getattr(metadata, "journal_ref", None),
-            arxiv_id=payload.arxiv_id,
-            filename=f"{payload.arxiv_id}.pdf",
-            storage_key=storage_key,
-            mime_type="application/pdf",
-            size_bytes=len(content),
-            sha256=sha256,
-            page_count=None,
-            status=PaperStatus.queued,
-        )
-        try:
-            created = await services.repository.create_paper(record)
-        except ValueError as exc:
-            await services.storage.delete(storage_key)
-            raise HTTPException(status.HTTP_409_CONFLICT, "文献已导入") from exc
+        except Exception as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv PDF 下载失败") from exc
         if payload.recommendation_item_id:
             await services.repository.record_discovery_item_action(
                 payload.recommendation_item_id,

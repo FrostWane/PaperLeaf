@@ -65,3 +65,14 @@ approval_policy: none
     )
     with pytest.raises(SkillRegistryError, match="未知工具"):
         SkillRegistry.from_directory(tmp_path)
+
+
+def test_internal_verified_context_label_does_not_route_to_claim_verification() -> None:
+    registry = SkillRegistry.default()
+    selected = registry.route(
+        "这篇论文的核心方法是什么？\n\n[已验证阅读上下文]\n当前论文：DeepDTA",
+        intent="method",
+        scope="paper",
+        web_enabled=False,
+    )
+    assert selected.manifest.name == "paper_qa"

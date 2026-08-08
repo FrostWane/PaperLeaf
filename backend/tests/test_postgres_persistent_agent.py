@@ -10,8 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from paperleaf_api import db
-from paperleaf_api.models import AgentRun, ChatMessage, Job, PaperStatus, UserRole
+from paperleaf_api.models import (
+    AgentRun,
+    AgentToolArtifact,
+    AgentToolCall,
+    ChatMessage,
+    Job,
+    PaperStatus,
+    UserRole,
+)
 from paperleaf_api.repository import (
+    AgentToolArtifactRecord,
+    AgentToolCallRecord,
     ChatActiveRunError,
     ChatIdempotencyConflictError,
     PaperRecord,
@@ -72,6 +82,8 @@ def test_postgres_0007_schema_and_persistent_event_contract() -> None:
                 "chat_messages",
                 "agent_run_events",
                 "paper_artifacts",
+                "agent_tool_calls",
+                "agent_tool_artifacts",
             } <= schema["tables"]
             assert {
                 "cancel_requested",
@@ -155,6 +167,41 @@ def test_postgres_0007_schema_and_persistent_event_contract() -> None:
             assert await repository.start_agent_run(
                 submission.run.id, claim_token
             ) is not None
+            tool_call = await repository.start_agent_tool_call(
+                AgentToolCallRecord(
+                    id="tool-record-1",
+                    call_id="model-call-1",
+                    run_id=submission.run.id,
+                    user_id=user.id,
+                    skill_name="paper_qa",
+                    tool_name="search_library",
+                    arguments={"query": "方法"},
+                ),
+                claim_token,
+            )
+            assert tool_call is not None
+            tool_artifact = await repository.create_agent_tool_artifact(
+                AgentToolArtifactRecord(
+                    id="tool-artifact-1",
+                    tool_call_id=tool_call.id,
+                    user_id=user.id,
+                    content={"items": ["large-result"]},
+                    token_count=9000,
+                ),
+                claim_token,
+            )
+            assert tool_artifact is not None
+            finished_tool = await repository.finish_agent_tool_call(
+                tool_call.id,
+                submission.run.id,
+                claim_token,
+                status="succeeded",
+                attempt=2,
+                duration_ms=42,
+                result_preview={"count": 1},
+                error_code=None,
+            )
+            assert finished_tool is not None and finished_tool.attempt == 2
             first = await repository.publish_agent_paragraph(
                 submission.run.id,
                 0,
@@ -201,6 +248,9 @@ def test_postgres_0007_schema_and_persistent_event_contract() -> None:
             assert assistant.content == (
                 "第一段 [chunk:c1]。\n\n- 第二段 [chunk:c2]。"
             )
+            async with db.get_session_factory()() as session:
+                assert await session.get(AgentToolCall, "tool-record-1") is not None
+                assert await session.get(AgentToolArtifact, "tool-artifact-1") is not None
 
             concurrent_session = await repository.create_chat_session(
                 user.id, "并发幂等", "library", None, None
