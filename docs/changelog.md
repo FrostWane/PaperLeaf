@@ -1,5 +1,12 @@
 # 更新记录
 
+## 未发布：学术 MCP 与 Agent Harness 观测
+
+- 新增 Compose 私网 `academic-search-mcp`，以 Streamable HTTP 暴露 OpenAlex、Semantic Scholar 查询和学术元数据读取三个只读工具。
+- Gateway 增加工具发现、Schema/只读标注校验、名称隔离、连接池、Redis 缓存、健康状态、超时与连续失败熔断；外部结果不能转换成页级引用证据。
+- 管理后台新增 Agent Harness 页，展示 Context、记忆容量、Skill、Tool 与 MCP 的低基数聚合，并区分接口失败、无样本和截断样本。
+- MCP 配置与工具快照持久化到 PostgreSQL；普通用户不能配置 Server URL，管理员操作继续受 RBAC 与 CSRF 保护。
+
 - 发现页移除真实模式固定 fixture，改为个人文献库驱动的 arXiv 混合推荐；支持换一批、去重、推荐依据、语义服务故障降级和手动搜索。摘要缺失时使用已鉴权的代表 Chunk，并由默认关闭的联网偏好和 `no-store` 响应保护私人主题。
 - 发现推荐批次与条目写入 PostgreSQL：再次进入恢复上一次结果，只有“换一批”生成新批次；增加感兴趣/不感兴趣、来源点击和成功导入反馈，后续排序使用轻量正负内容信号，管理端增加推荐曝光、点击率、兴趣命中率、反馈覆盖率和导入率。
 

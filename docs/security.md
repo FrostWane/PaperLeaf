@@ -62,6 +62,14 @@ PaperLeaf 处理私人 PDF、账号凭据和外部模型 Key。默认 Compose �
 - Redis 连接失败时退回当前 API 进程内限流。该降级能保护单节点，但不能提供跨节点统一配额，因此必须记录并告警。
 - Compose 不映射 Redis 宿主机端口；跨主机部署必须使用私网、认证和传输加密。
 
+## 学术 MCP
+
+- 首期只允许仓库内置的 OpenAlex 与 Semantic Scholar 只读元数据工具，不接受普通用户提供的 MCP 地址、工具描述或凭据。
+- Gateway 校验固定主机、`/mcp` 路径、只读标注、完整工具集合和输入 Schema；直接私有 IP、环回、链路本地、云元数据地址、脚本 URL 和超大响应均被拒绝。
+- MCP Server 开启 DNS rebinding 防护，禁用重定向并限制响应类型与大小。外部字段始终是不可信输入，不能修改 Skill、系统权限、审批策略或长期记忆。
+- OpenAlex 与 Semantic Scholar Key 只进入 MCP 容器环境。管理接口只能启停、检测和刷新白名单服务，所有写操作要求管理员权限与 CSRF。
+- MCP 关闭、超时、限流或熔断时，本地文献管理、RAG 与 arXiv 回退保持可用；外部元数据不能直接成为物理页引用。
+
 ## 网络部署
 
 - 只公开 HTTPS Web 入口；API 建议通过同域反向代理。

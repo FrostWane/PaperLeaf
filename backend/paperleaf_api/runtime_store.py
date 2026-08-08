@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import time
@@ -56,6 +57,12 @@ class RuntimeStore(Protocol):
         idempotency_key: str,
     ) -> RateLimitDecision: ...
 
+    async def get_cached_json(self, namespace: str, key: str) -> dict[str, Any] | None: ...
+
+    async def set_cached_json(
+        self, namespace: str, key: str, value: dict[str, Any], *, ttl_seconds: int
+    ) -> None: ...
+
     async def close(self) -> None: ...
 
 
@@ -72,6 +79,7 @@ class MemoryRuntimeStore:
         self._clock = clock
         self._windows: dict[str, tuple[int, float]] = {}
         self._decisions: dict[str, tuple[bool, float]] = {}
+        self._json_cache: dict[str, tuple[dict[str, Any], float]] = {}
         self._lock = asyncio.Lock()
 
     async def ping(self) -> bool:
@@ -125,6 +133,24 @@ class MemoryRuntimeStore:
                 max(1, math.ceil(expires_at - now)),
                 self.backend,
             )
+
+    async def get_cached_json(self, namespace: str, key: str) -> dict[str, Any] | None:
+        cache_key = f"{namespace}:{_digest(key)}"
+        async with self._lock:
+            stored = self._json_cache.get(cache_key)
+            if not stored:
+                return None
+            if stored[1] <= self._clock():
+                self._json_cache.pop(cache_key, None)
+                return None
+            return dict(stored[0])
+
+    async def set_cached_json(
+        self, namespace: str, key: str, value: dict[str, Any], *, ttl_seconds: int
+    ) -> None:
+        cache_key = f"{namespace}:{_digest(key)}"
+        async with self._lock:
+            self._json_cache[cache_key] = (dict(value), self._clock() + ttl_seconds)
 
     async def close(self) -> None:
         return None
@@ -242,6 +268,24 @@ class RedisRuntimeStore:
             self.backend,
         )
 
+    async def get_cached_json(self, namespace: str, key: str) -> dict[str, Any] | None:
+        cache_key = f"{self._key_prefix}:cache:{namespace}:{_digest(key)}"
+        raw = await self._execute(self._client.get(cache_key))
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    async def set_cached_json(
+        self, namespace: str, key: str, value: dict[str, Any], *, ttl_seconds: int
+    ) -> None:
+        cache_key = f"{self._key_prefix}:cache:{namespace}:{_digest(key)}"
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        await self._execute(self._client.set(cache_key, payload, ex=ttl_seconds))
+
     async def close(self) -> None:
         close = getattr(self._client, "aclose", None)
         if close:
@@ -307,6 +351,24 @@ class ResilientRuntimeStore:
                 retry_after_seconds=decision.retry_after_seconds,
                 backend="memory-fallback",
                 degraded=True,
+            )
+
+    async def get_cached_json(self, namespace: str, key: str) -> dict[str, Any] | None:
+        try:
+            return await self._primary.get_cached_json(namespace, key)
+        except RuntimeStoreUnavailable:
+            return await self._fallback.get_cached_json(namespace, key)
+
+    async def set_cached_json(
+        self, namespace: str, key: str, value: dict[str, Any], *, ttl_seconds: int
+    ) -> None:
+        try:
+            await self._primary.set_cached_json(
+                namespace, key, value, ttl_seconds=ttl_seconds
+            )
+        except RuntimeStoreUnavailable:
+            await self._fallback.set_cached_json(
+                namespace, key, value, ttl_seconds=ttl_seconds
             )
 
     async def close(self) -> None:

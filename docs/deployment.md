@@ -52,7 +52,7 @@ API/Worker 通过 Compose 内部网络访问 Redis；需要检查时使用
 `docker compose exec -T redis redis-cli ping`。公网部署不得直接暴露 6379；跨主机时应改用
 受控私网中的 Redis，并配置认证和 TLS。
 
-生产部署应让 Web 与 API 同域，或将 `PAPERLEAF_CORS_ORIGINS` 设置为明确的 HTTPS 来源。带凭据请求禁止使用 `*`。启用 HTTPS 后设置：
+本地默认同时允许 `http://localhost:3000` 和 `http://127.0.0.1:3000`，避免两种访问地址混用时出现 `Failed to fetch`。生产部署应让 Web 与 API 同域，或将 `PAPERLEAF_CORS_ORIGINS` 设置为明确的 HTTPS 来源。带凭据请求禁止使用 `*`。启用 HTTPS 后设置：
 
 ```dotenv
 PAPERLEAF_SECURE_COOKIES=true
@@ -106,6 +106,26 @@ docker compose up -d web
 Redis 数据允许丢失，默认关闭 RDB/AOF。重启 Redis 会清空短期限流窗口，但不会丢失用户、
 消息、任务或 Agent Run。`GET /ready` 会返回运行态存储的 `available/degraded` 状态；Redis
 不可用时 API 继续工作并退化为当前进程内限流。
+
+### 学术 MCP
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `PAPERLEAF_MCP_ENABLED` | `false` | 是否向 Agent 暴露白名单学术 MCP 工具 |
+| `PAPERLEAF_ACADEMIC_MCP_URL` | `http://academic-search-mcp:8080/mcp` | Compose 私网内固定服务地址 |
+| `PAPERLEAF_ACADEMIC_MCP_ALLOWED_HOSTS` | `academic-search-mcp` | 服务端主机白名单，普通用户不能修改 |
+| `PAPERLEAF_MCP_TIMEOUT_SECONDS` | `15` | 单次发现或调用超时，范围 1～60 秒 |
+| `PAPERLEAF_MCP_CACHE_TTL_SECONDS` | `900` | Redis 公开搜索结果缓存时间 |
+| `PAPERLEAF_MCP_CIRCUIT_FAILURE_THRESHOLD` | `3` | 连续失败后熔断阈值 |
+| `PAPERLEAF_MCP_CIRCUIT_COOLDOWN_SECONDS` | `60` | 熔断冷却时间 |
+| `PAPERLEAF_ACADEMIC_HTTP_TIMEOUT_SECONDS` | `12` | MCP 服务访问官方学术 API 的请求超时 |
+| `OPENALEX_API_KEY` | — | OpenAlex 搜索所需 Key，只注入 MCP 容器 |
+| `SEMANTIC_SCHOLAR_API_KEY` | — | 可选；未配置时受公共 API 限流影响 |
+
+默认关闭 MCP，不影响本地文献问答、arXiv 搜索或 Crossref 元数据补全。启用后执行
+`docker compose up -d --build academic-search-mcp api worker`，再以管理员进入“管理 →
+Agent Harness”检测连接并刷新工具清单。外部学术结果只作为公开元数据展示；需要全文问答时，
+用户仍须确认导入 PDF 并等待页级索引完成。
 
 ### RAG 可观测性
 

@@ -597,6 +597,47 @@ class AgentToolArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class McpServerConfig(Base):
+    __tablename__ = "mcp_server_configs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    endpoint_url: Mapped[str] = mapped_column(String(1000))
+    transport: Mapped[str] = mapped_column(String(32), default="streamable_http")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    allowed_hosts: Mapped[list] = mapped_column(JSON, default=list)
+    health_status: Mapped[str] = mapped_column(String(32), default="unknown")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    circuit_open_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class McpToolSnapshot(Base):
+    __tablename__ = "mcp_tool_snapshots"
+    __table_args__ = (
+        UniqueConstraint("server_id", "normalized_name", name="uq_mcp_tool_server_name"),
+        Index("ix_mcp_tool_snapshots_server", "server_id", "discovered_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    server_id: Mapped[str] = mapped_column(
+        ForeignKey("mcp_server_configs.id", ondelete="CASCADE"), index=True
+    )
+    normalized_name: Mapped[str] = mapped_column(String(160))
+    remote_name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(Text, default="")
+    input_schema: Mapped[dict] = mapped_column(JSON, default=dict)
+    annotations: Mapped[dict] = mapped_column(JSON, default=dict)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MemoryItem(Base):
     __tablename__ = "memory_items"
     __table_args__ = (

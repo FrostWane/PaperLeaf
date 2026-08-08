@@ -30,6 +30,8 @@ from .models import (
     DiscoveryItem,
     Job,
     JobStatus,
+    McpServerConfig,
+    McpToolSnapshot,
     MemoryItem,
     MemoryItemVersion,
     Paper,
@@ -272,6 +274,35 @@ class ChatSessionRecord:
     entity_state: dict = field(default_factory=dict)
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class McpServerConfigRecord:
+    id: str
+    display_name: str
+    endpoint_url: str
+    transport: str = "streamable_http"
+    enabled: bool = True
+    allowed_hosts: list[str] = field(default_factory=list)
+    health_status: str = "unknown"
+    consecutive_failures: int = 0
+    circuit_open_until: datetime | None = None
+    last_checked_at: datetime | None = None
+    last_error_code: str | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class McpToolSnapshotRecord:
+    id: str
+    server_id: str
+    normalized_name: str
+    remote_name: str
+    description: str
+    input_schema: dict
+    annotations: dict
+    discovered_at: datetime = field(default_factory=now)
 
 
 @dataclass
@@ -617,6 +648,28 @@ class Repository(Protocol):
         record: AgentToolArtifactRecord,
         claim_token: str,
     ) -> AgentToolArtifactRecord | AgentToolArtifact | None: ...
+    async def list_agent_tool_calls_for_observability(
+        self, since: datetime, *, limit: int = 10000
+    ) -> list[AgentToolCallRecord | AgentToolCall]: ...
+    async def memory_observability_counts(self) -> dict[str, object]: ...
+    async def ensure_mcp_server_config(
+        self, record: McpServerConfigRecord
+    ) -> McpServerConfigRecord | McpServerConfig: ...
+    async def list_mcp_server_configs(
+        self,
+    ) -> list[McpServerConfigRecord | McpServerConfig]: ...
+    async def get_mcp_server_config(
+        self, server_id: str
+    ) -> McpServerConfigRecord | McpServerConfig | None: ...
+    async def update_mcp_server_config(
+        self, server_id: str, **changes: object
+    ) -> McpServerConfigRecord | McpServerConfig | None: ...
+    async def replace_mcp_tool_snapshots(
+        self, server_id: str, records: list[McpToolSnapshotRecord]
+    ) -> list[McpToolSnapshotRecord | McpToolSnapshot]: ...
+    async def list_mcp_tool_snapshots(
+        self, server_id: str
+    ) -> list[McpToolSnapshotRecord | McpToolSnapshot]: ...
     async def update_session_compaction(
         self,
         session_id: str,
@@ -661,6 +714,8 @@ class MemoryRepository:
         self.agent_run_events: dict[int, AgentRunEventRecord] = {}
         self.agent_tool_calls: dict[str, AgentToolCallRecord] = {}
         self.agent_tool_artifacts: dict[str, AgentToolArtifactRecord] = {}
+        self.mcp_server_configs: dict[str, McpServerConfigRecord] = {}
+        self.mcp_tool_snapshots: dict[str, McpToolSnapshotRecord] = {}
         self.memory_items: dict[str, MemoryItemRecord] = {}
         self.memory_item_versions: dict[str, MemoryItemVersionRecord] = {}
         self._next_agent_event_id = 1
@@ -2189,6 +2244,97 @@ class MemoryRepository:
         self.agent_tool_artifacts[record.id] = record
         return record
 
+    async def list_agent_tool_calls_for_observability(
+        self, since: datetime, *, limit: int = 10000
+    ) -> list[AgentToolCallRecord]:
+        return sorted(
+            (item for item in self.agent_tool_calls.values() if item.created_at >= since),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )[:limit]
+
+    async def memory_observability_counts(self) -> dict[str, object]:
+        records = list(self.memory_items.values())
+        types: dict[str, int] = {}
+        sources: dict[str, int] = {}
+        for item in records:
+            types[item.type] = types.get(item.type, 0) + 1
+            sources[item.source_kind] = sources.get(item.source_kind, 0) + 1
+        users = len({item.user_id for item in records})
+        return {
+            "total": len(records),
+            "active": sum(1 for item in records if item.enabled),
+            "disabled": sum(1 for item in records if not item.enabled),
+            "pinned": sum(1 for item in records if item.pinned),
+            "users_with_memory": users,
+            "capacity": users * 200,
+            "superseded_versions": sum(
+                1
+                for item in self.memory_item_versions.values()
+                if item.status == "superseded"
+            ),
+            "types": types,
+            "sources": sources,
+        }
+
+    async def ensure_mcp_server_config(
+        self, record: McpServerConfigRecord
+    ) -> McpServerConfigRecord:
+        existing = self.mcp_server_configs.get(record.id)
+        if existing:
+            return existing
+        self.mcp_server_configs[record.id] = record
+        return record
+
+    async def list_mcp_server_configs(self) -> list[McpServerConfigRecord]:
+        return sorted(self.mcp_server_configs.values(), key=lambda item: item.id)
+
+    async def get_mcp_server_config(self, server_id: str) -> McpServerConfigRecord | None:
+        return self.mcp_server_configs.get(server_id)
+
+    async def update_mcp_server_config(
+        self, server_id: str, **changes: object
+    ) -> McpServerConfigRecord | None:
+        record = self.mcp_server_configs.get(server_id)
+        if not record:
+            return None
+        for key in (
+            "enabled",
+            "health_status",
+            "consecutive_failures",
+            "circuit_open_until",
+            "last_checked_at",
+            "last_error_code",
+        ):
+            if key in changes:
+                setattr(record, key, changes[key])
+        record.updated_at = now()
+        return record
+
+    async def replace_mcp_tool_snapshots(
+        self, server_id: str, records: list[McpToolSnapshotRecord]
+    ) -> list[McpToolSnapshotRecord]:
+        self.mcp_tool_snapshots = {
+            key: value
+            for key, value in self.mcp_tool_snapshots.items()
+            if value.server_id != server_id
+        }
+        for record in records:
+            self.mcp_tool_snapshots[record.id] = record
+        return records
+
+    async def list_mcp_tool_snapshots(
+        self, server_id: str
+    ) -> list[McpToolSnapshotRecord]:
+        return sorted(
+            (
+                item
+                for item in self.mcp_tool_snapshots.values()
+                if item.server_id == server_id
+            ),
+            key=lambda item: item.normalized_name,
+        )
+
     async def publish_agent_paragraph(
         self,
         run_id: str,
@@ -3469,6 +3615,133 @@ class SQLAlchemyRepository:
             await session.commit()
             await session.refresh(value)
             return value
+
+    async def list_agent_tool_calls_for_observability(
+        self, since: datetime, *, limit: int = 10000
+    ) -> list[AgentToolCall]:
+        async with get_session_factory()() as session:
+            return list(
+                await session.scalars(
+                    select(AgentToolCall)
+                    .where(AgentToolCall.created_at >= since)
+                    .order_by(AgentToolCall.created_at.desc())
+                    .limit(limit)
+                )
+            )
+
+    async def memory_observability_counts(self) -> dict[str, object]:
+        async with get_session_factory()() as session:
+            totals = (
+                await session.execute(
+                    select(
+                        func.count(MemoryItem.id),
+                        func.count(MemoryItem.id).filter(MemoryItem.enabled.is_(True)),
+                        func.count(MemoryItem.id).filter(MemoryItem.enabled.is_(False)),
+                        func.count(MemoryItem.id).filter(MemoryItem.pinned.is_(True)),
+                        func.count(func.distinct(MemoryItem.user_id)),
+                    )
+                )
+            ).one()
+            type_rows = (
+                await session.execute(
+                    select(MemoryItem.type, func.count(MemoryItem.id)).group_by(
+                        MemoryItem.type
+                    )
+                )
+            ).all()
+            source_rows = (
+                await session.execute(
+                    select(MemoryItem.source_kind, func.count(MemoryItem.id)).group_by(
+                        MemoryItem.source_kind
+                    )
+                )
+            ).all()
+            superseded = await session.scalar(
+                select(func.count(MemoryItemVersion.id)).where(
+                    MemoryItemVersion.status == "superseded"
+                )
+            )
+            users = int(totals[4] or 0)
+            return {
+                "total": int(totals[0] or 0),
+                "active": int(totals[1] or 0),
+                "disabled": int(totals[2] or 0),
+                "pinned": int(totals[3] or 0),
+                "users_with_memory": users,
+                "capacity": users * 200,
+                "superseded_versions": int(superseded or 0),
+                "types": {str(key): int(count) for key, count in type_rows},
+                "sources": {str(key): int(count) for key, count in source_rows},
+            }
+
+    async def ensure_mcp_server_config(
+        self, record: McpServerConfigRecord
+    ) -> McpServerConfig:
+        async with get_session_factory()() as session:
+            value = await session.get(McpServerConfig, record.id)
+            if value:
+                return value
+            value = McpServerConfig(**record.__dict__)
+            session.add(value)
+            await session.commit()
+            await session.refresh(value)
+            return value
+
+    async def list_mcp_server_configs(self) -> list[McpServerConfig]:
+        async with get_session_factory()() as session:
+            return list(
+                await session.scalars(select(McpServerConfig).order_by(McpServerConfig.id))
+            )
+
+    async def get_mcp_server_config(self, server_id: str) -> McpServerConfig | None:
+        async with get_session_factory()() as session:
+            return await session.get(McpServerConfig, server_id)
+
+    async def update_mcp_server_config(
+        self, server_id: str, **changes: object
+    ) -> McpServerConfig | None:
+        async with get_session_factory()() as session:
+            value = await session.get(McpServerConfig, server_id)
+            if not value:
+                return None
+            for key in (
+                "enabled",
+                "health_status",
+                "consecutive_failures",
+                "circuit_open_until",
+                "last_checked_at",
+                "last_error_code",
+            ):
+                if key in changes:
+                    setattr(value, key, changes[key])
+            value.updated_at = now()
+            await session.commit()
+            await session.refresh(value)
+            return value
+
+    async def replace_mcp_tool_snapshots(
+        self, server_id: str, records: list[McpToolSnapshotRecord]
+    ) -> list[McpToolSnapshot]:
+        async with get_session_factory()() as session:
+            await session.execute(
+                delete(McpToolSnapshot).where(McpToolSnapshot.server_id == server_id)
+            )
+            values = [McpToolSnapshot(**record.__dict__) for record in records]
+            session.add_all(values)
+            await session.commit()
+            for value in values:
+                await session.refresh(value)
+            return values
+
+    async def list_mcp_tool_snapshots(self, server_id: str) -> list[McpToolSnapshot]:
+        async with get_session_factory()() as session:
+            return list(
+                await session.scalars(
+                    select(McpToolSnapshot)
+                    .where(McpToolSnapshot.server_id == server_id)
+                    .order_by(McpToolSnapshot.normalized_name)
+                )
+            )
 
     async def finish_agent_tool_call(
         self,
