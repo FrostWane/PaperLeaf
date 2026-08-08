@@ -38,6 +38,20 @@ class Settings:
     skills_enabled: bool = _bool("PAPERLEAF_SKILLS_ENABLED", False)
     function_tools_enabled: bool = _bool("PAPERLEAF_FUNCTION_TOOLS_ENABLED", False)
     mcp_enabled: bool = _bool("PAPERLEAF_MCP_ENABLED", False)
+    academic_mcp_url: str = os.getenv(
+        "PAPERLEAF_ACADEMIC_MCP_URL", "http://academic-search-mcp:8080/mcp"
+    )
+    academic_mcp_allowed_hosts: str = os.getenv(
+        "PAPERLEAF_ACADEMIC_MCP_ALLOWED_HOSTS", "academic-search-mcp"
+    )
+    mcp_timeout_seconds: float = float(os.getenv("PAPERLEAF_MCP_TIMEOUT_SECONDS", "15"))
+    mcp_cache_ttl_seconds: int = int(os.getenv("PAPERLEAF_MCP_CACHE_TTL_SECONDS", "900"))
+    mcp_circuit_failure_threshold: int = int(
+        os.getenv("PAPERLEAF_MCP_CIRCUIT_FAILURE_THRESHOLD", "3")
+    )
+    mcp_circuit_cooldown_seconds: int = int(
+        os.getenv("PAPERLEAF_MCP_CIRCUIT_COOLDOWN_SECONDS", "60")
+    )
     model_context_tokens: int = int(os.getenv("PAPERLEAF_MODEL_CONTEXT_TOKENS", "32768"))
     context_safety_ratio: float = float(
         os.getenv("PAPERLEAF_CONTEXT_SAFETY_RATIO", "0.10")
@@ -216,6 +230,14 @@ class Settings:
             raise RuntimeError("单轮记忆数量必须位于 1 到 20 之间")
         if self.context_max_skills != 1:
             raise RuntimeError("当前版本每轮只允许加载一个主 Skill")
+        if not 1 <= self.mcp_timeout_seconds <= 60:
+            raise RuntimeError("MCP 超时必须位于 1 到 60 秒之间")
+        if not 60 <= self.mcp_cache_ttl_seconds <= 86400:
+            raise RuntimeError("MCP 缓存时间必须位于 60 到 86400 秒之间")
+        if self.mcp_circuit_failure_threshold < 1:
+            raise RuntimeError("MCP 熔断阈值必须至少为 1")
+        if not 1 <= self.mcp_circuit_cooldown_seconds <= 3600:
+            raise RuntimeError("MCP 熔断冷却时间必须位于 1 到 3600 秒之间")
         if self.chunk_target_tokens <= 0:
             raise RuntimeError("Chunk 目标长度必须为正数")
         if not 0 <= self.chunk_overlap_tokens < self.chunk_target_tokens:

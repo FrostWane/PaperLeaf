@@ -374,6 +374,91 @@ export interface AdminRagObservability {
   privacy: { contentCollected: boolean; identifiersCollected: boolean };
 }
 
+export interface AdminHarnessMetrics {
+  windowHours: number;
+  generatedAt: string;
+  limitReached: boolean;
+  context: {
+    runs: number;
+    compactedRuns: number;
+    compressionRate: number;
+    tokensBefore: number;
+    tokensAfter: number;
+    buildP50Ms?: number;
+    buildP95Ms?: number;
+    contextLimitErrors: number;
+    contextLimitRate: number;
+    referenceConfidenceAverage?: number;
+    referenceConfidenceBands: { high: number; medium: number; clarify: number };
+    clarificationRate: number;
+  };
+  memory: {
+    total: number;
+    active: number;
+    disabled: number;
+    pinned: number;
+    usersWithMemory: number;
+    capacity: number;
+    supersededVersions: number;
+    types: Record<string, number>;
+    sources: Record<string, number>;
+  };
+  skills: {
+    runs: number;
+    distribution: Array<{ skill: string; runs: number; terminalRuns: number; completionRate: number }>;
+    routeSources: Record<string, number>;
+    fallbackRuns: number;
+  };
+  tools: {
+    calls: number;
+    successful: number;
+    successRate: number;
+    p50Ms?: number;
+    p95Ms?: number;
+    retriedCalls: number;
+    timeouts: number;
+    permissionDenied: number;
+    statuses: Record<string, number>;
+    distribution: Array<{ tool: string; calls: number }>;
+    errorCategories: Record<string, number>;
+  };
+  mcp: {
+    calls: number;
+    successful: number;
+    successRate: number;
+    servers: Array<{
+      id: string;
+      displayName: string;
+      enabled: boolean;
+      healthStatus: string;
+      consecutiveFailures: number;
+      circuitOpenUntil?: string;
+      lastCheckedAt?: string;
+      lastErrorCode?: string;
+    }>;
+  };
+  privacy: { contentCollected: boolean; identifiersCollected: boolean };
+}
+
+export interface AdminMcpServer {
+  id: string;
+  displayName: string;
+  transport: string;
+  enabled: boolean;
+  healthStatus: string;
+  consecutiveFailures: number;
+  circuitOpenUntil?: string;
+  lastCheckedAt?: string;
+  lastErrorCode?: string;
+  toolCount: number;
+  tools: Array<{ name: string; description: string; annotations: Record<string, unknown>; discoveredAt: string }>;
+}
+
+export interface AdminMcpServers {
+  featureEnabled: boolean;
+  servers: AdminMcpServer[];
+}
+
 export type ChatSessionType = "paper" | "collection" | "library";
 export type AgentRunStatus = "pending" | "running" | "interrupted" | "completed" | "failed" | "cancelled";
 

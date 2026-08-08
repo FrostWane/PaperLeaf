@@ -37,6 +37,7 @@ from .arxiv_import import import_arxiv_paper
 from .config import settings
 from .crossref_service import crossref_client
 from .db import get_session_factory
+from .mcp_gateway import McpGateway
 from .model_runtime import ModelProvider, ModelRouter, ModelRuntimeError, build_model_router
 from .models import (
     Job,
@@ -63,6 +64,7 @@ from .rag.answer_quality import AnswerQualityPolicy
 from .rag.chunking import PageText, chunk_pages, chunk_pages_fixed_window
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import SQLAlchemyRepository
+from .runtime_store import create_runtime_store
 from .storage import create_storage
 
 logger = logging.getLogger("paperleaf.worker")
@@ -83,10 +85,14 @@ async def confirmed_agent_import(user_id: str, candidate: dict) -> object:
 
 agent_graph: object | None = None
 skill_registry = SkillRegistry.default()
+agent_repository = SQLAlchemyRepository(settings.session_secret)
+agent_runtime_store = create_runtime_store(settings)
+agent_mcp_gateway = McpGateway(agent_repository, agent_runtime_store, settings)
 function_tool_harness = FunctionToolHarness(
-    SQLAlchemyRepository(settings.session_secret),
+    agent_repository,
     agent_retriever,
     model_router,
+    mcp_gateway=agent_mcp_gateway if settings.mcp_enabled else None,
     confirmed_importer=confirmed_agent_import,
 )
 JOB_LEASE = timedelta(minutes=30)
@@ -1552,19 +1558,23 @@ async def run_worker() -> None:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
     checkpoint_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
-        await checkpointer.setup()
-        agent_graph = build_worker_agent_graph(checkpointer)
-        while True:
-            claimed_job = await claim_job()
-            if not claimed_job:
-                await asyncio.sleep(2)
-                continue
-            try:
-                await process_job(claimed_job)
-            except Exception as exc:  # 作业失败必须被归档并可重试
-                logger.exception("作业 %s 执行失败", claimed_job.id)
-                await fail_job(claimed_job, exc)
+    try:
+        async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
+            await checkpointer.setup()
+            agent_graph = build_worker_agent_graph(checkpointer)
+            while True:
+                claimed_job = await claim_job()
+                if not claimed_job:
+                    await asyncio.sleep(2)
+                    continue
+                try:
+                    await process_job(claimed_job)
+                except Exception as exc:  # 作业失败必须被归档并可重试
+                    logger.exception("作业 %s 执行失败", claimed_job.id)
+                    await fail_job(claimed_job, exc)
+    finally:
+        await agent_mcp_gateway.close()
+        await agent_runtime_store.close()
 
 
 if __name__ == "__main__":

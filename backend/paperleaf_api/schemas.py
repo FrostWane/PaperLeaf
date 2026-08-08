@@ -33,6 +33,12 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
 
 
+class McpServerUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class UserPreferences(BaseModel):
     font_scale: Literal["small", "standard", "large"] = "standard"
     pdf_zoom: int = Field(default=100, ge=50, le=200)

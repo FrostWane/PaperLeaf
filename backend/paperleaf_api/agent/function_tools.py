@@ -13,6 +13,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..crossref_service import CrossrefClient, crossref_client
+from ..mcp_gateway import McpGateway, McpGatewayError
 from ..model_runtime import ModelRouter, ModelRuntimeError
 from ..rag.citations import Evidence
 from ..repository import (
@@ -58,6 +59,20 @@ class CrossrefToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     doi: str = Field(min_length=3, max_length=300)
+
+
+class AcademicSearchToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class AcademicMetadataToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identifier: str = Field(min_length=1, max_length=300)
+    source: Literal["auto", "openalex", "semantic_scholar"] = "auto"
 
 
 class PaperArtifactToolInput(BaseModel):
@@ -162,6 +177,39 @@ TOOL_SPECS = (
         1,
         "搜索与当前问题相关的公开论文元数据，当前先使用 arXiv。",
         ArxivToolInput,
+        "read",
+        20,
+        1,
+        True,
+        "none",
+    ),
+    ToolSpec(
+        "mcp__academic__search_openalex",
+        1,
+        "通过受控 MCP 查询 OpenAlex 公开学术元数据；结果不能替代论文原文证据。",
+        AcademicSearchToolInput,
+        "read",
+        20,
+        1,
+        True,
+        "none",
+    ),
+    ToolSpec(
+        "mcp__academic__search_semantic_scholar",
+        1,
+        "通过受控 MCP 查询 Semantic Scholar 公开学术元数据。",
+        AcademicSearchToolInput,
+        "read",
+        20,
+        1,
+        True,
+        "none",
+    ),
+    ToolSpec(
+        "mcp__academic__get_academic_metadata",
+        1,
+        "通过受控 MCP 按公开文献标识读取学术元数据。",
+        AcademicMetadataToolInput,
         "read",
         20,
         1,
@@ -413,6 +461,7 @@ class FunctionToolHarness:
         planner: ToolPlanner | None = None,
         arxiv_search: SearchArxivTool | None = None,
         crossref: CrossrefClient | None = None,
+        mcp_gateway: McpGateway | None = None,
         confirmed_importer: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
     ) -> None:
         self.repository = repository
@@ -420,6 +469,7 @@ class FunctionToolHarness:
         self.planner = planner or OpenAIFunctionPlanner(model_router)
         self.arxiv_search = arxiv_search or ArxivSearch()
         self.crossref = crossref or crossref_client
+        self.mcp_gateway = mcp_gateway
         self.confirmed_importer = confirmed_importer
         self.specs = {item.name: item for item in TOOL_SPECS}
 
@@ -480,7 +530,14 @@ class FunctionToolHarness:
     def schemas_for(self, skill: SkillDefinition, *, web_enabled: bool) -> list[dict[str, Any]]:
         allowed = set(skill.manifest.allowed_tools)
         if not web_enabled:
-            allowed -= {"search_arxiv", "find_related_papers", "request_import"}
+            allowed = {
+                name
+                for name in allowed
+                if name not in {"search_arxiv", "find_related_papers", "request_import"}
+                and not name.startswith("mcp__")
+            }
+        if self.mcp_gateway is None:
+            allowed = {name for name in allowed if not name.startswith("mcp__")}
         return [
             self.specs[name].openai_schema()
             for name in skill.manifest.allowed_tools
@@ -570,8 +627,8 @@ class FunctionToolHarness:
             return await self._record_rejection(call, context, "TOOL_NOT_ALLOWED")
         if (
             call.name in {"search_arxiv", "find_related_papers", "request_import"}
-            and not context.web_enabled
-        ):
+            or call.name.startswith("mcp__")
+        ) and not context.web_enabled:
             return await self._record_rejection(call, context, "WEB_SEARCH_DISABLED")
         parsed = spec.input_model.model_validate(call.arguments)
         record = AgentToolCallRecord(
@@ -635,6 +692,16 @@ class FunctionToolHarness:
             except PermissionError:
                 error_code = "TOOL_PERMISSION_DENIED"
                 break
+            except McpGatewayError as error:
+                error_code = error.code
+                if error.code in {
+                    "MCP_DISABLED",
+                    "MCP_CIRCUIT_OPEN",
+                    "MCP_HOST_NOT_ALLOWED",
+                    "MCP_PRIVATE_IP_REJECTED",
+                    "MCP_TOOL_NOT_ALLOWED",
+                }:
+                    break
             except Exception:
                 error_code = "TOOL_FAILED"
             if attempt >= spec.retries:
@@ -828,6 +895,19 @@ class FunctionToolHarness:
             return _ExecutedTool(
                 {"source": "arXiv", "count": len(response.data), "items": response.data[:5]},
                 arxiv_candidates=tuple(response.data[:5]),
+            )
+        if name.startswith("mcp__academic__"):
+            if self.mcp_gateway is None:
+                raise RuntimeError("MCP_GATEWAY_UNAVAILABLE")
+            result = await self.mcp_gateway.call(name, parsed.model_dump(mode="json"))
+            return _ExecutedTool(
+                {
+                    "source": result.get("source", "学术搜索"),
+                    "available": result.get("available", True),
+                    "cached": result.get("cached", False),
+                    "error_code": result.get("error_code"),
+                    "items": result.get("results", [])[:10],
+                }
             )
         if name == "get_crossref_metadata":
             request = CrossrefToolInput.model_validate(parsed.model_dump())

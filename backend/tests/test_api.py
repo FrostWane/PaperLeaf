@@ -136,6 +136,32 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
             "content_collected": False,
             "identifiers_collected": False,
         }
+        harness_metrics = admin_client.get("/api/v1/admin/harness/metrics?window=24h")
+        assert harness_metrics.status_code == 200
+        assert harness_metrics.json()["privacy"] == {
+            "content_collected": False,
+            "identifiers_collected": False,
+        }
+        mcp_servers = admin_client.get("/api/v1/admin/mcp/servers")
+        assert mcp_servers.status_code == 200
+        assert mcp_servers.json()["feature_enabled"] is False
+        assert mcp_servers.json()["servers"][0]["id"] == "academic"
+        assert admin_client.patch(
+            "/api/v1/admin/mcp/servers/academic", json={"enabled": False}
+        ).status_code == 403
+        disabled_mcp = admin_client.patch(
+            "/api/v1/admin/mcp/servers/academic",
+            headers={"X-CSRF-Token": csrf},
+            json={"enabled": False},
+        )
+        assert disabled_mcp.status_code == 200
+        blocked_enable = admin_client.patch(
+            "/api/v1/admin/mcp/servers/academic",
+            headers={"X-CSRF-Token": csrf},
+            json={"enabled": True},
+        )
+        assert blocked_enable.status_code == 409
+        assert "PAPERLEAF_MCP_ENABLED" in blocked_enable.json()["detail"]
         created = admin_client.post(
             "/api/v1/admin/users",
             headers={"X-CSRF-Token": csrf},
@@ -172,6 +198,8 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
         assert changed.status_code == 200
         assert changed.json()["must_change_password"] is False
         assert reader_client.get("/api/v1/admin/observability").status_code == 403
+        assert reader_client.get("/api/v1/admin/harness/metrics").status_code == 403
+        assert reader_client.get("/api/v1/admin/mcp/servers").status_code == 403
         assert reader_client.get(f"/api/v1/papers/{paper_id}").status_code == 404
         assert reader_client.get("/api/v1/papers").json() == []
         isolated_bulk = reader_client.post(

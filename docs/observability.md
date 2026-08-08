@@ -28,6 +28,19 @@ GET /api/v1/admin/observability?window=24h
 
 管理员页还展示 Redis 可用状态、已用/最大内存、Key 数、连接数、活跃用户、处理中任务和 AI 服务状态。Redis 指标只表示短期运行态容量；业务数据容量仍应从 PostgreSQL 与 MinIO 监控。
 
+## Agent Harness 聚合
+
+“管理 → Agent Harness”按 24 小时、7 天或 30 天展示 Context Token 压缩、指代置信度、Skill 路由、Tool 调用和 MCP 成功率；长期记忆只展示当前条目、启用数、有记忆用户数和这些用户的容量快照。接口为：
+
+```text
+GET /api/v1/admin/harness/metrics?window=24h
+GET /api/v1/admin/mcp/servers
+```
+
+Token 压缩率是窗口内压缩前后 Token 总量的削减比例，不是触发压缩的运行比例。指代需澄清率只以存在置信度的 Run 为分母。Skill 完成率只计算 `completed/failed/cancelled` 终态，等待中或运行中的 Run 不进入分母。达到最近 5000 次 Run 或 10000 次 Tool Call 查询上限时页面会显示截断警告。
+
+MCP/Tool 指标只使用服务、工具、状态和错误分类等低基数标签；问题、用户、论文、Session、Chunk、Memory、参数和结果不能进入 Prometheus 标签或管理员聚合。接口失败与真实零样本在前端分开显示，上一次成功结果会明确标注后保留。
+
 ## Prometheus 与 Grafana
 
 Docker Compose 默认启动：

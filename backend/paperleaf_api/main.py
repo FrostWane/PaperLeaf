@@ -51,6 +51,8 @@ from .arxiv_service import (
 )
 from .config import Settings, settings
 from .discovery import build_discovery_profile, collect_recommendations, with_indexed_text
+from .harness_observability import aggregate_harness_metrics
+from .mcp_gateway import McpGateway, McpGatewayError
 from .model_runtime import build_model_router
 from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
@@ -96,6 +98,7 @@ from .schemas import (
     DiscoveryRecommendationResponse,
     JobRead,
     LoginRequest,
+    McpServerUpdate,
     MemoryClearRead,
     MemoryCreate,
     MemoryListRead,
@@ -159,6 +162,7 @@ class AppServices:
         )
         self.agent_graph = self.build_agent_graph()
         self.skill_registry = SkillRegistry.default()
+        self.mcp_gateway = McpGateway(self.repository, self.runtime_store, config)
 
         async def confirmed_importer(user_id: str, candidate: dict[str, Any]) -> Any:
             return await import_arxiv_paper(
@@ -173,6 +177,7 @@ class AppServices:
             self.repository,
             self.retriever,
             self.model_router,
+            mcp_gateway=self.mcp_gateway if config.mcp_enabled else None,
             confirmed_importer=confirmed_importer,
         )
         self.checkpointer: Optional[Any] = None
@@ -444,6 +449,7 @@ def create_app(
             try:
                 yield
             finally:
+                await services.mcp_gateway.close()
                 await services.runtime_store.close()
             return
         # LangGraph 使用独立的 PostgreSQL Checkpointer，业务表不存放隐藏推理内容。
@@ -458,6 +464,7 @@ def create_app(
                 yield
             finally:
                 services.checkpointer = None
+                await services.mcp_gateway.close()
                 await services.runtime_store.close()
 
     app = FastAPI(
@@ -804,6 +811,126 @@ def create_app(
             "identifiers_collected": False,
         }
         return report
+
+    @app.get("/api/v1/admin/mcp/servers")
+    async def list_admin_mcp_servers(
+        _: Annotated[UserRecord, Depends(admin_user)],
+    ) -> dict[str, Any]:
+        servers = await services.mcp_gateway.list_servers()
+        payload = []
+        for server in servers:
+            tools = await services.repository.list_mcp_tool_snapshots(server.id)
+            payload.append(
+                {
+                    "id": server.id,
+                    "display_name": server.display_name,
+                    "transport": server.transport,
+                    "enabled": server.enabled,
+                    "health_status": server.health_status,
+                    "consecutive_failures": server.consecutive_failures,
+                    "circuit_open_until": server.circuit_open_until,
+                    "last_checked_at": server.last_checked_at,
+                    "last_error_code": server.last_error_code,
+                    "tool_count": len(tools),
+                    "tools": [
+                        {
+                            "name": item.normalized_name,
+                            "description": item.description,
+                            "annotations": item.annotations,
+                            "discovered_at": item.discovered_at,
+                        }
+                        for item in tools
+                    ],
+                }
+            )
+        return {"feature_enabled": config.mcp_enabled, "servers": payload}
+
+    @app.get("/api/v1/admin/harness/metrics")
+    async def admin_harness_metrics(
+        _: Annotated[UserRecord, Depends(admin_user)],
+        window: str = "24h",
+    ) -> dict[str, Any]:
+        windows = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+        if window not in windows:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "统计窗口仅支持 24h、7d 或 30d"
+            )
+        hours = windows[window]
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        run_limit = 5000
+        tool_limit = 10000
+        runs, calls, memory, servers = await asyncio.gather(
+            services.repository.list_agent_runs_for_observability(
+                since, limit=run_limit
+            ),
+            services.repository.list_agent_tool_calls_for_observability(
+                since, limit=tool_limit
+            ),
+            services.repository.memory_observability_counts(),
+            services.mcp_gateway.list_servers(),
+        )
+        return aggregate_harness_metrics(
+            runs,
+            calls,
+            memory,
+            servers,
+            window_hours=hours,
+            limit_reached=len(runs) >= run_limit or len(calls) >= tool_limit,
+        )
+
+    @app.patch("/api/v1/admin/mcp/servers/{server_id}")
+    async def update_admin_mcp_server(
+        server_id: str,
+        payload: McpServerUpdate,
+        _: Annotated[UserRecord, Depends(admin_user)],
+        __: Annotated[None, Depends(csrf_protected)],
+    ) -> dict[str, Any]:
+        if server_id != "academic":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP 服务不存在")
+        if payload.enabled and not config.mcp_enabled:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "服务端尚未启用 PAPERLEAF_MCP_ENABLED，修改配置后需重启服务",
+            )
+        updated = await services.mcp_gateway.set_enabled(payload.enabled)
+        return {
+            "id": updated.id,
+            "enabled": updated.enabled,
+            "health_status": updated.health_status,
+        }
+
+    @app.post("/api/v1/admin/mcp/servers/{server_id}/test")
+    async def test_admin_mcp_server(
+        server_id: str,
+        _: Annotated[UserRecord, Depends(admin_user)],
+        __: Annotated[None, Depends(csrf_protected)],
+    ) -> dict[str, Any]:
+        if server_id != "academic":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP 服务不存在")
+        try:
+            return await services.mcp_gateway.test()
+        except McpGatewayError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"学术 MCP 检测失败：{exc.code}",
+            ) from exc
+
+    @app.post("/api/v1/admin/mcp/servers/{server_id}/refresh")
+    async def refresh_admin_mcp_server(
+        server_id: str,
+        _: Annotated[UserRecord, Depends(admin_user)],
+        __: Annotated[None, Depends(csrf_protected)],
+    ) -> dict[str, Any]:
+        if server_id != "academic":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP 服务不存在")
+        try:
+            tools = await services.mcp_gateway.refresh()
+        except McpGatewayError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"MCP 工具刷新失败：{exc.code}",
+            ) from exc
+        return {"server_id": server_id, "tool_count": len(tools)}
 
     @app.get(
         "/api/v1/admin/discovery-metrics",

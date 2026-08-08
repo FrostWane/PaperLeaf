@@ -30,6 +30,7 @@ dependencies = [
   "redis>=5,<7",
   "prometheus-client>=0.21,<1",
   "PyYAML>=6,<7",
+  "mcp>=1.13,<2",
 ]
 
 [project.optional-dependencies]

@@ -143,7 +143,7 @@ describe("AdminView 管理信息语义", () => {
     fireEvent.click(await screen.findByRole("button", { name: "停用用户 only-admin" }));
     expect(screen.getByRole("dialog", { name: "确认停用用户" })).toHaveTextContent("停用后，该用户的现有会话将失效");
     fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("不能停用或降级最后一名管理员"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("不能停用或降级最后一名管理员"));
   });
 
   it("单独展示推荐点击率、兴趣命中率和清晰口径", async () => {
@@ -186,7 +186,7 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.queryByText("林研究员")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("tab", { name: /RAG 质量/ }));
     expect((await screen.findAllByText("66.7%")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByRole("status")).toHaveTextContent("用户数据暂不可用");
+    expect(screen.getByRole("alert")).toHaveTextContent("用户数据暂不可用");
     expect(screen.queryByText("林研究员")).not.toBeInTheDocument();
   });
 
@@ -256,5 +256,81 @@ describe("AdminView 管理信息语义", () => {
     expect(await screen.findByText(/测试失败 16$/)).toBeInTheDocument();
     expect(container.querySelectorAll(".job-row")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+  });
+
+  it("按需展示 Harness 聚合指标并管理白名单 MCP 服务", async () => {
+    let connectionTests = 0;
+    server.use(
+      http.get(`${API_BASE_URL}/admin/harness/metrics`, () => HttpResponse.json({
+        window_hours: 24,
+        generated_at: "2026-08-08T12:00:00Z",
+        limit_reached: false,
+        context: { runs: 20, compacted_runs: 8, compression_rate: 0.42, tokens_before: 100000, tokens_after: 58000, build_p50_ms: 35, build_p95_ms: 96, context_limit_errors: 1, context_limit_rate: 0.05, reference_confidence_average: 0.87, reference_confidence_bands: { high: 16, medium: 3, clarify: 1 }, clarification_rate: 0.05 },
+        memory: { total: 12, active: 10, disabled: 2, pinned: 3, users_with_memory: 4, capacity: 800, superseded_versions: 2, types: { preference: 6 }, sources: { explicit: 8 } },
+        skills: { runs: 20, fallback_runs: 1, route_sources: { model: 18, fallback: 2 }, distribution: [{ skill: "paper_qa", runs: 12, terminal_runs: 12, completion_rate: 0.9167 }] },
+        tools: { calls: 30, successful: 28, success_rate: 0.9333, p50_ms: 88, p95_ms: 610, retried_calls: 2, timeouts: 1, permission_denied: 0, statuses: { completed: 28 }, error_categories: { timeout: 1 }, distribution: [{ tool: "search_library", calls: 20 }] },
+        mcp: { calls: 5, successful: 4, success_rate: 0.8, servers: [{ id: "academic", display_name: "学术搜索", enabled: true, health_status: "healthy", consecutive_failures: 0 }] },
+        privacy: { content_collected: false, identifiers_collected: false },
+        debug_memory_text: "绝密记忆不应展示",
+      })),
+      http.get(`${API_BASE_URL}/admin/mcp/servers`, () => HttpResponse.json({
+        feature_enabled: true,
+        servers: [{ id: "academic", display_name: "学术搜索", transport: "streamable_http", enabled: true, health_status: "healthy", consecutive_failures: 0, tool_count: 3, tools: [] }],
+      })),
+      http.post(`${API_BASE_URL}/admin/mcp/servers/academic/test`, async () => {
+        connectionTests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    render(<AdminView />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent Harness" }));
+
+    expect(await screen.findByRole("heading", { name: "Agent Harness" })).toBeInTheDocument();
+    expect(screen.getByText("42.0%")).toBeInTheDocument();
+    expect(screen.getByText("10 / 12")).toBeInTheDocument();
+    expect(screen.getByText("93.3%")).toBeInTheDocument();
+    expect(screen.getByText("学术搜索")).toBeInTheDocument();
+    expect(screen.getByText(/可用 · 3 个已发现工具/)).toBeInTheDocument();
+    expect(screen.queryByText("绝密记忆不应展示")).not.toBeInTheDocument();
+
+    const testConnection = screen.getByRole("button", { name: "检测学术搜索连接" });
+    fireEvent.click(testConnection);
+    expect(testConnection).toBeDisabled();
+    fireEvent.click(testConnection);
+    await waitFor(() => expect(connectionTests).toBe(1));
+  });
+
+  it("Harness 指标失败时不伪装成零数据，并保留独立 MCP 状态", async () => {
+    server.use(
+      http.get(`${API_BASE_URL}/admin/harness/metrics`, () => HttpResponse.json(
+        { detail: "指标服务暂不可用" },
+        { status: 503 },
+      )),
+      http.get(`${API_BASE_URL}/admin/mcp/servers`, () => HttpResponse.json({
+        feature_enabled: true,
+        servers: [{ id: "academic", display_name: "学术搜索", transport: "streamable_http", enabled: true, health_status: "healthy", consecutive_failures: 0, tool_count: 3, tools: [] }],
+      })),
+    );
+
+    render(<AdminView />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent Harness" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("指标服务暂不可用");
+    expect(screen.getByText("暂时无法读取 Harness 指标")).toBeInTheDocument();
+    expect(screen.queryByText("0 → 0")).not.toBeInTheDocument();
+    expect(screen.getByText(/可用 · 3 个已发现工具/)).toBeInTheDocument();
+  });
+
+  it("管理页签支持方向键切换与焦点跟随", async () => {
+    render(<AdminView />);
+    const overview = await screen.findByRole("tab", { name: "运行概览" });
+    overview.focus();
+    fireEvent.keyDown(overview, { key: "ArrowRight" });
+    const rag = screen.getByRole("tab", { name: "RAG 质量" });
+    expect(rag).toHaveFocus();
+    expect(rag).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "RAG 质量" })).toBeInTheDocument();
   });
 });

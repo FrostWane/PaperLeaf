@@ -633,6 +633,24 @@ async def execute_agent_run(
                 initial["pre_arxiv_candidates"] = list(tool_loop_result.arxiv_candidates)
                 initial["tool_steps"] = tool_loop_result.steps
                 initial["tool_calls"] = list(tool_loop_result.calls)
+                external_results = [
+                    item
+                    for item in tool_loop_result.calls
+                    if str(item.get("tool", "")).startswith("mcp__")
+                    and item.get("status") == "succeeded"
+                ]
+                if external_results:
+                    initial["messages"] = [
+                        *initial["messages"],
+                        {
+                            "role": "external_tool",
+                            "content": json.dumps(
+                                external_results,
+                                ensure_ascii=False,
+                                default=str,
+                            )[:16_000],
+                        },
+                    ]
                 initial["stage_timings_ms"]["retrieval"] = round(
                     (time.perf_counter() - tool_started_at) * 1000
                 )

@@ -2,7 +2,7 @@ import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
 import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
-import type { AdminDiscoveryMetrics, AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatClientContext, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
+import type { AdminDiscoveryMetrics, AdminHarnessMetrics, AdminJob, AdminMcpServers, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatClientContext, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -671,6 +671,75 @@ export async function getAdminRagObservability(window: "24h" | "7d" | "30d" = "2
     },
     privacy: { contentCollected: privacy.content_collected === true, identifiersCollected: privacy.identifiers_collected === true },
   };
+}
+
+export async function getAdminHarnessMetrics(window: "24h" | "7d" | "30d" = "24h"): Promise<AdminHarnessMetrics> {
+  const response = await fetch(`${API_BASE_URL}/admin/harness/metrics?window=${window}`, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw await apiError(response, "Harness 指标读取失败");
+  const raw = await response.json() as Record<string, unknown>;
+  const context = (raw.context ?? {}) as Record<string, unknown>;
+  const memory = (raw.memory ?? {}) as Record<string, unknown>;
+  const skills = (raw.skills ?? {}) as Record<string, unknown>;
+  const tools = (raw.tools ?? {}) as Record<string, unknown>;
+  const mcp = (raw.mcp ?? {}) as Record<string, unknown>;
+  const privacy = (raw.privacy ?? {}) as Record<string, unknown>;
+  const bands = (context.reference_confidence_bands ?? {}) as Record<string, unknown>;
+  const optionalNumber = (value: unknown): number | undefined => typeof value === "number" ? value : undefined;
+  const numberMap = (value: unknown): Record<string, number> => Object.fromEntries(
+    Object.entries(value && typeof value === "object" ? value as Record<string, unknown> : {})
+      .map(([key, count]) => [key, Number(count ?? 0)]),
+  );
+  return {
+    windowHours: Number(raw.window_hours ?? 24),
+    generatedAt: String(raw.generated_at ?? ""),
+    limitReached: raw.limit_reached === true,
+    context: {
+      runs: Number(context.runs ?? 0), compactedRuns: Number(context.compacted_runs ?? 0), compressionRate: Number(context.compression_rate ?? 0), tokensBefore: Number(context.tokens_before ?? 0), tokensAfter: Number(context.tokens_after ?? 0), buildP50Ms: optionalNumber(context.build_p50_ms), buildP95Ms: optionalNumber(context.build_p95_ms), contextLimitErrors: Number(context.context_limit_errors ?? 0), contextLimitRate: Number(context.context_limit_rate ?? 0), referenceConfidenceAverage: optionalNumber(context.reference_confidence_average), referenceConfidenceBands: { high: Number(bands.high ?? 0), medium: Number(bands.medium ?? 0), clarify: Number(bands.clarify ?? 0) }, clarificationRate: Number(context.clarification_rate ?? 0),
+    },
+    memory: {
+      total: Number(memory.total ?? 0), active: Number(memory.active ?? 0), disabled: Number(memory.disabled ?? 0), pinned: Number(memory.pinned ?? 0), usersWithMemory: Number(memory.users_with_memory ?? 0), capacity: Number(memory.capacity ?? 0), supersededVersions: Number(memory.superseded_versions ?? 0), types: numberMap(memory.types), sources: numberMap(memory.sources),
+    },
+    skills: {
+      runs: Number(skills.runs ?? 0), fallbackRuns: Number(skills.fallback_runs ?? 0), routeSources: numberMap(skills.route_sources), distribution: (Array.isArray(skills.distribution) ? skills.distribution : []).map((entry) => { const item = entry as Record<string, unknown>; return { skill: String(item.skill ?? "unknown"), runs: Number(item.runs ?? 0), terminalRuns: Number(item.terminal_runs ?? 0), completionRate: Number(item.completion_rate ?? 0) }; }),
+    },
+    tools: {
+      calls: Number(tools.calls ?? 0), successful: Number(tools.successful ?? 0), successRate: Number(tools.success_rate ?? 0), p50Ms: optionalNumber(tools.p50_ms), p95Ms: optionalNumber(tools.p95_ms), retriedCalls: Number(tools.retried_calls ?? 0), timeouts: Number(tools.timeouts ?? 0), permissionDenied: Number(tools.permission_denied ?? 0), statuses: numberMap(tools.statuses), errorCategories: numberMap(tools.error_categories), distribution: (Array.isArray(tools.distribution) ? tools.distribution : []).map((entry) => { const item = entry as Record<string, unknown>; return { tool: String(item.tool ?? "unknown"), calls: Number(item.calls ?? 0) }; }),
+    },
+    mcp: {
+      calls: Number(mcp.calls ?? 0), successful: Number(mcp.successful ?? 0), successRate: Number(mcp.success_rate ?? 0), servers: (Array.isArray(mcp.servers) ? mcp.servers : []).map((entry) => { const item = entry as Record<string, unknown>; return { id: String(item.id ?? "unknown"), displayName: String(item.display_name ?? "MCP"), enabled: item.enabled === true, healthStatus: String(item.health_status ?? "unknown"), consecutiveFailures: Number(item.consecutive_failures ?? 0), circuitOpenUntil: item.circuit_open_until ? String(item.circuit_open_until) : undefined, lastCheckedAt: item.last_checked_at ? String(item.last_checked_at) : undefined, lastErrorCode: item.last_error_code ? String(item.last_error_code) : undefined }; }),
+    },
+    privacy: { contentCollected: privacy.content_collected === true, identifiersCollected: privacy.identifiers_collected === true },
+  };
+}
+
+export async function listAdminMcpServers(): Promise<AdminMcpServers> {
+  const response = await fetch(`${API_BASE_URL}/admin/mcp/servers`, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw await apiError(response, "MCP 服务状态读取失败");
+  const raw = await response.json() as Record<string, unknown>;
+  return {
+    featureEnabled: raw.feature_enabled === true,
+    servers: (Array.isArray(raw.servers) ? raw.servers : []).map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        id: String(item.id), displayName: String(item.display_name ?? "MCP"), transport: String(item.transport ?? "streamable_http"), enabled: item.enabled === true, healthStatus: String(item.health_status ?? "unknown"), consecutiveFailures: Number(item.consecutive_failures ?? 0), circuitOpenUntil: item.circuit_open_until ? String(item.circuit_open_until) : undefined, lastCheckedAt: item.last_checked_at ? String(item.last_checked_at) : undefined, lastErrorCode: item.last_error_code ? String(item.last_error_code) : undefined, toolCount: Number(item.tool_count ?? 0), tools: (Array.isArray(item.tools) ? item.tools : []).map((toolEntry) => { const tool = toolEntry as Record<string, unknown>; return { name: String(tool.name), description: String(tool.description ?? ""), annotations: tool.annotations && typeof tool.annotations === "object" ? tool.annotations as Record<string, unknown> : {}, discoveredAt: String(tool.discovered_at ?? "") }; }),
+      };
+    }),
+  };
+}
+
+export async function setAdminMcpServerEnabled(serverId: string, enabled: boolean): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/admin/mcp/servers/${encodeURIComponent(serverId)}`, { method: "PATCH", credentials: "include", headers: mutationHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ enabled }) });
+  if (!response.ok) throw await apiError(response, "MCP 服务状态更新失败");
+}
+
+export async function testAdminMcpServer(serverId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/admin/mcp/servers/${encodeURIComponent(serverId)}/test`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+  if (!response.ok) throw await apiError(response, "MCP 服务检测失败");
+}
+
+export async function refreshAdminMcpServer(serverId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/admin/mcp/servers/${encodeURIComponent(serverId)}/refresh`, { method: "POST", credentials: "include", headers: mutationHeaders() });
+  if (!response.ok) throw await apiError(response, "MCP 工具刷新失败");
 }
 
 export async function getAdminDiscoveryMetrics(window: "24h" | "7d" | "30d" = "30d"): Promise<AdminDiscoveryMetrics> {
