@@ -207,6 +207,7 @@ export interface AgentEvidenceQuality {
 }
 
 export interface ArxivResult {
+  itemId?: string;
   id: string;
   title: string;
   authors: string;
@@ -215,15 +216,38 @@ export interface ArxivResult {
   matchedPaperTitle?: string;
   matchedTerms?: string[];
   matchType?: "semantic" | "topic";
+  feedback?: "interested" | "not_interested";
+  opened?: boolean;
+  imported?: boolean;
 }
 
 export interface DiscoveryRecommendationPage {
   items: ArxivResult[];
+  batchId?: string;
   batch: number;
   basisPaperCount: number;
   seedPaperTitle?: string;
   profileTerms: string[];
   strategy: "semantic_keyword" | "keyword" | "empty_library";
+  restored?: boolean;
+  feedbackApplied?: boolean;
+  generatedAt?: string;
+}
+
+export interface AdminDiscoveryMetrics {
+  windowHours: number;
+  generatedAt: string;
+  batches: number;
+  impressions: number;
+  opened: number;
+  interested: number;
+  notInterested: number;
+  imported: number;
+  feedbackCount: number;
+  clickThroughRate: number;
+  interestHitRate: number;
+  feedbackRate: number;
+  importRate: number;
 }
 
 export interface UserRecord {

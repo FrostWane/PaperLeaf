@@ -13,6 +13,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -220,6 +221,60 @@ class PaperChunk(Base):
     embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(), nullable=True)
 
     page: Mapped[PaperPage] = relationship(back_populates="chunks")
+
+
+class DiscoveryBatch(Base):
+    __tablename__ = "discovery_batches"
+    __table_args__ = (
+        UniqueConstraint("user_id", "batch_number", name="uq_discovery_user_batch"),
+        Index("ix_discovery_batches_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    batch_number: Mapped[int] = mapped_column(Integer)
+    basis_paper_count: Mapped[int] = mapped_column(Integer)
+    seed_paper_title: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    profile_terms: Mapped[list[str]] = mapped_column(JSON, default=list)
+    strategy: Mapped[str] = mapped_column(String(48))
+    feedback_applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DiscoveryItem(Base):
+    __tablename__ = "discovery_items"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "arxiv_id", name="uq_discovery_batch_arxiv"),
+        Index("ix_discovery_items_user_created", "user_id", "created_at"),
+        Index("ix_discovery_items_user_feedback", "user_id", "feedback"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    batch_id: Mapped[str] = mapped_column(
+        ForeignKey("discovery_batches.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    arxiv_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(1000))
+    authors: Mapped[list[str]] = mapped_column(JSON, default=list)
+    abstract: Mapped[str] = mapped_column(Text, default="")
+    published: Mapped[str] = mapped_column(String(32), default="")
+    pdf_url: Mapped[str] = mapped_column(String(1000), default="")
+    journal_ref: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    matched_paper_title: Mapped[str] = mapped_column(String(1000))
+    matched_terms: Mapped[list[str]] = mapped_column(JSON, default=list)
+    match_type: Mapped[str] = mapped_column(String(24))
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    rank: Mapped[int] = mapped_column(Integer)
+    opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    feedback: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    feedback_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    imported_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PaperArtifact(Base):

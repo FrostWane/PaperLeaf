@@ -253,6 +253,7 @@ class ArxivSearchResponse(BaseModel):
 
 
 class DiscoveryRecommendation(BaseModel):
+    item_id: str
     arxiv_id: str
     title: str
     authors: list[str]
@@ -263,19 +264,54 @@ class DiscoveryRecommendation(BaseModel):
     matched_paper_title: str
     matched_terms: list[str]
     match_type: Literal["semantic", "topic"]
+    feedback: Optional[Literal["interested", "not_interested"]] = None
+    opened: bool = False
+    imported: bool = False
 
 
 class DiscoveryRecommendationResponse(BaseModel):
     items: list[DiscoveryRecommendation]
+    batch_id: Optional[str] = None
     batch: int
     basis_paper_count: int
     seed_paper_title: Optional[str] = None
     profile_terms: list[str] = Field(default_factory=list)
     strategy: Literal["semantic_keyword", "keyword", "empty_library"]
+    restored: bool = False
+    feedback_applied: bool = False
+    generated_at: Optional[datetime] = None
+
+
+class DiscoveryFeedbackRequest(BaseModel):
+    action: Literal["opened", "interested", "not_interested"]
+
+
+class DiscoveryFeedbackResponse(BaseModel):
+    item_id: str
+    feedback: Optional[Literal["interested", "not_interested"]] = None
+    opened: bool
+    imported: bool
+
+
+class DiscoveryMetricsResponse(BaseModel):
+    window_hours: int
+    generated_at: datetime
+    batches: int
+    impressions: int
+    opened: int
+    interested: int
+    not_interested: int
+    imported: int
+    feedback_count: int
+    click_through_rate: float
+    interest_hit_rate: float
+    feedback_rate: float
+    import_rate: float
 
 
 class ArxivImportRequest(BaseModel):
     arxiv_id: str = Field(pattern=r"^[0-9]{4}\.[0-9]{4,5}(v[0-9]+)?$")
+    recommendation_item_id: Optional[str] = Field(default=None, max_length=36)
 
 
 class ArtifactCitation(BaseModel):

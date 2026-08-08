@@ -4,13 +4,13 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { Activity, ChevronLeft, ChevronRight, Plus, RefreshCw, UserX, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createAdminUser, getAdminModelHealth, getAdminRagObservability, listAdminJobs, listAdminUsers, retryAdminJob, setAdminUserActive } from "@/lib/data-source";
+import { createAdminUser, getAdminDiscoveryMetrics, getAdminModelHealth, getAdminRagObservability, listAdminJobs, listAdminUsers, retryAdminJob, setAdminUserActive } from "@/lib/data-source";
 import { users as fixtureUsers } from "@/lib/fixtures";
-import type { AdminJob, AdminRagObservability, ModelRuntimeHealth, UserRecord } from "@/lib/types";
+import type { AdminDiscoveryMetrics, AdminJob, AdminRagObservability, ModelRuntimeHealth, UserRecord } from "@/lib/types";
 
 const helper = createColumnHelper<UserRecord>();
 const jobsPageSize = 15;
-type AdminTab = "overview" | "rag" | "users" | "jobs";
+type AdminTab = "overview" | "rag" | "discovery" | "users" | "jobs";
 const demoJobs: AdminJob[] = [{ id: "job-demo", paperId: "attention", type: "parse_pdf", status: "running", progress: 68, attempts: 1, maxAttempts: 3 }];
 const demoHealth: ModelRuntimeHealth = {
   configured: true,
@@ -38,6 +38,21 @@ const emptyObservability: AdminRagObservability = {
   chunkingStrategies: [],
   runtimeStore: { backend: "memory", status: "available" },
   privacy: { contentCollected: false, identifiersCollected: false },
+};
+const emptyDiscoveryMetrics: AdminDiscoveryMetrics = {
+  windowHours: 720,
+  generatedAt: "",
+  batches: 0,
+  impressions: 0,
+  opened: 0,
+  interested: 0,
+  notInterested: 0,
+  imported: 0,
+  feedbackCount: 0,
+  clickThroughRate: 0,
+  interestHitRate: 0,
+  feedbackRate: 0,
+  importRate: 0,
 };
 
 const stageLabels: Record<string, string> = {
@@ -119,6 +134,7 @@ export function AdminView() {
   const [jobsLoaded, setJobsLoaded] = useState(!real);
   const [modelHealthLoaded, setModelHealthLoaded] = useState(!real);
   const [observability, setObservability] = useState<AdminRagObservability>(emptyObservability);
+  const [discoveryMetrics, setDiscoveryMetrics] = useState<AdminDiscoveryMetrics>(emptyDiscoveryMetrics);
   const [window, setWindow] = useState<"24h" | "7d" | "30d">("24h");
   const [observabilityLoading, setObservabilityLoading] = useState(real);
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
@@ -136,11 +152,12 @@ export function AdminView() {
     const sequence = ++refreshSequence.current;
     setObservabilityLoading(true);
     setMessage(`正在加载${window === "24h" ? "24 小时" : window === "7d" ? "7 天" : "30 天"}数据…`);
-    const [usersResult, jobsResult, healthResult, observabilityResult] = await Promise.allSettled([
+    const [usersResult, jobsResult, healthResult, observabilityResult, discoveryResult] = await Promise.allSettled([
       listAdminUsers(),
       listAdminJobs(),
       getAdminModelHealth(),
       getAdminRagObservability(window),
+      getAdminDiscoveryMetrics(window),
     ]);
     if (sequence !== refreshSequence.current) return;
     const errors: string[] = [];
@@ -152,6 +169,8 @@ export function AdminView() {
     else errors.push(healthResult.reason instanceof Error ? healthResult.reason.message : "AI 状态读取失败");
     if (observabilityResult.status === "fulfilled") setObservability(observabilityResult.value);
     else errors.push(observabilityResult.reason instanceof Error ? observabilityResult.reason.message : "RAG 指标读取失败");
+    if (discoveryResult.status === "fulfilled") setDiscoveryMetrics(discoveryResult.value);
+    else errors.push(discoveryResult.reason instanceof Error ? discoveryResult.reason.message : "推荐指标读取失败");
     setObservabilityLoading(false);
     setMessage(errors.join("；"));
   }, [real, window]);
@@ -217,6 +236,7 @@ export function AdminView() {
       {([
         ["overview", "运行概览"],
         ["rag", "RAG 质量"],
+        ["discovery", "推荐效果"],
         ["users", "用户与权限"],
         ["jobs", "后台任务"],
       ] as const).map(([id, label]) => <button type="button" role="tab" aria-selected={activeTab === id} aria-controls={`admin-panel-${id}`} className={activeTab === id ? "active" : ""} key={id} onClick={() => setActiveTab(id)}>{label}</button>)}
@@ -250,6 +270,21 @@ export function AdminView() {
           <article className="rag-panel"><h3>失败与受限</h3>{observability.failures.length === 0 ? <p className="rag-empty">当前窗口没有失败或受限记录。</p> : <ul className="rag-failures">{observability.failures.map((item) => <li key={item.category}><span>{item.label}<small>{percent(item.rate)}</small></span><strong>{item.count}</strong></li>)}</ul>}<div className="rag-strategies"><span>索引策略</span>{observability.chunkingStrategies.length === 0 ? <small>暂无数据</small> : observability.chunkingStrategies.map((item) => <small key={item.strategy}>{item.strategy} · {item.runs}</small>)}</div></article>
         </div>
       </>}
+      </section>
+    </div>}
+    {activeTab === "discovery" && <div id="admin-panel-discovery" role="tabpanel" className="admin-tab-panel">
+      <div className="metric-row"><article><span>推荐曝光</span><strong>{discoveryMetrics.impressions}</strong><small>{discoveryMetrics.batches} 批去重推荐</small></article><article><span>点击率</span><strong>{discoveryMetrics.impressions > 0 ? percent(discoveryMetrics.clickThroughRate) : "—"}</strong><small>{discoveryMetrics.opened} / {discoveryMetrics.impressions} 篇查看来源</small></article><article><span>兴趣命中率</span><strong>{discoveryMetrics.feedbackCount > 0 ? percent(discoveryMetrics.interestHitRate) : "—"}</strong><small>{discoveryMetrics.interested} / {discoveryMetrics.feedbackCount} 条明确反馈</small></article><article><span>导入率</span><strong>{discoveryMetrics.impressions > 0 ? percent(discoveryMetrics.importRate) : "—"}</strong><small>{discoveryMetrics.imported} 篇进入文献库</small></article></div>
+      <section className="admin-section discovery-observability"><div className="section-bar"><div><span className="eyebrow">内容推荐漏斗</span><h2>论文发现效果</h2><small>只统计推荐条目的曝光、点击、反馈与导入，不采集 PDF 正文。数据生成于 {generatedAt(discoveryMetrics.generatedAt)}。</small></div><div className="rag-window" aria-label="推荐统计时间范围">{(["24h", "7d", "30d"] as const).map((value) => <button type="button" key={value} className={window === value ? "active" : ""} aria-pressed={window === value} onClick={() => setWindow(value)}>{value === "24h" ? "24 小时" : value === "7d" ? "7 天" : "30 天"}</button>)}</div></div>
+        {discoveryMetrics.impressions === 0 ? <div className="runtime-empty"><Activity size={17} /><span><strong>还没有推荐行为样本</strong><small>用户开启联网发现并看到第一批推荐后，这里会开始形成指标。</small></span></div> : <div className="discovery-metric-grid">
+          <article><h3>行为漏斗</h3><ol className="rag-funnel">{[
+            ["曝光", discoveryMetrics.impressions, 1],
+            ["查看来源", discoveryMetrics.opened, discoveryMetrics.clickThroughRate],
+            ["明确反馈", discoveryMetrics.feedbackCount, discoveryMetrics.feedbackRate],
+            ["感兴趣", discoveryMetrics.interested, discoveryMetrics.impressions ? discoveryMetrics.interested / discoveryMetrics.impressions : 0],
+            ["导入文献库", discoveryMetrics.imported, discoveryMetrics.importRate],
+          ].map(([label, count, rate]) => <li key={String(label)}><span><strong>{label}</strong><small>{percent(Number(rate))}</small></span><div aria-hidden="true"><i style={{ width: `${Math.max(Number(rate) * 100, Number(count) > 0 ? 3 : 0)}%` }} /></div><b>{count}</b></li>)}</ol></article>
+          <article className="discovery-metric-notes"><h3>指标口径</h3><dl><div><dt>点击率</dt><dd>查看过 arXiv 来源的推荐数 ÷ 曝光数，同一条重复点击只计算一次。</dd></div><div><dt>兴趣命中率</dt><dd>“感兴趣” ÷ 全部明确兴趣反馈；未反馈不当作“不感兴趣”。</dd></div><div><dt>反馈覆盖率</dt><dd>{percent(discoveryMetrics.feedbackRate)}，样本过少时不宜据此判断推荐质量。</dd></div><div><dt>排序学习</dt><dd>感兴趣主题会被轻度加权，不感兴趣主题会被轻度降权，文献库相似度始终是主信号。</dd></div></dl></article>
+        </div>}
       </section>
     </div>}
     <Dialog.Root open={Boolean(pendingDeactivation)} onOpenChange={(open) => !open && setPendingDeactivation(null)}>

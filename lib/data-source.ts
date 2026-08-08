@@ -2,7 +2,7 @@ import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
 import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
-import type { AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
+import type { AdminDiscoveryMetrics, AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -66,6 +66,7 @@ function mapCollection(item: Record<string, unknown>, nestedParentId: string | n
 
 function mapArxivResult(item: Record<string, unknown>): ArxivResult {
   return {
+    itemId: item.item_id ? String(item.item_id) : undefined,
     id: String(item.arxiv_id),
     title: String(item.title),
     authors: Array.isArray(item.authors) ? item.authors.join("、") : "",
@@ -74,6 +75,9 @@ function mapArxivResult(item: Record<string, unknown>): ArxivResult {
     matchedPaperTitle: item.matched_paper_title ? String(item.matched_paper_title) : undefined,
     matchedTerms: Array.isArray(item.matched_terms) ? item.matched_terms.map(String) : undefined,
     matchType: item.match_type === "semantic" ? "semantic" : item.match_type === "topic" ? "topic" : undefined,
+    feedback: item.feedback === "interested" ? "interested" : item.feedback === "not_interested" ? "not_interested" : undefined,
+    opened: item.opened === true,
+    imported: item.imported === true,
   };
 }
 
@@ -596,9 +600,10 @@ function upsertActivity(items: AgentActivity[], next: AgentActivity): AgentActiv
 export interface PaperLeafDataSource {
   listPapers(options?: { collectionId?: string }): Promise<Paper[]>;
   getPaper(paperId: string): Promise<Paper>;
-  recommendArxiv(batch: number, excludeIds?: string[]): Promise<DiscoveryRecommendationPage>;
+  recommendArxiv(options?: { refresh?: boolean }): Promise<DiscoveryRecommendationPage>;
+  recordDiscoveryFeedback(itemId: string, action: "opened" | "interested" | "not_interested"): Promise<ArxivResult["feedback"]>;
   searchArxiv(query: string): Promise<ArxivResult[]>;
-  importArxiv(arxivId: string): Promise<void>;
+  importArxiv(arxivId: string, recommendationItemId?: string): Promise<void>;
   ask(question: string, paperIds?: string[], handlers?: AgentAskStreamHandlers, scope?: { collectionId?: string }): Promise<AgentAnswer>;
   upload(file: File, onProgress: (value: number) => void): Promise<Paper>;
   updatePaper(paperId: string, input: PaperUpdateInput): Promise<Paper>;
@@ -667,10 +672,32 @@ export async function getAdminRagObservability(window: "24h" | "7d" | "30d" = "2
   };
 }
 
+export async function getAdminDiscoveryMetrics(window: "24h" | "7d" | "30d" = "30d"): Promise<AdminDiscoveryMetrics> {
+  const response = await fetch(`${API_BASE_URL}/admin/discovery-metrics?window=${window}`, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw await apiError(response, "推荐效果指标读取失败");
+  const raw = await response.json() as Record<string, unknown>;
+  return {
+    windowHours: Number(raw.window_hours ?? 720),
+    generatedAt: String(raw.generated_at ?? ""),
+    batches: Number(raw.batches ?? 0),
+    impressions: Number(raw.impressions ?? 0),
+    opened: Number(raw.opened ?? 0),
+    interested: Number(raw.interested ?? 0),
+    notInterested: Number(raw.not_interested ?? 0),
+    imported: Number(raw.imported ?? 0),
+    feedbackCount: Number(raw.feedback_count ?? 0),
+    clickThroughRate: Number(raw.click_through_rate ?? 0),
+    interestHitRate: Number(raw.interest_hit_rate ?? 0),
+    feedbackRate: Number(raw.feedback_rate ?? 0),
+    importRate: Number(raw.import_rate ?? 0),
+  };
+}
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let demoPapers = papers.map((paper) => ({ ...paper }));
 const demoTranslations = new Map<string, PaperTranslation>();
+let demoDiscoveryPage: DiscoveryRecommendationPage | null = null;
 let demoCollections: PaperCollection[] = [
   { id: "core-methods", name: "核心方法", description: "反复查阅的基础方法论文", parentId: null, paperIds: ["attention"], recursivePaperCount: 3, children: [
     { id: "transformers", name: "Transformer", description: "架构与预训练", parentId: "core-methods", paperIds: ["bert"], recursivePaperCount: 1, children: [] },
@@ -875,20 +902,42 @@ export const demoDataSource: PaperLeafDataSource = {
     return demoPapers.filter((paper) => ids.has(paper.id)).map((paper) => ({ ...paper }));
   },
   async getPaper(paperId) { await wait(80); return demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; },
-  async recommendArxiv(batch, excludeIds = []) {
+  async recommendArxiv(options) {
     await wait(220);
-    const available = arxivResults.filter((item) => !excludeIds.includes(item.id));
+    if (demoDiscoveryPage && !options?.refresh) {
+      return { ...demoDiscoveryPage, restored: true, items: demoDiscoveryPage.items.map((item) => ({ ...item })) };
+    }
+    const batch = demoDiscoveryPage ? demoDiscoveryPage.batch + 1 : 0;
+    const seenIds = new Set(demoDiscoveryPage?.items.map((item) => item.id) ?? []);
+    const available = arxivResults.filter((item) => !seenIds.has(item.id));
     const offset = available.length ? (batch * 2) % available.length : 0;
     const items = [...available.slice(offset), ...available.slice(0, offset)].slice(0, 3).map((item) => ({
       ...item,
+      itemId: `demo-discovery-${batch}-${item.id}`,
       matchedPaperTitle: papers[batch % papers.length]?.title ?? papers[0].title,
       matchedTerms: ["retrieval", "generation"],
       matchType: "semantic" as const,
     }));
-    return { items, batch, basisPaperCount: papers.length, seedPaperTitle: items[0]?.matchedPaperTitle, profileTerms: ["retrieval", "generation"], strategy: "semantic_keyword" };
+    demoDiscoveryPage = { items, batchId: `demo-batch-${batch}`, batch, basisPaperCount: papers.length, seedPaperTitle: items[0]?.matchedPaperTitle, profileTerms: ["retrieval", "generation"], strategy: "semantic_keyword", restored: false, feedbackApplied: batch > 0, generatedAt: new Date().toISOString() };
+    return { ...demoDiscoveryPage, items: items.map((item) => ({ ...item })) };
+  },
+  async recordDiscoveryFeedback(itemId, action) {
+    if (!demoDiscoveryPage) return undefined;
+    demoDiscoveryPage = {
+      ...demoDiscoveryPage,
+      items: demoDiscoveryPage.items.map((item) => item.itemId === itemId ? {
+        ...item,
+        opened: action === "opened" ? true : item.opened,
+        feedback: action === "interested" || action === "not_interested" ? action : item.feedback,
+      } : item),
+    };
+    return demoDiscoveryPage.items.find((item) => item.itemId === itemId)?.feedback;
   },
   async searchArxiv(query) { await wait(220); return arxivResults.filter((item) => `${item.title} ${item.summary}`.toLowerCase().includes(query.toLowerCase()) || !query); },
-  async importArxiv() { await wait(320); },
+  async importArxiv(_arxivId, recommendationItemId) {
+    await wait(320);
+    if (demoDiscoveryPage && recommendationItemId) demoDiscoveryPage = { ...demoDiscoveryPage, items: demoDiscoveryPage.items.map((item) => item.itemId === recommendationItemId ? { ...item, imported: true } : item) };
+  },
   async ask(question, _paperIds, handlers) {
     const steps = ["validate_request", "retrieve_library", "grade_evidence", "generate_answer", "validate_citations"];
     const activities: AgentActivity[] = [];
@@ -1158,27 +1207,43 @@ export const realDataSource: PaperLeafDataSource = {
     if (!r.ok) throw new Error("文献信息读取失败");
     return mapPaper(await r.json() as Record<string, unknown>);
   },
-  async recommendArxiv(batch, excludeIds = []) {
-    const query = new URLSearchParams({ batch: String(batch), limit: "6" });
-    if (excludeIds.length) query.set("exclude", excludeIds.slice(-100).join(","));
+  async recommendArxiv(options) {
+    const query = new URLSearchParams({ limit: "6" });
+    if (options?.refresh) query.set("refresh", "true");
     const response = await fetch(`${API_BASE_URL}/discover/recommendations?${query}`, { credentials: "include", cache: "no-store" });
     if (!response.ok) throw await apiError(response, "相关论文推荐暂时不可用");
     const raw = await response.json() as Record<string, unknown>;
     return {
       items: (Array.isArray(raw.items) ? raw.items : []).map((item) => mapArxivResult(item as Record<string, unknown>)),
-      batch: Number(raw.batch ?? batch),
+      batchId: raw.batch_id ? String(raw.batch_id) : undefined,
+      batch: Number(raw.batch ?? 0),
       basisPaperCount: Number(raw.basis_paper_count ?? 0),
       seedPaperTitle: raw.seed_paper_title ? String(raw.seed_paper_title) : undefined,
       profileTerms: Array.isArray(raw.profile_terms) ? raw.profile_terms.map(String) : [],
       strategy: raw.strategy === "semantic_keyword" ? "semantic_keyword" : raw.strategy === "empty_library" ? "empty_library" : "keyword",
+      restored: raw.restored === true,
+      feedbackApplied: raw.feedback_applied === true,
+      generatedAt: raw.generated_at ? String(raw.generated_at) : undefined,
     };
+  },
+  async recordDiscoveryFeedback(itemId, action) {
+    const response = await fetch(`${API_BASE_URL}/discover/recommendations/items/${encodeURIComponent(itemId)}/feedback`, {
+      method: "POST",
+      credentials: "include",
+      headers: mutationHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ action }),
+      keepalive: action === "opened",
+    });
+    if (!response.ok) throw await apiError(response, "推荐反馈保存失败");
+    const raw = await response.json() as Record<string, unknown>;
+    return raw.feedback === "interested" ? "interested" : raw.feedback === "not_interested" ? "not_interested" : undefined;
   },
   async searchArxiv(query) {
     const r = await fetch(`${API_BASE_URL}/discover/arxiv/search?q=${encodeURIComponent(query)}`, { credentials: "include" }); if (!r.ok) throw await apiError(r, "arXiv 搜索失败");
     const raw = await r.json() as Array<Record<string, unknown>>;
     return raw.map(mapArxivResult);
   },
-  async importArxiv(arxivId) { const r = await fetch(`${API_BASE_URL}/discover/arxiv/import`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ arxiv_id: arxivId }) }); if (!r.ok) throw await apiError(r, "arXiv 导入失败"); },
+  async importArxiv(arxivId, recommendationItemId) { const r = await fetch(`${API_BASE_URL}/discover/arxiv/import`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ arxiv_id: arxivId, recommendation_item_id: recommendationItemId }) }); if (!r.ok) throw await apiError(r, "arXiv 导入失败"); },
   async ask(question, paperIds = [], handlers, scope) {
     let r: Response;
     try {

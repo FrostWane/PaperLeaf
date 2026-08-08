@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { API_BASE_URL, changePassword, getAdminModelHealth, getAdminRagObservability, login, realDataSource, setAdminUserActive } from "@/lib/data-source";
+import { API_BASE_URL, changePassword, getAdminDiscoveryMetrics, getAdminModelHealth, getAdminRagObservability, login, realDataSource, setAdminUserActive } from "@/lib/data-source";
 import { server } from "./test-server";
 
 describe("真实 API 契约", () => {
@@ -31,12 +31,13 @@ describe("真实 API 契约", () => {
     await expect(realDataSource.getPaper("p1")).resolves.toMatchObject({ id: "p1", authors: "作者甲", pages: 12, status: "ready", arxivId: "2501.00001" });
   });
 
-  it("发现推荐传递批次和已展示论文，并映射推荐依据", async () => {
+  it("发现推荐只在换一批时请求刷新，并映射持久化状态", async () => {
     let requested = "";
     server.use(http.get(`${API_BASE_URL}/discover/recommendations`, ({ request }) => {
       requested = new URL(request.url).search;
       return HttpResponse.json({
         items: [{
+          item_id: "recommendation-item-1",
           arxiv_id: "2601.00002",
           title: "Related paper",
           authors: ["作者甲", "作者乙"],
@@ -46,23 +47,53 @@ describe("真实 API 契约", () => {
           matched_terms: ["drug", "target"],
           match_type: "semantic",
         }],
+        batch_id: "recommendation-batch-2",
         batch: 2,
         basis_paper_count: 3,
         seed_paper_title: "DeepDTA",
         profile_terms: ["drug", "target"],
         strategy: "semantic_keyword",
+        restored: true,
+        feedback_applied: true,
+        generated_at: "2026-08-08T12:00:00Z",
       });
     }));
 
-    await expect(realDataSource.recommendArxiv(2, ["2501.00001", "2501.00002"])).resolves.toMatchObject({
+    await expect(realDataSource.recommendArxiv({ refresh: true })).resolves.toMatchObject({
+      batchId: "recommendation-batch-2",
       batch: 2,
       basisPaperCount: 3,
       seedPaperTitle: "DeepDTA",
       strategy: "semantic_keyword",
-      items: [{ id: "2601.00002", authors: "作者甲、作者乙", matchedPaperTitle: "DeepDTA", matchedTerms: ["drug", "target"], matchType: "semantic" }],
+      restored: true,
+      feedbackApplied: true,
+      items: [{ itemId: "recommendation-item-1", id: "2601.00002", authors: "作者甲、作者乙", matchedPaperTitle: "DeepDTA", matchedTerms: ["drug", "target"], matchType: "semantic" }],
     });
-    expect(requested).toContain("batch=2");
-    expect(requested).toContain("exclude=2501.00001%2C2501.00002");
+    expect(requested).toContain("refresh=true");
+    expect(requested).not.toContain("exclude=");
+  });
+
+  it("保存推荐反馈并映射管理端漏斗指标", async () => {
+    document.cookie = "paperleaf_csrf=feedback-token; path=/";
+    let feedbackPayload: unknown;
+    server.use(
+      http.post(`${API_BASE_URL}/discover/recommendations/items/item-1/feedback`, async ({ request }) => {
+        feedbackPayload = await request.json();
+        return HttpResponse.json({ item_id: "item-1", feedback: "interested", opened: false, imported: false });
+      }),
+      http.get(`${API_BASE_URL}/admin/discovery-metrics`, () => HttpResponse.json({
+        window_hours: 720, generated_at: "2026-08-08T12:00:00Z", batches: 2,
+        impressions: 12, opened: 4, interested: 3, not_interested: 1, imported: 2,
+        feedback_count: 4, click_through_rate: 1 / 3, interest_hit_rate: 0.75,
+        feedback_rate: 1 / 3, import_rate: 1 / 6,
+      })),
+    );
+
+    await expect(realDataSource.recordDiscoveryFeedback("item-1", "interested")).resolves.toBe("interested");
+    expect(feedbackPayload).toEqual({ action: "interested" });
+    await expect(getAdminDiscoveryMetrics("30d")).resolves.toMatchObject({
+      impressions: 12, opened: 4, interestHitRate: 0.75, clickThroughRate: 1 / 3,
+    });
   });
 
   it("上传使用 multipart 和 CSRF 请求头", async () => {

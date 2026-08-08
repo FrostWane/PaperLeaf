@@ -24,6 +24,8 @@ from .models import (
     ChatMessage,
     ChatSession,
     Collection,
+    DiscoveryBatch,
+    DiscoveryItem,
     Job,
     JobStatus,
     Paper,
@@ -42,6 +44,30 @@ from .security import digest_session_token, hash_password, verify_password
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _discovery_metric_report(
+    batches: int,
+    impressions: int,
+    opened: int,
+    interested: int,
+    not_interested: int,
+    imported: int,
+    feedback: int,
+) -> dict[str, int | float]:
+    return {
+        "batches": batches,
+        "impressions": impressions,
+        "opened": opened,
+        "interested": interested,
+        "not_interested": not_interested,
+        "imported": imported,
+        "feedback_count": feedback,
+        "click_through_rate": opened / impressions if impressions else 0.0,
+        "interest_hit_rate": interested / feedback if feedback else 0.0,
+        "feedback_rate": feedback / impressions if impressions else 0.0,
+        "import_rate": imported / impressions if impressions else 0.0,
+    }
 
 
 ARTIFACT_JOB_TYPES = {
@@ -85,6 +111,49 @@ class PaperRecord:
     last_opened_at: datetime | None = None
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class DiscoveryBatchRecord:
+    id: str
+    user_id: str
+    batch_number: int
+    basis_paper_count: int
+    seed_paper_title: str | None
+    profile_terms: list[str]
+    strategy: str
+    feedback_applied: bool = False
+    created_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class DiscoveryItemRecord:
+    id: str
+    batch_id: str
+    user_id: str
+    arxiv_id: str
+    title: str
+    authors: list[str]
+    abstract: str
+    published: str
+    pdf_url: str
+    journal_ref: str | None
+    matched_paper_title: str
+    matched_terms: list[str]
+    match_type: str
+    score: float
+    rank: int
+    opened_at: datetime | None = None
+    feedback: str | None = None
+    feedback_at: datetime | None = None
+    imported_at: datetime | None = None
+    created_at: datetime = field(default_factory=now)
+
+
+DiscoveryBatchPage = tuple[
+    DiscoveryBatchRecord | DiscoveryBatch,
+    list[DiscoveryItemRecord | DiscoveryItem],
+]
 
 
 @dataclass
@@ -362,6 +431,18 @@ class Repository(Protocol):
         collection_id: str | None = None,
         unfiled: bool = False,
     ) -> list[PaperRecord]: ...
+    async def get_latest_discovery_batch(self, user_id: str) -> DiscoveryBatchPage | None: ...
+    async def list_discovery_seen_arxiv_ids(self, user_id: str) -> set[str]: ...
+    async def get_discovery_feedback_signals(
+        self, user_id: str, *, limit: int = 20
+    ) -> tuple[list[str], list[str]]: ...
+    async def create_discovery_batch(
+        self, batch: DiscoveryBatchRecord, items: list[DiscoveryItemRecord]
+    ) -> DiscoveryBatchPage: ...
+    async def record_discovery_item_action(
+        self, item_id: str, user_id: str, action: str, *, arxiv_id: str | None = None
+    ) -> DiscoveryItemRecord | DiscoveryItem | None: ...
+    async def discovery_metrics(self, since: datetime) -> dict[str, int | float]: ...
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None: ...
     async def update_owned_paper(
         self, paper_id: str, owner_id: str, **changes: object
@@ -429,6 +510,8 @@ class MemoryRepository:
         self.translations: dict[str, TranslationRecord] = {}
         self.translation_pages: dict[str, TranslationPageRecord] = {}
         self.paper_artifacts: dict[str, PaperArtifactRecord] = {}
+        self.discovery_batches: dict[str, DiscoveryBatchRecord] = {}
+        self.discovery_items: dict[str, DiscoveryItemRecord] = {}
         self.chat_sessions: dict[str, ChatSessionRecord] = {}
         self.chat_messages: dict[str, ChatMessageRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
@@ -583,6 +666,99 @@ class MemoryRepository:
             ),
             key=lambda paper: paper.created_at,
             reverse=True,
+        )
+
+    async def get_latest_discovery_batch(self, user_id: str) -> DiscoveryBatchPage | None:
+        batches = [item for item in self.discovery_batches.values() if item.user_id == user_id]
+        if not batches:
+            return None
+        batch = max(batches, key=lambda item: (item.batch_number, item.created_at))
+        items = sorted(
+            (item for item in self.discovery_items.values() if item.batch_id == batch.id),
+            key=lambda item: item.rank,
+        )
+        return batch, list(items)
+
+    async def list_discovery_seen_arxiv_ids(self, user_id: str) -> set[str]:
+        return {item.arxiv_id for item in self.discovery_items.values() if item.user_id == user_id}
+
+    async def get_discovery_feedback_signals(
+        self, user_id: str, *, limit: int = 20
+    ) -> tuple[list[str], list[str]]:
+        items = sorted(
+            (
+                item
+                for item in self.discovery_items.values()
+                if item.user_id == user_id and item.feedback in {"interested", "not_interested"}
+            ),
+            key=lambda item: item.feedback_at or item.created_at,
+            reverse=True,
+        )[:limit]
+        positive = [
+            f"{item.title} {item.abstract}"
+            for item in items
+            if item.feedback == "interested"
+        ]
+        negative = [
+            f"{item.title} {item.abstract}" for item in items if item.feedback == "not_interested"
+        ]
+        return positive, negative
+
+    async def create_discovery_batch(
+        self, batch: DiscoveryBatchRecord, items: list[DiscoveryItemRecord]
+    ) -> DiscoveryBatchPage:
+        duplicate = next(
+            (
+                item
+                for item in self.discovery_batches.values()
+                if item.user_id == batch.user_id and item.batch_number == batch.batch_number
+            ),
+            None,
+        )
+        if duplicate:
+            existing = await self.get_latest_discovery_batch(batch.user_id)
+            if existing:
+                return existing
+        self.discovery_batches[batch.id] = batch
+        for item in items:
+            self.discovery_items[item.id] = item
+        return batch, list(items)
+
+    async def record_discovery_item_action(
+        self, item_id: str, user_id: str, action: str, *, arxiv_id: str | None = None
+    ) -> DiscoveryItemRecord | None:
+        item = self.discovery_items.get(item_id)
+        if not item or item.user_id != user_id or (arxiv_id and item.arxiv_id != arxiv_id):
+            return None
+        timestamp = now()
+        if action == "opened":
+            item.opened_at = item.opened_at or timestamp
+        elif action in {"interested", "not_interested"}:
+            item.feedback = action
+            item.feedback_at = timestamp
+        elif action == "imported":
+            item.imported_at = item.imported_at or timestamp
+        else:
+            raise ValueError("不支持的推荐反馈动作")
+        return item
+
+    async def discovery_metrics(self, since: datetime) -> dict[str, int | float]:
+        items = [
+            item
+            for item in self.discovery_items.values()
+            if item.created_at >= since
+        ]
+        batches = sum(
+            item.created_at >= since for item in self.discovery_batches.values()
+        )
+        impressions = len(items)
+        opened = sum(item.opened_at is not None for item in items)
+        interested = sum(item.feedback == "interested" for item in items)
+        not_interested = sum(item.feedback == "not_interested" for item in items)
+        imported = sum(item.imported_at is not None for item in items)
+        feedback = interested + not_interested
+        return _discovery_metric_report(
+            batches, impressions, opened, interested, not_interested, imported, feedback
         )
 
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> PaperRecord | None:
@@ -2060,6 +2236,167 @@ class SQLAlchemyRepository:
                 statement = statement.where(~Paper.id.in_(select(paper_collections.c.paper_id)))
             result = await session.scalars(statement.order_by(Paper.created_at.desc()))
             return list(result)
+
+    async def get_latest_discovery_batch(self, user_id: str) -> DiscoveryBatchPage | None:
+        async with get_session_factory()() as session:
+            batch = await session.scalar(
+                select(DiscoveryBatch)
+                .where(DiscoveryBatch.user_id == user_id)
+                .order_by(DiscoveryBatch.batch_number.desc(), DiscoveryBatch.created_at.desc())
+                .limit(1)
+            )
+            if batch is None:
+                return None
+            items = list(
+                await session.scalars(
+                    select(DiscoveryItem)
+                    .where(
+                        DiscoveryItem.batch_id == batch.id,
+                        DiscoveryItem.user_id == user_id,
+                    )
+                    .order_by(DiscoveryItem.rank)
+                )
+            )
+            return batch, items
+
+    async def list_discovery_seen_arxiv_ids(self, user_id: str) -> set[str]:
+        async with get_session_factory()() as session:
+            return set(
+                await session.scalars(
+                    select(DiscoveryItem.arxiv_id).where(DiscoveryItem.user_id == user_id)
+                )
+            )
+
+    async def get_discovery_feedback_signals(
+        self, user_id: str, *, limit: int = 20
+    ) -> tuple[list[str], list[str]]:
+        async with get_session_factory()() as session:
+            items = list(
+                await session.scalars(
+                    select(DiscoveryItem)
+                    .where(
+                        DiscoveryItem.user_id == user_id,
+                        DiscoveryItem.feedback.in_(["interested", "not_interested"]),
+                    )
+                    .order_by(DiscoveryItem.feedback_at.desc(), DiscoveryItem.created_at.desc())
+                    .limit(limit)
+                )
+            )
+        positive = [
+            f"{item.title} {item.abstract}"
+            for item in items
+            if item.feedback == "interested"
+        ]
+        negative = [
+            f"{item.title} {item.abstract}" for item in items if item.feedback == "not_interested"
+        ]
+        return positive, negative
+
+    async def create_discovery_batch(
+        self, batch: DiscoveryBatchRecord, items: list[DiscoveryItemRecord]
+    ) -> DiscoveryBatchPage:
+        record = DiscoveryBatch(
+            id=batch.id,
+            user_id=batch.user_id,
+            batch_number=batch.batch_number,
+            basis_paper_count=batch.basis_paper_count,
+            seed_paper_title=batch.seed_paper_title,
+            profile_terms=list(batch.profile_terms),
+            strategy=batch.strategy,
+            feedback_applied=batch.feedback_applied,
+            created_at=batch.created_at,
+        )
+        records = [
+            DiscoveryItem(
+                id=item.id,
+                batch_id=item.batch_id,
+                user_id=item.user_id,
+                arxiv_id=item.arxiv_id,
+                title=item.title,
+                authors=list(item.authors),
+                abstract=item.abstract,
+                published=item.published,
+                pdf_url=item.pdf_url,
+                journal_ref=item.journal_ref,
+                matched_paper_title=item.matched_paper_title,
+                matched_terms=list(item.matched_terms),
+                match_type=item.match_type,
+                score=item.score,
+                rank=item.rank,
+                created_at=item.created_at,
+            )
+            for item in items
+        ]
+        async with get_session_factory()() as session:
+            session.add(record)
+            session.add_all(records)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                existing = await self.get_latest_discovery_batch(batch.user_id)
+                if existing is not None:
+                    return existing
+                raise
+        return record, records
+
+    async def record_discovery_item_action(
+        self, item_id: str, user_id: str, action: str, *, arxiv_id: str | None = None
+    ) -> DiscoveryItem | None:
+        async with get_session_factory()() as session:
+            item = await session.scalar(
+                select(DiscoveryItem)
+                .where(DiscoveryItem.id == item_id, DiscoveryItem.user_id == user_id)
+                .with_for_update()
+            )
+            if item is None or (arxiv_id and item.arxiv_id != arxiv_id):
+                return None
+            timestamp = now()
+            if action == "opened":
+                item.opened_at = item.opened_at or timestamp
+            elif action in {"interested", "not_interested"}:
+                item.feedback = action
+                item.feedback_at = timestamp
+            elif action == "imported":
+                item.imported_at = item.imported_at or timestamp
+            else:
+                raise ValueError("不支持的推荐反馈动作")
+            await session.commit()
+            await session.refresh(item)
+            return item
+
+    async def discovery_metrics(self, since: datetime) -> dict[str, int | float]:
+        async with get_session_factory()() as session:
+            batches = int(
+                await session.scalar(
+                    select(func.count(DiscoveryBatch.id)).where(
+                        DiscoveryBatch.created_at >= since
+                    )
+                )
+                or 0
+            )
+            row = (
+                await session.execute(
+                    select(
+                        func.count(DiscoveryItem.id),
+                        func.count(DiscoveryItem.id).filter(DiscoveryItem.opened_at.is_not(None)),
+                        func.count(DiscoveryItem.id).filter(
+                            DiscoveryItem.feedback == "interested"
+                        ),
+                        func.count(DiscoveryItem.id).filter(
+                            DiscoveryItem.feedback == "not_interested"
+                        ),
+                        func.count(DiscoveryItem.id).filter(DiscoveryItem.imported_at.is_not(None)),
+                    ).where(DiscoveryItem.created_at >= since)
+                )
+            ).one()
+        impressions, opened, interested, not_interested, imported = (
+            int(value or 0) for value in row
+        )
+        feedback = interested + not_interested
+        return _discovery_metric_report(
+            batches, impressions, opened, interested, not_interested, imported, feedback
+        )
 
     async def get_owned_paper(self, paper_id: str, owner_id: str) -> Paper | None:
         async with get_session_factory()() as session:

@@ -15,11 +15,14 @@ from .arxiv_service import ArxivPaper
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{2,}|[\u4e00-\u9fff]{2,}")
 _ARXIV_VERSION_RE = re.compile(r"v\d+$", re.IGNORECASE)
 _STOPWORDS = {
-    "about", "after", "against", "also", "among", "analysis", "approach", "based",
-    "between", "can", "data", "deep", "for", "from", "into", "large", "learning",
-    "method", "methods", "model", "models", "new", "paper", "prediction", "results",
-    "study", "system", "systems", "the", "their", "this", "through", "towards", "using",
-    "via", "with", "without", "一种", "方法", "模型", "研究", "论文", "基于", "用于",
+    "about", "across", "address", "advances", "after", "against", "all", "also", "among",
+    "an", "analysis", "and", "approach", "are", "as", "at", "based", "be", "between",
+    "by", "can", "data", "deep", "for", "from", "has", "have", "in", "into", "is",
+    "its", "large", "learning", "method", "methods", "model", "models", "new", "of", "on",
+    "our", "paper", "prediction", "results", "study", "such", "system", "systems", "the",
+    "their", "these", "this", "through", "to", "towards", "use", "used", "using", "via",
+    "was", "we",
+    "were", "with", "without", "一种", "方法", "模型", "研究", "论文", "基于", "用于",
 }
 
 
@@ -211,6 +214,8 @@ def rank_recommendations(
     *,
     excluded_arxiv_ids: set[str],
     embeddings: Sequence[Sequence[float]] | None = None,
+    positive_feedback_texts: Sequence[str] = (),
+    negative_feedback_texts: Sequence[str] = (),
     limit: int = 6,
 ) -> list[RankedRecommendation]:
     existing = set(profile.existing_arxiv_ids)
@@ -227,7 +232,13 @@ def rank_recommendations(
     candidate_count = len(deduplicated)
     semantic_ready = bool(
         embeddings
-        and len(embeddings) == candidate_count + len(profile.papers)
+        and len(embeddings)
+        == (
+            candidate_count
+            + len(profile.papers)
+            + len(positive_feedback_texts)
+            + len(negative_feedback_texts)
+        )
         and candidate_count
     )
     ranked: list[RankedRecommendation] = []
@@ -254,13 +265,51 @@ def rank_recommendations(
                 best_title = str(getattr(library_paper, "title", ""))
                 best_terms = terms
                 best_semantic = semantic
+        feedback_offset = candidate_count + len(profile.papers)
+        positive_similarity = 0.0
+        for feedback_index, feedback_text in enumerate(positive_feedback_texts):
+            lexical, _ = _lexical_similarity(candidate_text, feedback_text)
+            semantic = 0.0
+            if semantic_ready and embeddings:
+                semantic = max(
+                    0.0,
+                    _cosine(
+                        embeddings[candidate_index],
+                        embeddings[feedback_offset + feedback_index],
+                    ),
+                )
+            positive_similarity = max(
+                positive_similarity,
+                0.72 * semantic + 0.28 * lexical if semantic_ready else lexical,
+            )
+        negative_offset = feedback_offset + len(positive_feedback_texts)
+        negative_similarity = 0.0
+        for feedback_index, feedback_text in enumerate(negative_feedback_texts):
+            lexical, _ = _lexical_similarity(candidate_text, feedback_text)
+            semantic = 0.0
+            if semantic_ready and embeddings:
+                semantic = max(
+                    0.0,
+                    _cosine(
+                        embeddings[candidate_index],
+                        embeddings[negative_offset + feedback_index],
+                    ),
+                )
+            negative_similarity = max(
+                negative_similarity,
+                0.72 * semantic + 0.28 * lexical if semantic_ready else lexical,
+            )
+        adjusted_score = min(
+            1.0,
+            max(0.0, best_score + 0.20 * positive_similarity - 0.18 * negative_similarity),
+        )
         ranked.append(
             RankedRecommendation(
                 paper=candidate,
                 matched_paper_title=best_title,
                 matched_terms=best_terms[:3],
                 match_type="semantic" if semantic_ready and best_semantic > 0 else "topic",
-                score=max(best_score, 0.0),
+                score=adjusted_score,
             )
         )
     ranked.sort(key=lambda item: (-item.score, item.paper.arxiv_id))
@@ -308,6 +357,8 @@ async def collect_recommendations(
     config: Any,
     model_router: Any,
     excluded_arxiv_ids: set[str],
+    positive_feedback_texts: Sequence[str] = (),
+    negative_feedback_texts: Sequence[str] = (),
     limit: int,
     embedder: Callable[[Any, Any, list[str]], Awaitable[list[list[float]] | None]] = (
         embed_discovery_texts
@@ -327,12 +378,16 @@ async def collect_recommendations(
         return [], "keyword"
     texts = [f"{candidate.title} {candidate.abstract}"[:4000] for candidate in filtered]
     texts.extend(_paper_text(paper)[:4000] for paper in profile.papers)
+    texts.extend(text[:4000] for text in positive_feedback_texts)
+    texts.extend(text[:4000] for text in negative_feedback_texts)
     embeddings = await embedder(config, model_router, texts)
     ranked = rank_recommendations(
         profile,
         filtered,
         excluded_arxiv_ids=excluded_arxiv_ids,
         embeddings=embeddings,
+        positive_feedback_texts=positive_feedback_texts,
+        negative_feedback_texts=negative_feedback_texts,
         limit=limit,
     )
     return ranked, "semantic_keyword" if embeddings else "keyword"

@@ -940,11 +940,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .result-match { width: fit-content; max-width: min(100%, 760px); display: flex; align-items: baseline; gap: 8px; margin-top: 12px; padding: 7px 10px; border-left: 2px solid var(--blue-line); background: var(--blue-soft); color: var(--blue-ink); }
 .result-match span { flex: 0 0 auto; font-size: 12px; font-weight: 680; }
 .result-match p { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.recommendation-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 14px; color: var(--muted); font-size: 12px; }
+.recommendation-feedback button { min-height: 36px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--ink-soft); cursor: pointer; }
+.recommendation-feedback button:hover { border-color: var(--blue-line); background: var(--blue-soft); }
+.recommendation-feedback button.active { border-color: var(--blue-line); background: var(--blue-selected); color: var(--blue-ink); font-weight: 650; }
+.recommendation-feedback button:disabled { cursor: wait; opacity: .65; }
 .result-actions a { min-height: 44px; font-size: 13px; }
 .discover-side { top: 84px; padding: 20px; background: #fafbf9; }
 .discover-side h3 { margin: 0; font-size: 16px; }
 .discover-side > p { margin: 9px 0 0; font-size: 13px; line-height: 1.6; }
 .discover-side small { display: block; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.55; }
+.discover-side small + small { margin-top: 7px; padding-top: 0; border-top: 0; color: var(--blue-ink); }
 .discover-topics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
 .discover-topics span { max-width: 100%; overflow: hidden; padding: 5px 8px; border: 1px solid var(--blue-line); border-radius: 6px; background: var(--blue-soft); color: var(--blue-ink); text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .discover-empty { margin-top: 22px; padding: 38px 8px; border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border); }
@@ -972,8 +978,24 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .result-list h3 { font-size: 16px; }
   .result-match { display: block; }
   .result-match p { margin-top: 3px; white-space: normal; }
+  .recommendation-feedback span { flex-basis: 100%; }
+  .recommendation-feedback button { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .discover-loading span, .discover-refresh .spin { animation: none; }
+}
+
+/* 推荐效果：和 RAG 指标分区，避免管理概览继续堆叠信息。 */
+.discovery-metric-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 18px; margin-top: 18px; }
+.discovery-metric-grid > article { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.discovery-metric-grid h3 { margin: 0 0 15px; font-size: 15px; }
+.discovery-metric-notes dl { margin: 0; }
+.discovery-metric-notes dl div { padding: 10px 0; border-top: 1px solid var(--border); }
+.discovery-metric-notes dl div:first-child { padding-top: 0; border-top: 0; }
+.discovery-metric-notes dt { color: var(--ink); font-size: 13px; font-weight: 680; }
+.discovery-metric-notes dd { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+@media (max-width: 900px) {
+  .discovery-metric-grid { grid-template-columns: 1fr; }
 }

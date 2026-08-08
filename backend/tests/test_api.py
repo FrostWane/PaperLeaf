@@ -10,7 +10,12 @@ from paperleaf_api.arxiv_service import ArxivPaper
 from paperleaf_api.config import settings
 from paperleaf_api.main import AppServices, create_app
 from paperleaf_api.models import JobStatus, PaperStatus, UserRole
-from paperleaf_api.repository import MemoryRepository, PaperRecord
+from paperleaf_api.repository import (
+    DiscoveryBatchRecord,
+    DiscoveryItemRecord,
+    MemoryRepository,
+    PaperRecord,
+)
 from paperleaf_api.storage import LocalObjectStorage
 
 
@@ -146,9 +151,10 @@ def test_discovery_recommendations_use_owned_library_and_exclude_existing(
         bootstrap_admin_password="admin-password-123",
     )
     repository = MemoryRepository(config.session_secret)
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"calls": 0}
 
     async def related_search(phrases, limit, *, start=0):
+        captured["calls"] = int(captured["calls"]) + 1
         captured.update(phrases=phrases, limit=limit, start=start)
         return [
             ArxivPaper(
@@ -173,7 +179,7 @@ def test_discovery_recommendations_use_owned_library_and_exclude_existing(
     app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
 
     with TestClient(app) as client:
-        _login(client, "admin@example.com", "admin-password-123")
+        csrf = _login(client, "admin@example.com", "admin-password-123")
         admin = asyncio.run(repository.find_user_by_email("admin@example.com"))
         assert admin
         repository.papers["library-paper"] = PaperRecord(
@@ -194,23 +200,48 @@ def test_discovery_recommendations_use_owned_library_and_exclude_existing(
             status=PaperStatus.ready,
         )
 
-        disabled = client.get("/api/v1/discover/recommendations?batch=0&limit=6")
+        disabled = client.get("/api/v1/discover/recommendations?limit=6")
         assert disabled.status_code == 403
         assert disabled.json()["detail"]["code"] == "ARXIV_SEARCH_DISABLED"
         admin.preferences = {"arxiv_search_enabled": True}
 
-        response = client.get("/api/v1/discover/recommendations?batch=0&limit=6")
+        response = client.get("/api/v1/discover/recommendations?limit=6")
+        restored = client.get("/api/v1/discover/recommendations?limit=6")
+        item_id = response.json()["items"][0]["item_id"]
+        opened = client.post(
+            f"/api/v1/discover/recommendations/items/{item_id}/feedback",
+            headers={"X-CSRF-Token": csrf},
+            json={"action": "opened"},
+        )
+        interested = client.post(
+            f"/api/v1/discover/recommendations/items/{item_id}/feedback",
+            headers={"X-CSRF-Token": csrf},
+            json={"action": "interested"},
+        )
+        metrics = client.get("/api/v1/admin/discovery-metrics?window=30d")
 
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["basis_paper_count"] == 1
     assert payload["seed_paper_title"] == "DeepDTA drug target binding affinity"
     assert payload["strategy"] == "keyword"
+    assert payload["restored"] is False
+    assert payload["batch_id"]
     assert [item["arxiv_id"] for item in payload["items"]] == ["2601.00002"]
     assert payload["items"][0]["matched_paper_title"] == (
         "DeepDTA drug target binding affinity"
     )
     assert response.headers["cache-control"] == "private, no-store"
+    assert restored.status_code == 200
+    assert restored.json()["batch_id"] == payload["batch_id"]
+    assert restored.json()["restored"] is True
+    assert captured["calls"] == 1
+    assert opened.json()["opened"] is True
+    assert interested.json()["feedback"] == "interested"
+    assert metrics.status_code == 200
+    assert metrics.json()["impressions"] == 1
+    assert metrics.json()["click_through_rate"] == 1
+    assert metrics.json()["interest_hit_rate"] == 1
     assert captured["limit"] == 20
     assert captured["start"] == 0
 
@@ -382,10 +413,46 @@ def test_arxiv_import_persists_exact_metadata_publication(
     app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
     with TestClient(app) as client:
         csrf = _login(client, "admin@example.com", "admin-password-123")
+        admin = asyncio.run(repository.find_user_by_email("admin@example.com"))
+        assert admin
+        batch_id = str(uuid.uuid4())
+        item_id = str(uuid.uuid4())
+        asyncio.run(
+            repository.create_discovery_batch(
+                DiscoveryBatchRecord(
+                    id=batch_id,
+                    user_id=admin.id,
+                    batch_number=0,
+                    basis_paper_count=1,
+                    seed_paper_title="Seed",
+                    profile_terms=["paper"],
+                    strategy="keyword",
+                ),
+                [
+                    DiscoveryItemRecord(
+                        id=item_id,
+                        batch_id=batch_id,
+                        user_id=admin.id,
+                        arxiv_id="2401.01234",
+                        title="Exact arXiv paper",
+                        authors=["Alice", "Bob"],
+                        abstract="摘要",
+                        published="2025-02-03T00:00:00Z",
+                        pdf_url="https://arxiv.org/pdf/2401.01234.pdf",
+                        journal_ref=None,
+                        matched_paper_title="Seed",
+                        matched_terms=["paper"],
+                        match_type="topic",
+                        score=0.5,
+                        rank=1,
+                    )
+                ],
+            )
+        )
         imported = client.post(
             "/api/v1/discover/arxiv/import",
             headers={"X-CSRF-Token": csrf},
-            json={"arxiv_id": "2401.01234"},
+            json={"arxiv_id": "2401.01234", "recommendation_item_id": item_id},
         )
         assert imported.status_code == 201, imported.text
         assert imported.json()["title"] == "Exact arXiv paper"
@@ -393,6 +460,7 @@ def test_arxiv_import_persists_exact_metadata_publication(
         assert imported.json()["year"] == 2025
         assert imported.json()["abstract"] == "摘要"
         assert imported.json()["publication"] == "Journal of Reliable Systems 12 (2025) 1-9"
+        assert repository.discovery_items[item_id].imported_at is not None
 
 
 def test_agent_thread_is_user_run_scoped_and_resume_survives_app_rebuild(tmp_path) -> None:

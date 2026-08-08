@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -60,6 +59,8 @@ from .repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
     CurrentAdminProtectionError,
+    DiscoveryBatchRecord,
+    DiscoveryItemRecord,
     LastAdminProtectionError,
     ManagedUserNotFoundError,
     MemoryRepository,
@@ -85,6 +86,9 @@ from .schemas import (
     CollectionCreate,
     CollectionRead,
     CollectionUpdate,
+    DiscoveryFeedbackRequest,
+    DiscoveryFeedbackResponse,
+    DiscoveryMetricsResponse,
     DiscoveryRecommendation,
     DiscoveryRecommendationResponse,
     JobRead,
@@ -232,6 +236,44 @@ def _user_read(user: UserRecord) -> UserRead:
 def _user_preferences_read(user: UserRecord) -> UserPreferencesRead:
     preferences = UserPreferences.model_validate(user.preferences or {})
     return UserPreferencesRead(display_name=user.display_name, **preferences.model_dump())
+
+
+def _discovery_response(
+    batch: Any,
+    items: list[Any],
+    *,
+    restored: bool,
+) -> DiscoveryRecommendationResponse:
+    return DiscoveryRecommendationResponse(
+        items=[
+            DiscoveryRecommendation(
+                item_id=item.id,
+                arxiv_id=item.arxiv_id,
+                title=item.title,
+                authors=list(item.authors or []),
+                abstract=item.abstract,
+                published=item.published,
+                pdf_url=item.pdf_url,
+                journal_ref=item.journal_ref,
+                matched_paper_title=item.matched_paper_title,
+                matched_terms=list(item.matched_terms or []),
+                match_type=item.match_type,
+                feedback=item.feedback,
+                opened=item.opened_at is not None,
+                imported=item.imported_at is not None,
+            )
+            for item in items
+        ],
+        batch_id=batch.id,
+        batch=batch.batch_number,
+        basis_paper_count=batch.basis_paper_count,
+        seed_paper_title=batch.seed_paper_title,
+        profile_terms=list(batch.profile_terms or []),
+        strategy=batch.strategy,
+        restored=restored,
+        feedback_applied=batch.feedback_applied,
+        generated_at=batch.created_at,
+    )
 
 
 def _collection_tree(records: list[Any], memberships: dict[str, list[str]]) -> list[CollectionRead]:
@@ -639,6 +681,29 @@ def create_app(
             "identifiers_collected": False,
         }
         return report
+
+    @app.get(
+        "/api/v1/admin/discovery-metrics",
+        response_model=DiscoveryMetricsResponse,
+    )
+    async def admin_discovery_metrics(
+        _: Annotated[UserRecord, Depends(admin_user)],
+        window: str = "30d",
+    ) -> DiscoveryMetricsResponse:
+        windows = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+        if window not in windows:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "统计窗口仅支持 24h、7d 或 30d"
+            )
+        hours = windows[window]
+        metrics = await services.repository.discovery_metrics(
+            datetime.now(timezone.utc) - timedelta(hours=hours)
+        )
+        return DiscoveryMetricsResponse(
+            window_hours=hours,
+            generated_at=datetime.now(timezone.utc),
+            **metrics,
+        )
 
     @app.get("/api/v1/collections", response_model=list[CollectionRead])
     async def list_collections(
@@ -1053,9 +1118,8 @@ def create_app(
     async def discover_recommendations(
         response: Response,
         user: Annotated[UserRecord, Depends(current_user)],
-        batch: int = 0,
         limit: int = 6,
-        exclude: str = "",
+        refresh: bool = False,
     ) -> DiscoveryRecommendationResponse:
         response.headers["Cache-Control"] = "private, no-store"
         if not UserPreferences.model_validate(user.preferences or {}).arxiv_search_enabled:
@@ -1066,16 +1130,21 @@ def create_app(
                     "message": "请先在个人设置中允许联网发现，再生成相关论文推荐",
                 },
             )
-        if not 0 <= batch <= 1000 or not 3 <= limit <= 10 or len(exclude) > 2000:
+        if not 3 <= limit <= 10:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "推荐参数无效")
-        excluded_ids = {item.strip() for item in exclude.split(",") if item.strip()}
-        if len(excluded_ids) > 100 or any(
-            not re.fullmatch(r"[0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?", item)
-            for item in excluded_ids
-        ):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "排除列表格式无效")
 
         papers = await services.repository.list_papers(user.id)
+        if not papers:
+            return DiscoveryRecommendationResponse(
+                items=[],
+                batch=0,
+                basis_paper_count=0,
+                strategy="empty_library",
+            )
+        current = await services.repository.get_latest_discovery_batch(user.id)
+        if current is not None and not refresh:
+            return _discovery_response(current[0], current[1], restored=True)
+        batch = int(current[0].batch_number) + 1 if current is not None else 0
         recommendation_papers: list[Any] = list(papers)
         if not config.is_demo and papers:
             try:
@@ -1100,13 +1169,8 @@ def create_app(
                 # 索引读取异常不阻断发现页，仍可使用已有元数据做确定性降级。
                 recommendation_papers = list(papers)
         profile = build_discovery_profile(recommendation_papers, batch)
-        if not profile:
-            return DiscoveryRecommendationResponse(
-                items=[],
-                batch=batch,
-                basis_paper_count=0,
-                strategy="empty_library",
-            )
+        if not profile:  # pragma: no cover - papers 已保证至少有一篇带标题记录
+            raise HTTPException(status.HTTP_409_CONFLICT, "文献库暂无可用于推荐的标题")
         try:
             candidates = await search_related_arxiv(
                 list(profile.search_phrases),
@@ -1116,29 +1180,78 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv 暂时不可用") from exc
 
+        excluded_ids = await services.repository.list_discovery_seen_arxiv_ids(user.id)
+        positive_feedback, negative_feedback = (
+            await services.repository.get_discovery_feedback_signals(user.id)
+        )
         ranked, strategy = await collect_recommendations(
             profile,
             candidates,
             config=config,
             model_router=services.model_router,
             excluded_arxiv_ids=excluded_ids,
+            positive_feedback_texts=positive_feedback,
+            negative_feedback_texts=negative_feedback,
             limit=limit,
         )
-        return DiscoveryRecommendationResponse(
-            items=[
-                DiscoveryRecommendation(
-                    **item.paper.__dict__,
+        batch_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        saved = await services.repository.create_discovery_batch(
+            DiscoveryBatchRecord(
+                id=batch_id,
+                user_id=user.id,
+                batch_number=batch,
+                basis_paper_count=profile.basis_paper_count,
+                seed_paper_title=str(getattr(profile.seed, "title", "")),
+                profile_terms=list(profile.topics[:6]),
+                strategy=strategy,
+                feedback_applied=bool(positive_feedback or negative_feedback),
+                created_at=created_at,
+            ),
+            [
+                DiscoveryItemRecord(
+                    id=str(uuid.uuid4()),
+                    batch_id=batch_id,
+                    user_id=user.id,
+                    arxiv_id=item.paper.arxiv_id,
+                    title=item.paper.title,
+                    authors=list(item.paper.authors),
+                    abstract=item.paper.abstract,
+                    published=item.paper.published,
+                    pdf_url=item.paper.pdf_url,
+                    journal_ref=item.paper.journal_ref,
                     matched_paper_title=item.matched_paper_title,
                     matched_terms=list(item.matched_terms),
                     match_type=item.match_type,
+                    score=item.score,
+                    rank=index,
+                    created_at=created_at,
                 )
-                for item in ranked
+                for index, item in enumerate(ranked, start=1)
             ],
-            batch=batch,
-            basis_paper_count=profile.basis_paper_count,
-            seed_paper_title=str(getattr(profile.seed, "title", "")),
-            profile_terms=list(profile.topics[:6]),
-            strategy=strategy,
+        )
+        return _discovery_response(saved[0], saved[1], restored=False)
+
+    @app.post(
+        "/api/v1/discover/recommendations/items/{item_id}/feedback",
+        response_model=DiscoveryFeedbackResponse,
+    )
+    async def record_discovery_feedback(
+        item_id: str,
+        payload: DiscoveryFeedbackRequest,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> DiscoveryFeedbackResponse:
+        item = await services.repository.record_discovery_item_action(
+            item_id, user.id, payload.action
+        )
+        if item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "推荐论文不存在")
+        return DiscoveryFeedbackResponse(
+            item_id=item.id,
+            feedback=item.feedback,
+            opened=item.opened_at is not None,
+            imported=item.imported_at is not None,
         )
 
     @app.post(
@@ -1201,6 +1314,13 @@ def create_app(
         except ValueError as exc:
             await services.storage.delete(storage_key)
             raise HTTPException(status.HTTP_409_CONFLICT, "文献已导入") from exc
+        if payload.recommendation_item_id:
+            await services.repository.record_discovery_item_action(
+                payload.recommendation_item_id,
+                user.id,
+                "imported",
+                arxiv_id=payload.arxiv_id,
+            )
         return _paper_read(created)
 
     @app.post(

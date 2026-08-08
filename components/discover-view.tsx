@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, ExternalLink, Plus, RefreshCw, Search, X } from "lucide-react";
+import { Check, ExternalLink, Plus, RefreshCw, Search, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { getDataSource } from "@/lib/data-source";
@@ -24,30 +24,29 @@ export function DiscoverView() {
   const [imported, setImported] = useState<string[]>([]);
   const [results, setResults] = useState<ArxivResult[]>([]);
   const [recommendation, setRecommendation] = useState(emptyRecommendation);
-  const [seenIds, setSeenIds] = useState<string[]>([]);
   const [mode, setMode] = useState<DiscoverMode>("recommend");
   const [recommendationAllowed, setRecommendationAllowed] = useState<boolean | null>(process.env.NEXT_PUBLIC_DATA_MODE === "real" ? null : true);
   const [message, setMessage] = useState(process.env.NEXT_PUBLIC_DATA_MODE === "real" ? "正在读取发现偏好…" : "正在根据文献库挑选相关论文…");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [feedbackPending, setFeedbackPending] = useState<string[]>([]);
   const requestSequence = useRef(0);
   const initialRequestStarted = useRef(false);
 
-  async function loadRecommendations(batch: number, excluded: string[]) {
+  async function loadRecommendations(refresh = false) {
     const sequence = ++requestSequence.current;
     setLoading(true);
     setMode("recommend");
-    setMessage(batch ? "正在换一批…" : "正在根据文献库挑选相关论文…");
+    setMessage(refresh ? "正在换一批…" : "正在读取上次推荐…");
     try {
-      const next = await getDataSource().recommendArxiv(batch, excluded);
+      const next = await getDataSource().recommendArxiv({ refresh });
       if (sequence !== requestSequence.current) return;
       setRecommendation(next);
       setResults(next.items);
-      setSeenIds((current) => Array.from(new Set([...current, ...next.items.map((item) => item.id)])));
       setMessage(next.strategy === "empty_library"
         ? "文献库还没有可用于推荐的论文。"
         : next.items.length
-          ? ""
+          ? next.restored ? "已恢复上次推荐。" : ""
           : "这一批没有新的结果，可以继续换一批。");
     } catch (error) {
       if (sequence === requestSequence.current) setMessage(error instanceof Error ? error.message : "推荐失败");
@@ -60,12 +59,12 @@ export function DiscoverView() {
     if (initialRequestStarted.current) return;
     initialRequestStarted.current = true;
     if (process.env.NEXT_PUBLIC_DATA_MODE !== "real") {
-      queueMicrotask(() => void loadRecommendations(0, []));
+      queueMicrotask(() => void loadRecommendations());
       return;
     }
     void getUserPreferences().then((preferences) => {
       setRecommendationAllowed(preferences.arxivSearchEnabled);
-      if (preferences.arxivSearchEnabled) void loadRecommendations(0, []);
+      if (preferences.arxivSearchEnabled) void loadRecommendations();
       else {
         setLoading(false);
         setMessage("联网发现尚未开启。");
@@ -77,7 +76,7 @@ export function DiscoverView() {
   }, []);
 
   function returnToRecommendations() {
-    if (recommendationAllowed) void loadRecommendations(0, []);
+    if (recommendationAllowed) void loadRecommendations();
     else {
       setMode("recommend");
       setResults([]);
@@ -108,8 +107,9 @@ export function DiscoverView() {
     if (!selected || importing) return;
     setImporting(true);
     try {
-      await getDataSource().importArxiv(selected.id);
+      await getDataSource().importArxiv(selected.id, selected.itemId);
       setImported((items) => Array.from(new Set([...items, selected.id])));
+      setResults((items) => items.map((item) => item.id === selected.id ? { ...item, imported: true } : item));
       setMessage(`《${selected.title}》已加入导入队列。`);
       setSelected(null);
     } catch (error) {
@@ -117,6 +117,27 @@ export function DiscoverView() {
       setSelected(null);
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function recordFeedback(paper: ArxivResult, action: "opened" | "interested" | "not_interested") {
+    if (!paper.itemId || feedbackPending.includes(paper.itemId)) return;
+    if (action === "opened") {
+      setResults((items) => items.map((item) => item.itemId === paper.itemId ? { ...item, opened: true } : item));
+    } else {
+      setFeedbackPending((items) => [...items, paper.itemId!]);
+    }
+    try {
+      const feedback = await getDataSource().recordDiscoveryFeedback(paper.itemId, action);
+      setResults((items) => items.map((item) => item.itemId === paper.itemId ? {
+        ...item,
+        opened: action === "opened" ? true : item.opened,
+        feedback: action === "opened" ? item.feedback : feedback,
+      } : item));
+    } catch (error) {
+      if (action !== "opened") setMessage(error instanceof Error ? error.message : "反馈保存失败");
+    } finally {
+      if (action !== "opened") setFeedbackPending((items) => items.filter((id) => id !== paper.itemId));
     }
   }
 
@@ -132,7 +153,7 @@ export function DiscoverView() {
           </div>
           <div className="discover-heading-actions">
             {mode === "search" && <button type="button" className="secondary-button" disabled={loading} onClick={returnToRecommendations}>返回推荐</button>}
-            <button type="button" className="secondary-button discover-refresh" disabled={loading || recommendationAllowed !== true || recommendation.strategy === "empty_library"} onClick={() => void loadRecommendations(recommendation.batch + 1, seenIds)}><RefreshCw size={15} className={loading && mode === "recommend" ? "spin" : ""} />换一批</button>
+            <button type="button" className="secondary-button discover-refresh" disabled={loading || recommendationAllowed !== true || recommendation.strategy === "empty_library"} onClick={() => void loadRecommendations(true)}><RefreshCw size={15} className={loading && mode === "recommend" ? "spin" : ""} />换一批</button>
           </div>
         </div>
 
@@ -164,9 +185,14 @@ export function DiscoverView() {
                 <p className="result-meta">{paper.authors} · {paper.year || "年份未知"}</p>
                 {mode === "recommend" && paper.matchedPaperTitle && <div className="result-match"><span>{paper.matchType === "semantic" ? "语义相关" : "主题相关"}</span><p>与《{paper.matchedPaperTitle}》相关{paper.matchedTerms?.length ? ` · ${paper.matchedTerms.join(" / ")}` : ""}</p></div>}
                 <p>{paper.summary}</p>
+                {mode === "recommend" && paper.itemId && <div className="recommendation-feedback" aria-label="推荐反馈">
+                  <span>这篇推荐是否有帮助？</span>
+                  <button type="button" aria-pressed={paper.feedback === "interested"} className={paper.feedback === "interested" ? "active" : ""} disabled={feedbackPending.includes(paper.itemId)} onClick={() => void recordFeedback(paper, "interested")}><ThumbsUp size={15} />感兴趣</button>
+                  <button type="button" aria-pressed={paper.feedback === "not_interested"} className={paper.feedback === "not_interested" ? "active" : ""} disabled={feedbackPending.includes(paper.itemId)} onClick={() => void recordFeedback(paper, "not_interested")}><ThumbsDown size={15} />不感兴趣</button>
+                </div>}
                 <div className="result-actions">
-                  <a href={`https://arxiv.org/abs/${paper.id}`} target="_blank" rel="noreferrer">查看来源 <ExternalLink size={14} /></a>
-                  <button type="button" className={imported.includes(paper.id) ? "secondary-button imported" : "primary-button"} disabled={imported.includes(paper.id)} onClick={() => setSelected(paper)}>{imported.includes(paper.id) ? <><Check size={15} />已加入队列</> : <><Plus size={15} />导入文献库</>}</button>
+                  <a href={`https://arxiv.org/abs/${paper.id}`} target="_blank" rel="noreferrer" onClick={() => void recordFeedback(paper, "opened")}>查看来源 <ExternalLink size={14} /></a>
+                  <button type="button" className={paper.imported || imported.includes(paper.id) ? "secondary-button imported" : "primary-button"} disabled={paper.imported || imported.includes(paper.id)} onClick={() => setSelected(paper)}>{paper.imported || imported.includes(paper.id) ? <><Check size={15} />已加入队列</> : <><Plus size={15} />导入文献库</>}</button>
                 </div>
               </article>
             ))}</div>}
@@ -177,7 +203,7 @@ export function DiscoverView() {
         {recommendationAllowed === false
           ? <p>开启联网发现后，这里会显示本轮推荐所依据的研究主题。</p>
           : recommendation.basisPaperCount > 0
-          ? <><p>{strategyLabel} · 本批从《{recommendation.seedPaperTitle}》延伸检索</p><div className="discover-topics">{recommendation.profileTerms.map((term) => <span key={term}>{term}</span>)}</div></>
+          ? <><p>{strategyLabel} · 本批从《{recommendation.seedPaperTitle}》延伸检索</p>{recommendation.generatedAt && <small>生成于 {new Date(recommendation.generatedAt).toLocaleString("zh-CN", { hour12: false })}</small>}{recommendation.feedbackApplied && <small>本批排序已参考你的兴趣反馈</small>}<div className="discover-topics">{recommendation.profileTerms.map((term) => <span key={term}>{term}</span>)}</div></>
           : <p>添加论文后，这里会形成你的个人研究主题。</p>}
         <small>仅向 arXiv 发送主题词，不上传 PDF 文件。</small>
       </aside>

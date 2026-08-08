@@ -9,6 +9,7 @@ from paperleaf_api.discovery import (
     build_discovery_profile,
     collect_recommendations,
     rank_recommendations,
+    tokenize,
     with_indexed_text,
 )
 
@@ -85,6 +86,12 @@ def test_short_model_title_uses_domain_phrases_from_abstract() -> None:
 
     assert profile
     assert profile.search_phrases[:2] == ("drug target", "binding affinity")
+
+
+def test_common_academic_connectors_do_not_become_recommendation_topics() -> None:
+    tokens = tokenize("Advances across models and systems are used in drug discovery")
+
+    assert tokens == ["drug", "discovery"]
 
 
 def test_missing_abstract_uses_owned_indexed_text_without_mutating_record() -> None:
@@ -184,3 +191,26 @@ def test_embedding_failure_falls_back_to_deterministic_keyword_ranking() -> None
     assert first_strategy == second_strategy == "keyword"
     assert [item.paper.arxiv_id for item in first] == [item.paper.arxiv_id for item in second]
     assert first[0].paper.arxiv_id == "2501.00001"
+
+
+def test_interest_feedback_boosts_similar_candidates_and_demotes_negative_topics() -> None:
+    profile = build_discovery_profile(
+        [_paper("p1", "General machine learning systems", "prediction", days_ago=0)],
+        0,
+    )
+    assert profile
+    candidates = [
+        _candidate("2501.00001", "Language models for poetry", "creative text generation"),
+        _candidate("2501.00002", "Graph networks for molecules", "molecular property prediction"),
+    ]
+
+    ranked = rank_recommendations(
+        profile,
+        candidates,
+        excluded_arxiv_ids=set(),
+        positive_feedback_texts=["graph networks molecular property"],
+        negative_feedback_texts=["language poetry creative text"],
+    )
+
+    assert ranked[0].paper.arxiv_id == "2501.00002"
+    assert ranked[0].score > ranked[1].score

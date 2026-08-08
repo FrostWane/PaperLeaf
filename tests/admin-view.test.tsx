@@ -40,6 +40,21 @@ const observability = {
   runtime_store: { backend: "redis", status: "available" },
   privacy: { content_collected: false, identifiers_collected: false },
 };
+const discoveryMetrics = {
+  window_hours: 24,
+  generated_at: "2026-08-08T12:00:00Z",
+  batches: 3,
+  impressions: 18,
+  opened: 6,
+  interested: 4,
+  not_interested: 2,
+  imported: 2,
+  feedback_count: 6,
+  click_through_rate: 1 / 3,
+  interest_hit_rate: 2 / 3,
+  feedback_rate: 1 / 3,
+  import_rate: 1 / 9,
+};
 
 describe("AdminView 管理信息语义", () => {
   beforeEach(() => {
@@ -51,6 +66,7 @@ describe("AdminView 管理信息语义", () => {
       ])),
       http.get(`${API_BASE_URL}/admin/model-health`, () => HttpResponse.json(modelHealth)),
       http.get(`${API_BASE_URL}/admin/observability`, () => HttpResponse.json(observability)),
+      http.get(`${API_BASE_URL}/admin/discovery-metrics`, () => HttpResponse.json(discoveryMetrics)),
       http.get(`${API_BASE_URL}/admin/jobs`, () => HttpResponse.json([
         { id: "queued", type: "agent_run", status: "queued", progress: 0, attempts: 0, max_attempts: 3 },
         { id: "running", type: "parse_pdf", status: "running", progress: 68, attempts: 1, max_attempts: 3 },
@@ -128,6 +144,20 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getByRole("dialog", { name: "确认停用用户" })).toHaveTextContent("停用后，该用户的现有会话将失效");
     fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("不能停用或降级最后一名管理员"));
+  });
+
+  it("单独展示推荐点击率、兴趣命中率和清晰口径", async () => {
+    render(<AdminView />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "推荐效果" }));
+    expect(screen.getByRole("heading", { name: "论文发现效果" })).toBeInTheDocument();
+    const summary = screen.getByRole("tabpanel").querySelector(".metric-row");
+    expect(summary).not.toBeNull();
+    expect(within(summary as HTMLElement).getByText("点击率").parentElement).toHaveTextContent("33.3%");
+    expect(within(summary as HTMLElement).getByText("兴趣命中率").parentElement).toHaveTextContent("66.7%");
+    expect(screen.getByText("4 / 6 条明确反馈")).toBeInTheDocument();
+    expect(screen.getByText(/未反馈不当作“不感兴趣”/)).toBeInTheDocument();
+    expect(screen.getByText(/感兴趣主题会被轻度加权/)).toBeInTheDocument();
   });
 
   it("取消停用确认时不会发送状态修改请求", async () => {
