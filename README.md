@@ -106,6 +106,7 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_EMBEDDING_ENABLED` | 当前服务是否提供 Embeddings；聊天服务不支持时必须关闭 |
 | `PAPERLEAF_EMBEDDING_MODEL` | 向量模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 向量维度，必须与模型输出一致 |
+| `PAPERLEAF_EMBEDDING_BATCH_SIZE` | 文档向量化单批 Chunk 数，默认 8；本地模型不应一次提交整篇论文 |
 | `PAPERLEAF_VISION_MODEL` | 可选；低文本页 OCR 使用的视觉模型 |
 | `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用服务 Key；不配置则只使用主服务 |
 | `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用 OpenAI-compatible 根地址 |
@@ -140,10 +141,10 @@ PAPERLEAF_OPENAI_BASE_URL=https://api.deepseek.com
 PAPERLEAF_CHAT_MODEL=your-deepseek-chat-model
 PAPERLEAF_EMBEDDING_ENABLED=false
 
-# 第二服务：提供向量；同时可在主服务故障时承担聊天降级
+# 第二服务：提供向量；如不承担聊天降级，将聊天模型明确留空
 PAPERLEAF_FALLBACK_OPENAI_API_KEY=your-embedding-service-key
 PAPERLEAF_FALLBACK_OPENAI_BASE_URL=https://your-compatible-service.example/v1
-PAPERLEAF_FALLBACK_CHAT_MODEL=your-fallback-chat-model
+PAPERLEAF_FALLBACK_CHAT_MODEL=
 PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
 PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
 PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
@@ -153,6 +154,19 @@ PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
 `dimensions` 参数时可以留空。保存配置后只需重建 API 和 Worker，随后在单篇文献的
 “文献设置”中执行“重新处理”，为已有 Chunk 补写向量。向量可用后，管理页的“AI 能力
 状态”会显示向量检索可用，新问答的 RAG 轨迹会记录实际使用的召回通道。
+本地模型建议保留默认批次 8，避免把整篇论文作为一次长请求提交。
+
+Docker Desktop 连接宿主机 Ollama 的示例：
+
+```dotenv
+PAPERLEAF_FALLBACK_OPENAI_API_KEY=ollama
+PAPERLEAF_FALLBACK_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
+PAPERLEAF_FALLBACK_CHAT_MODEL=
+PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
+PAPERLEAF_FALLBACK_EMBEDDING_MODEL=qwen3-embedding:0.6b
+PAPERLEAF_EMBEDDING_DIMENSIONS=1024
+PAPERLEAF_EMBEDDING_BATCH_SIZE=8
+```
 
 完整环境变量和生产部署注意事项参见[部署指南](docs/deployment.md)。
 

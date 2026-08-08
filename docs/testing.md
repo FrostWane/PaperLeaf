@@ -46,6 +46,8 @@ GitHub Actions 对拉取请求执行上述检查并运行密钥扫描。后端�
 
 2026-08-08 管理页后台任务分页定向验证：`tests/admin-view.test.tsx` 7/7 通过，TypeScript 通过，定向 ESLint 0 错误；Docker 生产构建与 Web/API 健康检查均通过。分页用例覆盖每页 15 条、翻页、末页数量和末页按钮禁用。
 
+2026-08-08 Ollama/pgvector 真实闭环：`qwen3-embedding:0.6b` 从 Worker 返回 1024 维；四篇论文共 196 个 Chunk 全部写入 196 个向量。中文问题检索 DeepDTA 的前五条证据均同时命中 `keyword_rewrite` 与 `vector` 通道。兼容、批次、配置、模型路由专项 35/35 通过，Ruff 通过。
+
 里程碑 5 后端唯一一次全量为 176 passed / 5 skipped，隔离 PostgreSQL Artifact 缓存与 0008 升降级通过；审查修复后的连通性、五节非空、坏缓存重建和强制刷新定向测试 17/17 通过。前端受影响测试 27 项、桌面/手机 Demo E2E 2/2、类型、ESLint 和生产构建通过；强制刷新新增契约 17 项中 16 项首轮通过，唯一结构图测试因 5 秒预算不足超时，将预算按动态 Mermaid 导入调整为 10 秒后该文件 3/3 通过。没有把超时写成业务正确性失败。
 
 ## 当前后端自动化范围

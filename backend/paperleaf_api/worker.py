@@ -563,21 +563,35 @@ async def embed_texts(
         return None
     from langchain_openai import OpenAIEmbeddings
 
-    async def invoke(provider: ModelProvider) -> list[list[float]]:
-        kwargs = {
-            "model": provider.embedding_model,
-            "api_key": provider.api_key,
-            "base_url": provider.base_url,
-            "max_retries": 0,
-        }
-        if settings.embedding_dimensions:
-            kwargs["dimensions"] = settings.embedding_dimensions
-        return await OpenAIEmbeddings(**kwargs).aembed_documents(texts)
+    vectors: list[list[float]] = []
+    batch_size = settings.embedding_batch_size
+    for offset in range(0, len(texts), batch_size):
+        batch = texts[offset : offset + batch_size]
 
-    try:
-        return await runtime.execute("embedding", invoke)
-    except ModelRuntimeError:
-        return None
+        async def invoke(
+            provider: ModelProvider, current_batch: list[str] = batch
+        ) -> list[list[float]]:
+            kwargs = {
+                "model": provider.embedding_model,
+                "api_key": provider.api_key,
+                "base_url": provider.base_url,
+                "max_retries": 0,
+                # Chunk 已由 PaperLeaf 按页和 Token 上限切分。关闭 LangChain 的二次
+                # Token 化可保留原始字符串批次，并兼容 Ollama 等兼容服务。
+                "check_embedding_ctx_length": False,
+            }
+            if settings.embedding_dimensions:
+                kwargs["dimensions"] = settings.embedding_dimensions
+            return await OpenAIEmbeddings(**kwargs).aembed_documents(current_batch)
+
+        try:
+            batch_vectors = await runtime.execute("embedding", invoke)
+        except ModelRuntimeError:
+            return None
+        if len(batch_vectors) != len(batch):
+            return None
+        vectors.extend(batch_vectors)
+    return vectors
 
 
 async def lookup_crossref_publication(

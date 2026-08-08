@@ -69,6 +69,7 @@ class Settings:
         if os.getenv("PAPERLEAF_EMBEDDING_DIMENSIONS")
         else None
     )
+    embedding_batch_size: int = int(os.getenv("PAPERLEAF_EMBEDDING_BATCH_SIZE", "8"))
     fallback_openai_api_key: str | None = os.getenv("PAPERLEAF_FALLBACK_OPENAI_API_KEY")
     fallback_openai_base_url: str = os.getenv(
         "PAPERLEAF_FALLBACK_OPENAI_BASE_URL", "https://api.openai.com/v1"
@@ -166,6 +167,8 @@ class Settings:
             raise RuntimeError("模型断路器失败阈值必须至少为 1")
         if self.model_circuit_cooldown_seconds <= 0:
             raise RuntimeError("模型断路器冷却时间必须大于 0")
+        if not 1 <= self.embedding_batch_size <= 64:
+            raise RuntimeError("向量批次大小必须位于 1 到 64 之间")
         if self.redis_timeout_seconds <= 0 or self.redis_timeout_seconds > 5:
             raise RuntimeError("Redis 超时必须位于 0 到 5 秒之间")
         if self.agent_rate_limit_requests < 1:

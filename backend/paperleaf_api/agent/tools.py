@@ -166,6 +166,9 @@ class SQLLibrarySearch:
                 "api_key": provider.api_key,
                 "base_url": provider.base_url,
                 "max_retries": 0,
+                # 查询已经受 API 长度限制，不需要 LangChain 把字符串重编码为
+                # Token 数组；部分兼容服务只稳定接受字符串输入。
+                "check_embedding_ctx_length": False,
             }
             if self.config.embedding_dimensions:
                 kwargs["dimensions"] = self.config.embedding_dimensions

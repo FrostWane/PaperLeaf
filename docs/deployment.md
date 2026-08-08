@@ -133,6 +133,7 @@ Prometheus 默认保留 15 天时序数据。Compose 会把仓库内的采集规
 | `PAPERLEAF_CHAT_MODEL` | 问答、总结与全文翻译模型 |
 | `PAPERLEAF_EMBEDDING_MODEL` | 嵌入模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 嵌入向量维度 |
+| `PAPERLEAF_EMBEDDING_BATCH_SIZE` | Worker 单次提交给向量服务的 Chunk 数，默认 8，范围 1～64 |
 | `PAPERLEAF_VISION_MODEL` | 可选 OCR 视觉模型 |
 | `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用 OpenAI-compatible Key |
 | `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用服务根地址 |
@@ -156,7 +157,8 @@ Prometheus 默认保留 15 天时序数据。Compose 会把仓库内的采集规
 DeepSeek 聊天接口不应被当作 Embeddings 接口使用。继续用 DeepSeek 生成回答时，把主服务的
 `PAPERLEAF_EMBEDDING_ENABLED` 设为 `false`，再用 `PAPERLEAF_FALLBACK_*` 接入另一个
 支持 OpenAI-compatible Embeddings 的服务。模型路由会继续优先用 DeepSeek 回答，并从第二
-服务获取文档和查询向量；第二服务也承担聊天降级，因此需要配置一个真实可用的备用聊天模型。
+服务获取文档和查询向量。若第二服务只提供向量，应把 `PAPERLEAF_FALLBACK_CHAT_MODEL`
+明确设为空；只有希望它承担聊天降级时才填写真实可用的备用聊天模型。
 
 ```dotenv
 PAPERLEAF_OPENAI_BASE_URL=https://api.deepseek.com
@@ -166,10 +168,11 @@ PAPERLEAF_EMBEDDING_ENABLED=false
 
 PAPERLEAF_FALLBACK_OPENAI_BASE_URL=https://your-compatible-service.example/v1
 PAPERLEAF_FALLBACK_OPENAI_API_KEY=your-embedding-service-key
-PAPERLEAF_FALLBACK_CHAT_MODEL=your-fallback-chat-model
+PAPERLEAF_FALLBACK_CHAT_MODEL=
 PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
 PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
 PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
+PAPERLEAF_EMBEDDING_BATCH_SIZE=8
 ```
 
 如果服务或模型不接受 `dimensions` 参数，保持 `PAPERLEAF_EMBEDDING_DIMENSIONS` 为空；否则
@@ -183,6 +186,11 @@ docker compose up -d --build api worker
 执行“重新处理”；该操作会重新解析、使用当前 `structure_aware_v2` 策略切分并替换该论文的旧
 Page/Chunk/Embedding。完成后可在“管理 → AI 能力状态”确认向量检索可用，并在 RAG 可观测性
 面板确认新问答出现向量或混合召回通道。当前版本尚未提供全库批量重建索引按钮。
+
+Windows/macOS 的 Docker Desktop 若使用宿主机 Ollama，应把备用服务根地址设为
+`http://host.docker.internal:11434/v1`，Key 可使用非空占位值 `ollama`。本机浏览器或
+PowerShell 直接探测 Ollama 时仍使用 `http://localhost:11434`。不要把只监听本机的
+Ollama 端口暴露到公网。
 
 问答提交只由 API 持久化，不在 Web 请求内运行模型。生产环境必须持续运行 Worker 才能处理
 `agent_run` 作业；反向代理应关闭 SSE 响应缓冲并允许 `Last-Event-ID` 请求头。SSE 断线只影响

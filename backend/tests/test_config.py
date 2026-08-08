@@ -64,6 +64,8 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
         ({"model_attempts_per_provider": 4}, "尝试次数"),
         ({"model_circuit_failure_threshold": 0}, "失败阈值"),
         ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),
+        ({"embedding_batch_size": 0}, "向量批次大小"),
+        ({"embedding_batch_size": 65}, "向量批次大小"),
         ({"redis_timeout_seconds": 0}, "Redis 超时"),
         ({"redis_timeout_seconds": 6}, "Redis 超时"),
         ({"agent_rate_limit_requests": 0}, "限流次数"),
