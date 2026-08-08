@@ -68,7 +68,11 @@ function percent(value: number): string { return `${(value * 100).toFixed(1)}%`;
 function sampledPercent(value: number, samples: number): string { return samples > 0 ? percent(value) : "—"; }
 function duration(value?: number): string { return typeof value === "number" ? value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${value} 毫秒` : "—"; }
 function bytes(value?: number): string { return typeof value === "number" ? value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${Math.round(value / 1024)} KiB` : "—"; }
-function generatedAt(value: string): string { return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "尚未生成"; }
+function generatedAt(value: string): string {
+  return value
+    ? new Date(value).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })
+    : "尚未生成";
+}
 
 const runtimeStoreLabels: Record<string, string> = {
   redis: "Redis",
