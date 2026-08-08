@@ -51,13 +51,21 @@ describe("AskView 持久化问答", () => {
         return HttpResponse.json({ session_id: "s-core", message_id: "m1", run_id: "r1", status: "pending", replayed: false }, { status: 202 });
       }),
       http.get(`${API_BASE_URL}/agent/runs/r1`, () => HttpResponse.json({ run_id: "r1", session_id: "s-core", status: "completed", cancel_requested: false, answer: "", citations: [], created_at: "2026-08-06T10:00:00Z", updated_at: "2026-08-06T10:00:01Z" })),
+      http.get(`${API_BASE_URL}/agent/runs/r1/events`, () => new HttpResponse(
+        'id: 1\nevent: run_finished\ndata: {"sequence":1,"event":"run_finished","data":{"status":"completed"}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      )),
     );
     render(<AskView />);
     fireEvent.click(await screen.findByRole("treeitem", { name: /核心方法.*1/ }));
     const input = screen.getByPlaceholderText(/输入问题/);
     fireEvent.change(input, { target: { value: "比较两种方法" } });
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
-    await waitFor(() => expect(messageBody).toEqual({ content: "比较两种方法", web_enabled: false }));
+    await waitFor(() => expect(messageBody).toEqual({
+      content: "比较两种方法",
+      web_enabled: false,
+      client_context: { active_panel: "chat", collection_id: "core" },
+    }));
     expect(createBody).toEqual({ type: "collection", title: "比较两种方法", collection_id: "core" });
     expect(screen.queryByText("最近阅读")).not.toBeInTheDocument();
   });
