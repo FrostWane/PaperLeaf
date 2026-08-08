@@ -33,6 +33,26 @@ class Settings:
     agent_rate_limit_window_seconds: int = int(
         os.getenv("PAPERLEAF_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")
     )
+    context_engine_enabled: bool = _bool("PAPERLEAF_CONTEXT_ENGINE_ENABLED", False)
+    memory_enabled: bool = _bool("PAPERLEAF_MEMORY_ENABLED", False)
+    skills_enabled: bool = _bool("PAPERLEAF_SKILLS_ENABLED", False)
+    function_tools_enabled: bool = _bool("PAPERLEAF_FUNCTION_TOOLS_ENABLED", False)
+    mcp_enabled: bool = _bool("PAPERLEAF_MCP_ENABLED", False)
+    model_context_tokens: int = int(os.getenv("PAPERLEAF_MODEL_CONTEXT_TOKENS", "32768"))
+    context_safety_ratio: float = float(
+        os.getenv("PAPERLEAF_CONTEXT_SAFETY_RATIO", "0.10")
+    )
+    context_compact_ratio: float = float(
+        os.getenv("PAPERLEAF_CONTEXT_COMPACT_RATIO", "0.70")
+    )
+    context_hard_limit_ratio: float = float(
+        os.getenv("PAPERLEAF_CONTEXT_HARD_LIMIT_RATIO", "0.85")
+    )
+    context_keep_recent_turns: int = int(
+        os.getenv("PAPERLEAF_CONTEXT_KEEP_RECENT_TURNS", "6")
+    )
+    context_max_memories: int = int(os.getenv("PAPERLEAF_CONTEXT_MAX_MEMORIES", "5"))
+    context_max_skills: int = int(os.getenv("PAPERLEAF_CONTEXT_MAX_SKILLS", "1"))
     worker_metrics_port: int = int(os.getenv("PAPERLEAF_WORKER_METRICS_PORT", "9101"))
     session_secret: str = os.getenv("PAPERLEAF_SESSION_SECRET", "local-demo-only-change-me")
     session_cookie: str = "paperleaf_session"
@@ -179,6 +199,23 @@ class Settings:
             raise RuntimeError("Redis Key 前缀不能为空")
         if not 1024 <= self.worker_metrics_port <= 65535:
             raise RuntimeError("Worker 指标端口必须位于 1024 到 65535 之间")
+        if self.model_context_tokens < 4096:
+            raise RuntimeError("模型上下文窗口必须至少为 4096 Token")
+        ratios = (
+            self.context_safety_ratio,
+            self.context_compact_ratio,
+            self.context_hard_limit_ratio,
+        )
+        if any(value <= 0 or value >= 1 for value in ratios):
+            raise RuntimeError("上下文预算比例必须位于 0 到 1 之间")
+        if self.context_compact_ratio >= self.context_hard_limit_ratio:
+            raise RuntimeError("主动压缩阈值必须小于硬上限阈值")
+        if not 1 <= self.context_keep_recent_turns <= 20:
+            raise RuntimeError("保留最近对话轮数必须位于 1 到 20 之间")
+        if not 1 <= self.context_max_memories <= 20:
+            raise RuntimeError("单轮记忆数量必须位于 1 到 20 之间")
+        if self.context_max_skills != 1:
+            raise RuntimeError("当前版本每轮只允许加载一个主 Skill")
         if self.chunk_target_tokens <= 0:
             raise RuntimeError("Chunk 目标长度必须为正数")
         if not 0 <= self.chunk_overlap_tokens < self.chunk_target_tokens:

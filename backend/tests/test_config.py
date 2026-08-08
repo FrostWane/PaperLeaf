@@ -72,6 +72,15 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
         ({"agent_rate_limit_window_seconds": 0}, "限流窗口"),
         ({"agent_rate_limit_window_seconds": 3601}, "限流窗口"),
         ({"redis_key_prefix": "   "}, "Key 前缀"),
+        ({"model_context_tokens": 2048}, "上下文窗口"),
+        ({"context_safety_ratio": 0}, "上下文预算比例"),
+        (
+            {"context_compact_ratio": 0.9, "context_hard_limit_ratio": 0.85},
+            "主动压缩阈值",
+        ),
+        ({"context_keep_recent_turns": 0}, "对话轮数"),
+        ({"context_max_memories": 21}, "记忆数量"),
+        ({"context_max_skills": 2}, "一个主 Skill"),
     ],
 )
 def test_model_runtime_policy_rejects_invalid_values(changes: dict, message: str) -> None:

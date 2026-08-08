@@ -1,0 +1,20 @@
+{
+  "dataset_id": "paperleaf-context-harness-v1",
+  "version": 1,
+  "language": "zh-CN",
+  "license": "Apache-2.0",
+  "case_count": 100,
+  "frozen": true,
+  "categories": [
+    "current-paper",
+    "current-page",
+    "selected-text",
+    "recent-entity",
+    "paper-switch",
+    "collection-scope",
+    "ambiguous-clarification",
+    "long-session",
+    "memory",
+    "tool-security"
+  ]
+}
