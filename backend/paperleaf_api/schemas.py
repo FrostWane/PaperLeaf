@@ -109,6 +109,7 @@ class PaperBulkActionRequest(BaseModel):
     action: Literal[
         "archive",
         "unarchive",
+        "reindex",
         "add_collection",
         "remove_collection",
     ]

@@ -68,14 +68,28 @@ describe("AdminView 管理信息语义", () => {
   it("用明确按钮和中文说明展示 AI 能力与任务状态", async () => {
     render(<AdminView />);
 
+    expect(await screen.findByRole("tab", { name: /运行概览/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "现在需要关注什么" })).toBeInTheDocument();
+    const capabilities = screen.getByRole("heading", { name: "AI 能力状态" }).closest("details");
+    expect(capabilities).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "查看能力" }));
+    expect(capabilities).toHaveAttribute("open");
+    expect(screen.queryByRole("heading", { name: "RAG 运行质量" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "后台任务" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /用户与权限/ }));
     expect(await screen.findByRole("button", { name: "停用用户 only-admin" })).toHaveTextContent("停用用户");
     expect(screen.getByRole("button", { name: "启用用户 reader" })).toHaveTextContent("启用用户");
+
+    fireEvent.click(screen.getByRole("tab", { name: /运行概览/ }));
     expect(screen.getByRole("heading", { name: "AI 能力状态" })).toBeInTheDocument();
     expect(screen.getByText("回答生成")).toHaveAttribute("title", "根据检索到的论文证据组织回答");
     expect(screen.getByText("全文翻译")).toHaveAttribute("title", "按物理页翻译已解析的论文文本");
     expect(screen.getByText("视觉 OCR")).toHaveTextContent("视觉 OCR");
     expect(screen.getByText(/暂不可用 · 尚未配置.*识别扫描版/)).toBeInTheDocument();
     expect(screen.queryByText("其他 AI 能力")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /RAG 质量/ }));
     expect(screen.getByRole("heading", { name: "RAG 运行质量" })).toBeInTheDocument();
     expect(screen.getByText("关键词检索")).toBeInTheDocument();
     expect(screen.getByText("回答引用未通过")).toBeInTheDocument();
@@ -86,6 +100,7 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getAllByText("66.7%").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("8 / 12 条已采集轨迹")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("tab", { name: /后台任务/ }));
     const jobs = screen.getByRole("heading", { name: "后台任务" }).closest("section");
     expect(jobs).not.toBeNull();
     const jobArea = within(jobs as HTMLElement);
@@ -108,6 +123,7 @@ describe("AdminView 管理信息语义", () => {
     )));
 
     render(<AdminView />);
+    fireEvent.click(await screen.findByRole("tab", { name: /用户与权限/ }));
     fireEvent.click(await screen.findByRole("button", { name: "停用用户 only-admin" }));
     expect(screen.getByRole("dialog", { name: "确认停用用户" })).toHaveTextContent("停用后，该用户的现有会话将失效");
     fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
@@ -122,6 +138,7 @@ describe("AdminView 管理信息语义", () => {
     }));
 
     render(<AdminView />);
+    fireEvent.click(await screen.findByRole("tab", { name: /用户与权限/ }));
     fireEvent.click(await screen.findByRole("button", { name: "停用用户 only-admin" }));
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog", { name: "确认停用用户" })).not.toBeInTheDocument();
@@ -137,6 +154,7 @@ describe("AdminView 管理信息语义", () => {
     render(<AdminView />);
 
     expect(screen.queryByText("林研究员")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: /RAG 质量/ }));
     expect((await screen.findAllByText("66.7%")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("status")).toHaveTextContent("用户数据暂不可用");
     expect(screen.queryByText("林研究员")).not.toBeInTheDocument();
@@ -152,6 +170,7 @@ describe("AdminView 管理信息语义", () => {
     }));
 
     render(<AdminView />);
+    fireEvent.click(await screen.findByRole("tab", { name: /RAG 质量/ }));
     await screen.findAllByText("66.7%");
     fireEvent.click(screen.getByRole("button", { name: "7 天" }));
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
@@ -177,6 +196,7 @@ describe("AdminView 管理信息语义", () => {
 
     render(<AdminView />);
 
+    fireEvent.click(await screen.findByRole("tab", { name: /RAG 质量/ }));
     expect(await screen.findByText("已有 4 次终态运行，但尚无可分析的 RAG 轨迹")).toBeInTheDocument();
     expect(screen.getByText("进程内状态存储 可用")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
@@ -196,6 +216,7 @@ describe("AdminView 管理信息语义", () => {
 
     const { container } = render(<AdminView />);
 
+    fireEvent.click(await screen.findByRole("tab", { name: /后台任务/ }));
     expect(await screen.findByText(/测试失败 1$/)).toBeInTheDocument();
     expect(container.querySelectorAll(".job-row")).toHaveLength(15);
     expect(screen.queryByText(/测试失败 16$/)).not.toBeInTheDocument();

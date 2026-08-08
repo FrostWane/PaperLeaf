@@ -39,6 +39,7 @@ export interface CollectionInput {
 export type BulkPaperAction =
   | "archive"
   | "unarchive"
+  | "reindex"
   | "add_collection"
   | "remove_collection";
 
@@ -46,6 +47,12 @@ export interface BulkPaperActionInput {
   paperIds: string[];
   action: BulkPaperAction;
   targetId?: string;
+}
+
+export interface BulkPaperActionResult {
+  action: BulkPaperAction;
+  affected: number;
+  paperIds: string[];
 }
 
 export interface PaperUpdateInput {

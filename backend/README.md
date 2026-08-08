@@ -148,7 +148,7 @@ data: {"event":"message_delta","run_id":"...","data":{"delta":"..."}}
 - 集合列表返回 `parent_id`、直接 `paper_ids`、去重后的 `recursive_paper_count` 与嵌套 `children`。
 - `GET /api/v1/papers?collection_id=...` 由服务端递归解析后代集合；`unfiled=true` 返回未加入任何集合的论文。
 - `POST/DELETE /api/v1/collections/{id}/papers/{paper_id}` 管理集合归属。
-- `POST /api/v1/papers/bulk` 在最多 100 篇当前用户文献上执行归档、恢复和集合动作。
+- `POST /api/v1/papers/bulk` 在最多 100 篇当前用户文献上执行归档、恢复、集合动作或 `reindex`。重新索引复用私有原始 PDF，防止同一论文产生重复记录，并拒绝为已有活跃解析作业重复排队。
 - 文献 `publication` 优先来自 PDF 本地元数据或首页；仍缺失且有 DOI 时，Worker 只向 Crossref 发送 DOI 并缓存成功或失败结果。
 - `POST /api/v1/papers/{paper_id}/opened` 记录最近阅读时间；它不影响 PDF 或索引内容。
 - 管理员可通过 `GET /api/v1/admin/jobs` 查看作业状态，并通过

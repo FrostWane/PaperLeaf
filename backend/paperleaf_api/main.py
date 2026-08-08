@@ -749,6 +749,16 @@ def create_app(
             )
             if affected_ids is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "文献不存在")
+        elif payload.action == "reindex":
+            affected_ids = []
+            for paper_id in paper_ids:
+                if await services.repository.requeue_owned_paper(paper_id, user.id):
+                    affected_ids.append(paper_id)
+            if not affected_ids:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "所选文献正在处理或当前状态不能重新识别并索引",
+                )
         else:
             if not payload.target_id:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "整理操作缺少目标")

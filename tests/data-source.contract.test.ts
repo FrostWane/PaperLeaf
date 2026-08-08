@@ -39,6 +39,22 @@ describe("真实 API 契约", () => {
     expect(uploadedType).toBe("application/pdf"); expect(csrf).toBe("test-token"); expect(paper.id).toBe("p1");
   });
 
+  it("批量重新索引发送所选文献并返回实际入队数量", async () => {
+    document.cookie = "paperleaf_csrf=reindex-token; path=/";
+    let payload: unknown;
+    server.use(http.post(`${API_BASE_URL}/papers/bulk`, async ({ request }) => {
+      payload = await request.json();
+      return HttpResponse.json({ action: "reindex", affected: 1, paper_ids: ["p1"] });
+    }));
+
+    await expect(realDataSource.bulkPapers({ paperIds: ["p1", "p2"], action: "reindex" })).resolves.toEqual({
+      action: "reindex",
+      affected: 1,
+      paperIds: ["p1"],
+    });
+    expect(payload).toEqual({ paper_ids: ["p1", "p2"], action: "reindex" });
+  });
+
   it("Chat 使用 content/scope/selected_paper_ids/web_enabled 并聚合 SSE", async () => {
     document.cookie = "paperleaf_csrf=chat-token; path=/";
     let payload: Record<string, unknown> = {};

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from paperleaf_api.config import settings
 from paperleaf_api.main import AppServices, create_app
-from paperleaf_api.models import JobStatus, UserRole
+from paperleaf_api.models import JobStatus, PaperStatus, UserRole
 from paperleaf_api.repository import MemoryRepository
 from paperleaf_api.storage import LocalObjectStorage
 
@@ -214,6 +214,62 @@ def test_collection_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes) -> 
         retried = client.post(f"/api/v1/admin/jobs/{job.id}/retry", headers={"X-CSRF-Token": csrf})
         assert retried.status_code == 200
         assert retried.json()["status"] == "queued"
+
+
+def test_bulk_reindex_deduplicates_ids_and_does_not_create_parallel_jobs(
+    tmp_path, valid_pdf_bytes: bytes
+) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+    )
+    repository = MemoryRepository(config.session_secret)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+
+    with TestClient(app) as client:
+        csrf = _login(client, "admin@example.com", "admin-password-123")
+        paper = client.post(
+            "/api/v1/papers",
+            headers={"X-CSRF-Token": csrf},
+            files={"file": ("paper.pdf", valid_pdf_bytes, "application/pdf")},
+        ).json()
+        repository.papers[paper["id"]].status = PaperStatus.ready
+        for job in repository.jobs.values():
+            job.status = JobStatus.completed
+
+        response = client.post(
+            "/api/v1/papers/bulk",
+            headers={"X-CSRF-Token": csrf},
+            json={"paper_ids": [paper["id"], paper["id"]], "action": "reindex"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "action": "reindex",
+            "affected": 1,
+            "paper_ids": [paper["id"]],
+        }
+        parse_jobs = [
+            job
+            for job in repository.jobs.values()
+            if job.paper_id == paper["id"] and job.type == "parse_pdf"
+        ]
+        assert len(parse_jobs) == 2
+        assert repository.papers[paper["id"]].status == PaperStatus.queued
+
+        duplicate = client.post(
+            "/api/v1/papers/bulk",
+            headers={"X-CSRF-Token": csrf},
+            json={"paper_ids": [paper["id"]], "action": "reindex"},
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "所选文献正在处理或当前状态不能重新识别并索引"
+        assert len(
+            [job for job in repository.jobs.values() if job.paper_id == paper["id"]]
+        ) == 2
 
 
 def test_arxiv_import_persists_exact_metadata_publication(

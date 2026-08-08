@@ -1,8 +1,9 @@
 "use client";
 
+import * as Dialog from "@radix-ui/react-dialog";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { createColumnHelper, flexRender, getCoreRowModel, getSortedRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
-import { Archive, ArchiveRestore, ArrowUpDown, Check, ChevronRight, FileText, FolderCog, FolderPlus, Search, SlidersHorizontal, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUpDown, Check, ChevronRight, FileText, FolderCog, FolderPlus, RotateCcw, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
 import { collectionForest, findCollection, flattenCollections, formatIsoDate, recursivePaperIds } from "@/lib/collections";
@@ -46,6 +47,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
   const [organizingPaper, setOrganizingPaper] = useState<Paper | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCollectionId, setBulkCollectionId] = useState("");
+  const [reindexConfirmOpen, setReindexConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -137,17 +139,29 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
 
   async function runBulk(action: BulkPaperAction, targetId?: string) {
     const ids = Array.from(selectedIds);
-    if (!ids.length) return;
+    if (!ids.length) return false;
     setBusy(true);
     setMessage("");
     try {
-      await dataSource.bulkPapers({ paperIds: ids, action, targetId });
+      const result = await dataSource.bulkPapers({ paperIds: ids, action, targetId });
       await refreshOrganization();
       setSelectedIds(new Set());
-      setMessage(action === "archive" ? `已归档 ${ids.length} 篇文献。` : action === "unarchive" ? `已恢复 ${ids.length} 篇文献。` : `已整理 ${ids.length} 篇文献。`);
+      if (action === "reindex") {
+        const skipped = ids.length - result.affected;
+        setMessage(`已将 ${result.affected} 篇文献加入重新识别与索引队列${skipped > 0 ? `，跳过 ${skipped} 篇正在处理的文献` : ""}。`);
+      } else {
+        setMessage(action === "archive" ? `已归档 ${ids.length} 篇文献。` : action === "unarchive" ? `已恢复 ${ids.length} 篇文献。` : `已整理 ${ids.length} 篇文献。`);
+      }
+      return true;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "批量整理失败");
+      setMessage(error instanceof Error ? error.message : "批量操作失败");
+      return false;
     } finally { setBusy(false); }
+  }
+
+  async function confirmBulkReindex() {
+    const succeeded = await runBulk("reindex");
+    if (succeeded) setReindexConfirmOpen(false);
   }
 
   async function mutateOrganizer(task: () => Promise<unknown>) {
@@ -207,7 +221,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
           </div>
           <div className="mobile-organization-filters"><CollectionSelect collections={collections} value={collectionFilter === "all" || collectionFilter === "unorganized" ? "" : collectionFilter} onChange={(value) => setCollectionFilter(value || "all")} label="集合" placeholder="全部文献" /></div>
           {filtersOpen && <div className="library-filter-panel"><fieldset><legend>处理状态</legend>{([ ["all", "全部"], ["ready", "可提问"], ["processing", "处理中"], ["attention", "需关注"] ] as const).map(([id, label]) => <button className={statusFilter === id ? "active" : ""} key={id} onClick={() => setStatusFilter(id)}><Check size={12} />{label}</button>)}</fieldset><label><span>年份</span><select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="all">全部年份</option>{years.map((year) => <option value={year} key={year}>{year}</option>)}</select></label><button className="text-button" onClick={() => { setStatusFilter("all"); setYearFilter("all"); setCollectionFilter("all"); }}>清除筛选</button></div>}
-          {selectedIds.size > 0 && <div className="bulk-bar" role="region" aria-label="批量整理"><strong>{selectedIds.size} 篇已选</strong><CollectionSelect collections={collections} value={bulkCollectionId} onChange={setBulkCollectionId} label="选择集合" /><button className="secondary-button" disabled={!bulkCollectionId || busy} onClick={() => void runBulk("add_collection", bulkCollectionId)}><FolderPlus size={14} />加入集合</button>{collectionFilter !== "all" && collectionFilter !== "unorganized" && <button className="text-button" disabled={busy} onClick={() => void runBulk("remove_collection", collectionFilter)}>移出当前集合</button>}<button className="secondary-button archive-action" disabled={busy} onClick={() => void runBulk(scope === "archived" ? "unarchive" : "archive")}>{scope === "archived" ? <ArchiveRestore size={14} /> : <Archive size={14} />}{scope === "archived" ? "恢复" : "归档"}</button><button className="icon-button" aria-label="清除选择" onClick={() => setSelectedIds(new Set())}><X size={15} /></button></div>}
+          {selectedIds.size > 0 && <div className="bulk-bar" role="region" aria-label="批量操作"><strong>{selectedIds.size} 篇已选</strong><CollectionSelect collections={collections} value={bulkCollectionId} onChange={setBulkCollectionId} label="选择集合" /><button className="secondary-button" disabled={!bulkCollectionId || busy} onClick={() => void runBulk("add_collection", bulkCollectionId)}><FolderPlus size={14} />加入集合</button>{collectionFilter !== "all" && collectionFilter !== "unorganized" && <button className="text-button" disabled={busy} onClick={() => void runBulk("remove_collection", collectionFilter)}>移出当前集合</button>}<button className="secondary-button" disabled={busy} onClick={() => setReindexConfirmOpen(true)}><RotateCcw size={14} />重新识别与索引</button><button className="secondary-button archive-action" disabled={busy} onClick={() => void runBulk(scope === "archived" ? "unarchive" : "archive")}>{scope === "archived" ? <ArchiveRestore size={14} /> : <Archive size={14} />}{scope === "archived" ? "恢复" : "归档"}</button><button className="icon-button" aria-label="清除选择" onClick={() => setSelectedIds(new Set())}><X size={15} /></button></div>}
           {message && <p className="library-message" role="status">{message}</p>}
           {loading && <div className="table-message" role="status">正在整理文献…</div>}
           {error && <div className="table-message error" role="alert">文献与组织信息暂时无法读取，请稍后重试。</div>}
@@ -217,6 +231,16 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
       </section>
       <LibraryOrganizerDialog open={organizerOpen} onOpenChange={setOrganizerOpen} collections={collections} onCreateCollection={(input: CollectionInput) => mutateOrganizer(() => dataSource.createCollection(input))} onUpdateCollection={(id: string, input: CollectionInput) => mutateOrganizer(() => dataSource.updateCollection(id, input))} onDeleteCollection={(id: string) => mutateOrganizer(() => dataSource.deleteCollection(id))} />
       {organizingPaper && <PaperCollectionsDialog paper={organizingPaper} collections={collections} open onOpenChange={(next) => { if (!next) setOrganizingPaper(null); }} onSave={savePaperCollections} />}
+      <Dialog.Root open={reindexConfirmOpen} onOpenChange={(open) => { if (!busy) setReindexConfirmOpen(open); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="dialog-content" aria-describedby="bulk-reindex-description">
+            <div className="dialog-head"><div><Dialog.Title>重新识别并索引 {selectedIds.size} 篇文献</Dialog.Title><Dialog.Description id="bulk-reindex-description">系统会复用已保存的原始 PDF，重新提取元数据、页文本、Chunk、全文索引和向量，不会新增重复文献。</Dialog.Description></div><Dialog.Close className="icon-button" aria-label="关闭" disabled={busy}><X size={17} /></Dialog.Close></div>
+            <p className="bulk-reindex-warning">已有译文将失效，概览和研究脑图会在下次使用时重新生成；问答历史不会被删除。</p>
+            <div className="dialog-actions"><Dialog.Close asChild><button type="button" className="secondary-button" disabled={busy}>取消</button></Dialog.Close><button type="button" className="primary-button" disabled={busy || selectedIds.size === 0} onClick={() => void confirmBulkReindex()}><RotateCcw size={15} />{busy ? "正在加入队列…" : "确认重新处理"}</button></div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }

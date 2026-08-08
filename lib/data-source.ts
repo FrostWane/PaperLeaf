@@ -2,7 +2,7 @@ import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
 import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
-import type { AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperActionInput, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
+import type { AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -600,7 +600,7 @@ export interface PaperLeafDataSource {
   createCollection(input: CollectionInput): Promise<PaperCollection>;
   updateCollection(collectionId: string, input: CollectionInput): Promise<PaperCollection>;
   deleteCollection(collectionId: string): Promise<void>;
-  bulkPapers(input: BulkPaperActionInput): Promise<void>;
+  bulkPapers(input: BulkPaperActionInput): Promise<BulkPaperActionResult>;
   recordPaperOpened(paperId: string): Promise<Paper>;
   listChatSessions(): Promise<ChatSession[]>;
   createChatSession(input: ChatSessionInput): Promise<ChatSession>;
@@ -970,9 +970,19 @@ export const demoDataSource: PaperLeafDataSource = {
   async bulkPapers(input) {
     await wait(220);
     const ids = new Set(input.paperIds);
+    if (input.action === "reindex") {
+      const eligibleIds = demoPapers.filter((paper) => ids.has(paper.id) && paper.status !== "indexing" && paper.status !== "deleting").map((paper) => paper.id);
+      if (!eligibleIds.length) throw new Error("所选文献正在处理或当前状态不能重新识别并索引");
+      const eligible = new Set(eligibleIds);
+      demoPapers = demoPapers.map((paper) => eligible.has(paper.id) ? { ...paper, status: "indexing", progress: 5 } : paper);
+      window.setTimeout(() => {
+        demoPapers = demoPapers.map((paper) => eligible.has(paper.id) ? { ...paper, status: "ready", progress: 100 } : paper);
+      }, 1_200);
+      return { action: input.action, affected: eligibleIds.length, paperIds: eligibleIds };
+    }
     if (input.action === "archive" || input.action === "unarchive") {
       demoPapers = demoPapers.map((paper) => ids.has(paper.id) ? { ...paper, archivedAt: input.action === "archive" ? new Date().toISOString() : undefined } : paper);
-      return;
+      return { action: input.action, affected: input.paperIds.length, paperIds: input.paperIds };
     }
     if (!input.targetId) throw new Error("整理操作缺少目标");
     const flat = flattenDemoCollections(demoCollections);
@@ -981,6 +991,7 @@ export const demoDataSource: PaperLeafDataSource = {
     const add = input.action.startsWith("add_");
     target.paperIds = add ? Array.from(new Set([...target.paperIds, ...input.paperIds])) : target.paperIds.filter((paperId) => !ids.has(paperId));
     demoCollections = flat.map((collection) => ({ ...collection, recursivePaperCount: 0 }));
+    return { action: input.action, affected: input.paperIds.length, paperIds: input.paperIds };
   },
   async recordPaperOpened(paperId) { await wait(80); const current = demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; const updated = { ...current, lastOpenedAt: new Date().toISOString() }; demoPapers = demoPapers.map((paper) => paper.id === paperId ? updated : paper); return updated; },
   async listChatSessions() {
@@ -1261,7 +1272,9 @@ export const realDataSource: PaperLeafDataSource = {
   },
   async bulkPapers(input) {
     const r = await fetch(`${API_BASE_URL}/papers/bulk`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ paper_ids: input.paperIds, action: input.action, target_id: input.targetId }) });
-    if (!r.ok) throw new Error("批量整理失败，请刷新后重试");
+    if (!r.ok) throw await apiError(r, "批量操作失败，请刷新后重试");
+    const payload = await r.json() as { action: BulkPaperAction; affected: number; paper_ids: string[] };
+    return { action: payload.action, affected: payload.affected, paperIds: payload.paper_ids };
   },
   async recordPaperOpened(paperId) {
     const r = await fetch(`${API_BASE_URL}/papers/${encodeURIComponent(paperId)}/opened`, { method: "POST", credentials: "include", headers: mutationHeaders() });

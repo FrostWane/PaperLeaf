@@ -182,10 +182,11 @@ PAPERLEAF_EMBEDDING_BATCH_SIZE=8
 docker compose up -d --build api worker
 ```
 
-新上传论文会自动生成向量。既有论文仍保留原 Chunk，但向量为空，因此需要逐篇进入“文献设置”
-执行“重新处理”；该操作会重新解析、使用当前 `structure_aware_v2` 策略切分并替换该论文的旧
+新上传论文会自动生成向量。既有论文仍保留原 Chunk，但向量为空，因此可在文献库勾选多篇论文
+执行“重新识别与索引”，也可逐篇进入“文献设置”重新处理。该操作会复用原始 PDF，重新解析、
+使用当前 `structure_aware_v2` 策略切分并替换该论文的旧
 Page/Chunk/Embedding。完成后可在“管理 → AI 能力状态”确认向量检索可用，并在 RAG 可观测性
-面板确认新问答出现向量或混合召回通道。当前版本尚未提供全库批量重建索引按钮。
+面板确认新问答出现向量或混合召回通道。单次批量操作最多选择 100 篇；正在处理或删除中的论文会被安全跳过。
 
 Windows/macOS 的 Docker Desktop 若使用宿主机 Ollama，应把备用服务根地址设为
 `http://host.docker.internal:11434/v1`，Key 可使用非空占位值 `ollama`。本机浏览器或
