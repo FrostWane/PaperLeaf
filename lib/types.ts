@@ -212,6 +212,18 @@ export interface ArxivResult {
   authors: string;
   year: number;
   summary: string;
+  matchedPaperTitle?: string;
+  matchedTerms?: string[];
+  matchType?: "semantic" | "topic";
+}
+
+export interface DiscoveryRecommendationPage {
+  items: ArxivResult[];
+  batch: number;
+  basisPaperCount: number;
+  seedPaperTitle?: string;
+  profileTerms: string[];
+  strategy: "semantic_keyword" | "keyword" | "empty_library";
 }
 
 export interface UserRecord {

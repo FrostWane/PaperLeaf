@@ -117,7 +117,7 @@ describe("SettingsView 真实偏好", () => {
     fireEvent.click(screen.getByRole("radio", { name: /大适合 2K/ }));
     fireEvent.change(screen.getByLabelText(/默认 PDF 缩放/), { target: { value: "130" } });
     fireEvent.click(screen.getByRole("switch", { name: "默认展开文献资料" }));
-    fireEvent.click(screen.getByRole("switch", { name: "允许 Agent 搜索 arXiv" }));
+    fireEvent.click(screen.getByRole("switch", { name: "允许联网发现与 Agent 搜索 arXiv" }));
     fireEvent.change(screen.getByLabelText(/全文翻译目标语言/), { target: { value: "ja" } });
     fireEvent.click(screen.getByRole("button", { name: "保存个人设置" }));
 

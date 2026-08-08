@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -41,8 +42,14 @@ from .artifacts import (
     validate_structure_payload,
     validate_summary_payload,
 )
-from .arxiv_service import fetch_arxiv_pdf, get_arxiv_paper, search_arxiv
+from .arxiv_service import (
+    fetch_arxiv_pdf,
+    get_arxiv_paper,
+    search_arxiv,
+    search_related_arxiv,
+)
 from .config import Settings, settings
+from .discovery import build_discovery_profile, collect_recommendations, with_indexed_text
 from .model_runtime import build_model_router
 from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
@@ -78,6 +85,8 @@ from .schemas import (
     CollectionCreate,
     CollectionRead,
     CollectionUpdate,
+    DiscoveryRecommendation,
+    DiscoveryRecommendationResponse,
     JobRead,
     LoginRequest,
     PaperBulkActionRequest,
@@ -1036,6 +1045,101 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv 暂时不可用") from exc
         return [ArxivSearchResponse(**item.__dict__) for item in results]
+
+    @app.get(
+        "/api/v1/discover/recommendations",
+        response_model=DiscoveryRecommendationResponse,
+    )
+    async def discover_recommendations(
+        response: Response,
+        user: Annotated[UserRecord, Depends(current_user)],
+        batch: int = 0,
+        limit: int = 6,
+        exclude: str = "",
+    ) -> DiscoveryRecommendationResponse:
+        response.headers["Cache-Control"] = "private, no-store"
+        if not UserPreferences.model_validate(user.preferences or {}).arxiv_search_enabled:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "ARXIV_SEARCH_DISABLED",
+                    "message": "请先在个人设置中允许联网发现，再生成相关论文推荐",
+                },
+            )
+        if not 0 <= batch <= 1000 or not 3 <= limit <= 10 or len(exclude) > 2000:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "推荐参数无效")
+        excluded_ids = {item.strip() for item in exclude.split(",") if item.strip()}
+        if len(excluded_ids) > 100 or any(
+            not re.fullmatch(r"[0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?", item)
+            for item in excluded_ids
+        ):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "排除列表格式无效")
+
+        papers = await services.repository.list_papers(user.id)
+        recommendation_papers: list[Any] = list(papers)
+        if not config.is_demo and papers:
+            try:
+                evidence_groups = await asyncio.gather(
+                    *(
+                        load_paper_evidence(
+                            user.id,
+                            paper.id,
+                            limit=3,
+                        )
+                        for paper in papers
+                    )
+                )
+                recommendation_papers = with_indexed_text(
+                    papers,
+                    {
+                        paper.id: " ".join(item.text for item in evidence)
+                        for paper, evidence in zip(papers, evidence_groups)
+                    },
+                )
+            except Exception:
+                # 索引读取异常不阻断发现页，仍可使用已有元数据做确定性降级。
+                recommendation_papers = list(papers)
+        profile = build_discovery_profile(recommendation_papers, batch)
+        if not profile:
+            return DiscoveryRecommendationResponse(
+                items=[],
+                batch=batch,
+                basis_paper_count=0,
+                strategy="empty_library",
+            )
+        try:
+            candidates = await search_related_arxiv(
+                list(profile.search_phrases),
+                20,
+                start=profile.search_start,
+            )
+        except Exception as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv 暂时不可用") from exc
+
+        ranked, strategy = await collect_recommendations(
+            profile,
+            candidates,
+            config=config,
+            model_router=services.model_router,
+            excluded_arxiv_ids=excluded_ids,
+            limit=limit,
+        )
+        return DiscoveryRecommendationResponse(
+            items=[
+                DiscoveryRecommendation(
+                    **item.paper.__dict__,
+                    matched_paper_title=item.matched_paper_title,
+                    matched_terms=list(item.matched_terms),
+                    match_type=item.match_type,
+                )
+                for item in ranked
+            ],
+            batch=batch,
+            basis_paper_count=profile.basis_paper_count,
+            seed_paper_title=str(getattr(profile.seed, "title", "")),
+            profile_terms=list(profile.topics[:6]),
+            strategy=strategy,
+        )
 
     @app.post(
         "/api/v1/discover/arxiv/import",

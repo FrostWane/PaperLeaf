@@ -31,6 +31,40 @@ describe("真实 API 契约", () => {
     await expect(realDataSource.getPaper("p1")).resolves.toMatchObject({ id: "p1", authors: "作者甲", pages: 12, status: "ready", arxivId: "2501.00001" });
   });
 
+  it("发现推荐传递批次和已展示论文，并映射推荐依据", async () => {
+    let requested = "";
+    server.use(http.get(`${API_BASE_URL}/discover/recommendations`, ({ request }) => {
+      requested = new URL(request.url).search;
+      return HttpResponse.json({
+        items: [{
+          arxiv_id: "2601.00002",
+          title: "Related paper",
+          authors: ["作者甲", "作者乙"],
+          abstract: "摘要",
+          published: "2026-01-02T00:00:00Z",
+          matched_paper_title: "DeepDTA",
+          matched_terms: ["drug", "target"],
+          match_type: "semantic",
+        }],
+        batch: 2,
+        basis_paper_count: 3,
+        seed_paper_title: "DeepDTA",
+        profile_terms: ["drug", "target"],
+        strategy: "semantic_keyword",
+      });
+    }));
+
+    await expect(realDataSource.recommendArxiv(2, ["2501.00001", "2501.00002"])).resolves.toMatchObject({
+      batch: 2,
+      basisPaperCount: 3,
+      seedPaperTitle: "DeepDTA",
+      strategy: "semantic_keyword",
+      items: [{ id: "2601.00002", authors: "作者甲、作者乙", matchedPaperTitle: "DeepDTA", matchedTerms: ["drug", "target"], matchType: "semantic" }],
+    });
+    expect(requested).toContain("batch=2");
+    expect(requested).toContain("exclude=2501.00001%2C2501.00002");
+  });
+
   it("上传使用 multipart 和 CSRF 请求头", async () => {
     document.cookie = "paperleaf_csrf=test-token; path=/";
     let uploadedType = ""; let csrf = "";

@@ -6,10 +6,11 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from paperleaf_api.arxiv_service import ArxivPaper
 from paperleaf_api.config import settings
 from paperleaf_api.main import AppServices, create_app
 from paperleaf_api.models import JobStatus, PaperStatus, UserRole
-from paperleaf_api.repository import MemoryRepository
+from paperleaf_api.repository import MemoryRepository, PaperRecord
 from paperleaf_api.storage import LocalObjectStorage
 
 
@@ -132,6 +133,86 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
             json={"paper_ids": [paper_id], "action": "archive"},
         )
         assert isolated_bulk.status_code == 404
+
+
+def test_discovery_recommendations_use_owned_library_and_exclude_existing(
+    tmp_path, monkeypatch
+) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+    )
+    repository = MemoryRepository(config.session_secret)
+    captured: dict[str, object] = {}
+
+    async def related_search(phrases, limit, *, start=0):
+        captured.update(phrases=phrases, limit=limit, start=start)
+        return [
+            ArxivPaper(
+                arxiv_id="2401.00001v2",
+                title="Existing paper",
+                authors=["Author"],
+                abstract="duplicate",
+                published="2024-01-01T00:00:00Z",
+                pdf_url="https://arxiv.org/pdf/2401.00001v2.pdf",
+            ),
+            ArxivPaper(
+                arxiv_id="2601.00002",
+                title="Neural drug target affinity estimation",
+                authors=["Author"],
+                abstract="Protein ligand binding affinity prediction.",
+                published="2026-01-01T00:00:00Z",
+                pdf_url="https://arxiv.org/pdf/2601.00002.pdf",
+            ),
+        ]
+
+    monkeypatch.setattr("paperleaf_api.main.search_related_arxiv", related_search)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+
+    with TestClient(app) as client:
+        _login(client, "admin@example.com", "admin-password-123")
+        admin = asyncio.run(repository.find_user_by_email("admin@example.com"))
+        assert admin
+        repository.papers["library-paper"] = PaperRecord(
+            id="library-paper",
+            owner_id=admin.id,
+            title="DeepDTA drug target binding affinity",
+            authors=["Researcher"],
+            year=2018,
+            abstract="Protein ligand interaction and binding affinity prediction.",
+            doi=None,
+            arxiv_id="2401.00001",
+            filename="paper.pdf",
+            storage_key="test/paper.pdf",
+            mime_type="application/pdf",
+            size_bytes=100,
+            sha256="discovery-paper",
+            page_count=9,
+            status=PaperStatus.ready,
+        )
+
+        disabled = client.get("/api/v1/discover/recommendations?batch=0&limit=6")
+        assert disabled.status_code == 403
+        assert disabled.json()["detail"]["code"] == "ARXIV_SEARCH_DISABLED"
+        admin.preferences = {"arxiv_search_enabled": True}
+
+        response = client.get("/api/v1/discover/recommendations?batch=0&limit=6")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["basis_paper_count"] == 1
+    assert payload["seed_paper_title"] == "DeepDTA drug target binding affinity"
+    assert payload["strategy"] == "keyword"
+    assert [item["arxiv_id"] for item in payload["items"]] == ["2601.00002"]
+    assert payload["items"][0]["matched_paper_title"] == (
+        "DeepDTA drug target binding affinity"
+    )
+    assert response.headers["cache-control"] == "private, no-store"
+    assert captured["limit"] == 20
+    assert captured["start"] == 0
 
 
 def test_collection_and_admin_job_contract(tmp_path, valid_pdf_bytes: bytes) -> None:

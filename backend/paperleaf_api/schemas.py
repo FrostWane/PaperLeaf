@@ -249,6 +249,29 @@ class ArxivSearchResponse(BaseModel):
     abstract: str
     published: str
     pdf_url: str
+    journal_ref: Optional[str] = None
+
+
+class DiscoveryRecommendation(BaseModel):
+    arxiv_id: str
+    title: str
+    authors: list[str]
+    abstract: str
+    published: str
+    pdf_url: str
+    journal_ref: Optional[str] = None
+    matched_paper_title: str
+    matched_terms: list[str]
+    match_type: Literal["semantic", "topic"]
+
+
+class DiscoveryRecommendationResponse(BaseModel):
+    items: list[DiscoveryRecommendation]
+    batch: int
+    basis_paper_count: int
+    seed_paper_title: Optional[str] = None
+    profile_terms: list[str] = Field(default_factory=list)
+    strategy: Literal["semantic_keyword", "keyword", "empty_library"]
 
 
 class ArxivImportRequest(BaseModel):

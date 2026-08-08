@@ -47,16 +47,74 @@ def _assert_allowed(url: str) -> None:
         raise ValueError("arXiv 返回了不允许的下载地址")
 
 
-async def search_arxiv(query: str, limit: int = 10) -> list[ArxivPaper]:
+async def _query_arxiv(
+    search_query: str,
+    limit: int,
+    *,
+    start: int = 0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> list[ArxivPaper]:
     parameters = urlencode(
-        {"search_query": f"all:{query}", "start": 0, "max_results": min(max(limit, 1), 20)}
+        {
+            "search_query": search_query,
+            "start": max(start, 0),
+            "max_results": min(max(limit, 1), 20),
+            "sortBy": "submittedDate",
+            "sortOrder": "descending",
+        }
     )
     url = f"https://export.arxiv.org/api/query?{parameters}"
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=15,
+        follow_redirects=True,
+        transport=transport,
+    ) as client:
         response = await client.get(url, headers={"User-Agent": "PaperLeaf/0.1"})
         response.raise_for_status()
     _assert_allowed(str(response.url))
     return _parse_arxiv_feed(response.content)
+
+
+async def search_arxiv(
+    query: str,
+    limit: int = 10,
+    *,
+    start: int = 0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> list[ArxivPaper]:
+    """搜索用户显式输入的自由文本；字段限定由服务端固定为 ``all``。"""
+
+    return await _query_arxiv(
+        f"all:{query}",
+        limit,
+        start=start,
+        transport=transport,
+    )
+
+
+async def search_related_arxiv(
+    phrases: list[str],
+    limit: int = 20,
+    *,
+    start: int = 0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> list[ArxivPaper]:
+    """用服务端生成并清洗过的主题短语检索相关论文。"""
+
+    safe_phrases = [
+        " ".join(re.findall(r"[A-Za-z][A-Za-z0-9-]{1,30}", phrase))[:120]
+        for phrase in phrases[:4]
+    ]
+    safe_phrases = [phrase for phrase in safe_phrases if phrase]
+    if not safe_phrases:
+        return []
+    query = " OR ".join(f'all:"{phrase}"' for phrase in safe_phrases)
+    return await _query_arxiv(
+        query,
+        limit,
+        start=start,
+        transport=transport,
+    )
 
 
 def _parse_arxiv_feed(content: bytes) -> list[ArxivPaper]:

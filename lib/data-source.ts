@@ -2,7 +2,7 @@ import { arxivResults, groundedAnswer, papers, paperStructureGraph, paperSummary
 import { readAgentStream } from "./sse";
 import { collectionForest, findCollection, flattenCollections, recursivePaperIds } from "./collections";
 import { artifactFailureMessage, normalizeArtifactStatus, structureNodeTypes, summarySectionKeys, summarySectionTitles, uniqueArtifactCitations } from "./artifacts";
-import type { AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
+import type { AdminJob, AdminRagObservability, AgentActivity, AgentAnswer, AgentAskStreamHandlers, AgentEvent, AgentEventSubscriptionHandlers, AgentEvidenceQuality, AgentRunSnapshot, AgentRunStatus, ArxivResult, ArtifactCitation, BulkPaperAction, BulkPaperActionInput, BulkPaperActionResult, ChatMessage, ChatMessageSubmission, ChatSession, ChatSessionInput, ChatSessionType, Citation, CollectionInput, DiscoveryRecommendationPage, ModelPurposeHealth, ModelRuntimeHealth, Paper, PaperCollection, PaperStructureGraph, PaperSummary, PaperTranslation, PaperTranslationPage, PaperUpdateInput, SessionUser, StructureEdge, StructureNode, StructureNodeType, SummaryFact, SummarySection, SummarySectionKey, UserRecord } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -61,6 +61,19 @@ function mapCollection(item: Record<string, unknown>, nestedParentId: string | n
     paperIds,
     recursivePaperCount: Number(item.recursive_paper_count ?? item.paper_count ?? paperIds.length),
     children,
+  };
+}
+
+function mapArxivResult(item: Record<string, unknown>): ArxivResult {
+  return {
+    id: String(item.arxiv_id),
+    title: String(item.title),
+    authors: Array.isArray(item.authors) ? item.authors.join("、") : "",
+    year: Number(String(item.published ?? "").slice(0, 4)),
+    summary: String(item.abstract ?? ""),
+    matchedPaperTitle: item.matched_paper_title ? String(item.matched_paper_title) : undefined,
+    matchedTerms: Array.isArray(item.matched_terms) ? item.matched_terms.map(String) : undefined,
+    matchType: item.match_type === "semantic" ? "semantic" : item.match_type === "topic" ? "topic" : undefined,
   };
 }
 
@@ -583,6 +596,7 @@ function upsertActivity(items: AgentActivity[], next: AgentActivity): AgentActiv
 export interface PaperLeafDataSource {
   listPapers(options?: { collectionId?: string }): Promise<Paper[]>;
   getPaper(paperId: string): Promise<Paper>;
+  recommendArxiv(batch: number, excludeIds?: string[]): Promise<DiscoveryRecommendationPage>;
   searchArxiv(query: string): Promise<ArxivResult[]>;
   importArxiv(arxivId: string): Promise<void>;
   ask(question: string, paperIds?: string[], handlers?: AgentAskStreamHandlers, scope?: { collectionId?: string }): Promise<AgentAnswer>;
@@ -861,6 +875,18 @@ export const demoDataSource: PaperLeafDataSource = {
     return demoPapers.filter((paper) => ids.has(paper.id)).map((paper) => ({ ...paper }));
   },
   async getPaper(paperId) { await wait(80); return demoPapers.find((paper) => paper.id === paperId) ?? demoPapers[0]; },
+  async recommendArxiv(batch, excludeIds = []) {
+    await wait(220);
+    const available = arxivResults.filter((item) => !excludeIds.includes(item.id));
+    const offset = available.length ? (batch * 2) % available.length : 0;
+    const items = [...available.slice(offset), ...available.slice(0, offset)].slice(0, 3).map((item) => ({
+      ...item,
+      matchedPaperTitle: papers[batch % papers.length]?.title ?? papers[0].title,
+      matchedTerms: ["retrieval", "generation"],
+      matchType: "semantic" as const,
+    }));
+    return { items, batch, basisPaperCount: papers.length, seedPaperTitle: items[0]?.matchedPaperTitle, profileTerms: ["retrieval", "generation"], strategy: "semantic_keyword" };
+  },
   async searchArxiv(query) { await wait(220); return arxivResults.filter((item) => `${item.title} ${item.summary}`.toLowerCase().includes(query.toLowerCase()) || !query); },
   async importArxiv() { await wait(320); },
   async ask(question, _paperIds, handlers) {
@@ -1132,12 +1158,27 @@ export const realDataSource: PaperLeafDataSource = {
     if (!r.ok) throw new Error("文献信息读取失败");
     return mapPaper(await r.json() as Record<string, unknown>);
   },
-  async searchArxiv(query) {
-    const r = await fetch(`${API_BASE_URL}/discover/arxiv/search?q=${encodeURIComponent(query)}`, { credentials: "include" }); if (!r.ok) throw new Error("arXiv 搜索失败");
-    const raw = await r.json() as Array<Record<string, unknown>>;
-    return raw.map((item) => ({ id: String(item.arxiv_id), title: String(item.title), authors: Array.isArray(item.authors) ? item.authors.join("、") : "", year: Number(String(item.published ?? "").slice(0, 4)), summary: String(item.abstract ?? "") }));
+  async recommendArxiv(batch, excludeIds = []) {
+    const query = new URLSearchParams({ batch: String(batch), limit: "6" });
+    if (excludeIds.length) query.set("exclude", excludeIds.slice(-100).join(","));
+    const response = await fetch(`${API_BASE_URL}/discover/recommendations?${query}`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) throw await apiError(response, "相关论文推荐暂时不可用");
+    const raw = await response.json() as Record<string, unknown>;
+    return {
+      items: (Array.isArray(raw.items) ? raw.items : []).map((item) => mapArxivResult(item as Record<string, unknown>)),
+      batch: Number(raw.batch ?? batch),
+      basisPaperCount: Number(raw.basis_paper_count ?? 0),
+      seedPaperTitle: raw.seed_paper_title ? String(raw.seed_paper_title) : undefined,
+      profileTerms: Array.isArray(raw.profile_terms) ? raw.profile_terms.map(String) : [],
+      strategy: raw.strategy === "semantic_keyword" ? "semantic_keyword" : raw.strategy === "empty_library" ? "empty_library" : "keyword",
+    };
   },
-  async importArxiv(arxivId) { const r = await fetch(`${API_BASE_URL}/discover/arxiv/import`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ arxiv_id: arxivId }) }); if (!r.ok) throw new Error("arXiv 导入失败"); },
+  async searchArxiv(query) {
+    const r = await fetch(`${API_BASE_URL}/discover/arxiv/search?q=${encodeURIComponent(query)}`, { credentials: "include" }); if (!r.ok) throw await apiError(r, "arXiv 搜索失败");
+    const raw = await r.json() as Array<Record<string, unknown>>;
+    return raw.map(mapArxivResult);
+  },
+  async importArxiv(arxivId) { const r = await fetch(`${API_BASE_URL}/discover/arxiv/import`, { method: "POST", credentials: "include", headers: mutationHeaders({ "content-type": "application/json" }), body: JSON.stringify({ arxiv_id: arxivId }) }); if (!r.ok) throw await apiError(r, "arXiv 导入失败"); },
   async ask(question, paperIds = [], handlers, scope) {
     let r: Response;
     try {

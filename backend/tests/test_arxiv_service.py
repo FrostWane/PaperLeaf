@@ -5,7 +5,11 @@ import asyncio
 import httpx
 import pytest
 
-from paperleaf_api.arxiv_service import _parse_arxiv_feed, get_arxiv_paper
+from paperleaf_api.arxiv_service import (
+    _parse_arxiv_feed,
+    get_arxiv_paper,
+    search_related_arxiv,
+)
 
 
 def _feed(arxiv_id: str = "2401.01234v2") -> bytes:
@@ -72,3 +76,24 @@ def test_get_arxiv_paper_accepts_versioned_result_for_same_base_id() -> None:
 def test_get_arxiv_paper_rejects_invalid_id_before_request() -> None:
     with pytest.raises(ValueError, match="arXiv ID 格式错误"):
         asyncio.run(get_arxiv_paper("2401.01234 OR all:*"))
+
+
+def test_related_search_uses_server_generated_phrases_and_batch_offset() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["search_query"] == (
+            'all:"drug target" OR all:"binding affinity"'
+        )
+        assert request.url.params["start"] == "20"
+        assert request.url.params["max_results"] == "6"
+        return httpx.Response(200, content=_feed())
+
+    papers = asyncio.run(
+        search_related_arxiv(
+            ["drug target", "binding affinity"],
+            6,
+            start=20,
+            transport=httpx.MockTransport(handler),
+        )
+    )
+
+    assert [paper.arxiv_id for paper in papers] == ["2401.01234v2"]
