@@ -16,6 +16,7 @@ from .agent.memory import (
     memory_hash,
     select_relevant_memories,
 )
+from .agent.skills import SkillRegistry
 from .config import settings
 from .discovery import embed_discovery_texts
 from .model_runtime import ModelRuntimeError, collect_model_attempts
@@ -245,6 +246,7 @@ async def execute_agent_run(
     *,
     answer_quality_policy: AnswerQualityPolicy,
     harness_config: Any = settings,
+    skill_registry: SkillRegistry | None = None,
 ) -> None:
     """执行 Graph；只把通过 citation + support 的完整段落写入持久层。"""
 
@@ -344,6 +346,39 @@ async def execute_agent_run(
     )
     context_snapshot["memory_ids"] = [item.id for item in selected_memories]
     context_ms = round((time.perf_counter() - context_started_at) * 1000)
+    intent_started_at = time.perf_counter()
+    intent = classify_intent(
+        resolution.resolved_query,
+        scope=scope,
+        selected_paper_count=len(snapshot.get("paper_ids", [])),
+        web_enabled=bool(snapshot.get("web_enabled", False)),
+    )
+    intent_ms = round((time.perf_counter() - intent_started_at) * 1000)
+    selected_skill = "legacy_agent"
+    skill_version = 0
+    skill_instructions = ""
+    route_source = "feature_flag_disabled"
+    route_confidence = 1.0
+    if harness_flags.get("skills_enabled"):
+        registry = skill_registry or SkillRegistry.default()
+        definition = registry.route(
+            resolution.resolved_query,
+            intent=intent,
+            scope=scope,
+            web_enabled=bool(snapshot.get("web_enabled", False)),
+        )
+        selected_skill = definition.manifest.name
+        skill_version = definition.manifest.version
+        skill_instructions = definition.instructions
+        route_source = "deterministic_fallback"
+        route_confidence = 0.85
+        history.insert(0, {"role": "skill", "content": skill_instructions})
+    context_snapshot["skill"] = {
+        "name": selected_skill,
+        "version": skill_version,
+        "route_source": route_source,
+        "route_confidence": route_confidence,
+    }
     updated_run = await repository.update_agent_context(
         run.id,
         claim_token,
@@ -354,14 +389,24 @@ async def execute_agent_run(
     if not updated_run:
         return
     run = updated_run
-    intent_started_at = time.perf_counter()
-    intent = classify_intent(
-        resolution.resolved_query,
-        scope=scope,
-        selected_paper_count=len(snapshot.get("paper_ids", [])),
-        web_enabled=bool(snapshot.get("web_enabled", False)),
+    harness_trace = {
+        "context_version": int(context_snapshot.get("version", 1)),
+        "selected_skill": selected_skill,
+        "skill_version": skill_version,
+        "skill_route_source": route_source,
+        "skill_route_confidence": route_confidence,
+        "tool_calls": [],
+    }
+    updated_run = await repository.update_agent_skill(
+        run.id,
+        claim_token,
+        selected_skill=selected_skill,
+        skill_version=skill_version,
+        harness_trace=harness_trace,
     )
-    intent_ms = round((time.perf_counter() - intent_started_at) * 1000)
+    if not updated_run:
+        return
+    run = updated_run
     initial = {
         "run_id": run.id,
         "session_id": run.session_id,
@@ -380,11 +425,38 @@ async def execute_agent_run(
         "context_snapshot": context_snapshot,
         "context_budget": budget.as_dict(),
         "memory_ids": [item.id for item in selected_memories],
+        "selected_skill": selected_skill,
+        "skill_version": skill_version,
+        "skill_instructions": skill_instructions,
+        "skill_route_source": route_source,
+        "skill_route_confidence": route_confidence,
+        "tool_calls": [],
         "clarification_question": resolution.clarification_question,
         "tool_steps": 0,
         "stage_timings_ms": {"context": context_ms, "intent": intent_ms},
         "status": "pending",
     }
+    if harness_flags.get("skills_enabled"):
+        await repository.append_agent_run_event(
+            run_id,
+            "node_started",
+            {"node": "select_skill", "stage": "选择科研任务策略"},
+            event_key="stage:skill:start",
+            claim_token=claim_token,
+        )
+        await repository.append_agent_run_event(
+            run_id,
+            "node_finished",
+            {
+                "node": "select_skill",
+                "stage": "选择科研任务策略",
+                "skill": selected_skill,
+                "skill_version": skill_version,
+                "route_source": route_source,
+            },
+            event_key="stage:skill:finish",
+            claim_token=claim_token,
+        )
     if resolution.needs_clarification:
         await repository.append_agent_run_event(
             run_id,

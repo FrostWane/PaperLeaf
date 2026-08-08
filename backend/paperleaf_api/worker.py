@@ -23,6 +23,7 @@ from .agent.graph import (
     build_configured_answerer,
     build_configured_evidence_support_grader,
 )
+from .agent.skills import SkillRegistry
 from .agent.tools import SQLLibrarySearch
 from .agent_execution import execute_agent_run
 from .artifacts import (
@@ -65,6 +66,7 @@ from .storage import create_storage
 logger = logging.getLogger("paperleaf.worker")
 model_router = build_model_router(settings)
 agent_graph: object | None = None
+skill_registry = SkillRegistry.default()
 JOB_LEASE = timedelta(minutes=30)
 MAX_TRANSLATION_PAGE_CHARS = 48_000
 MAX_TRANSLATION_CHUNKS = 6
@@ -1230,6 +1232,7 @@ async def process_agent_run_job(
                 min_model_support_confidence=settings.answer_min_support_confidence,
             ),
             harness_config=settings,
+            skill_registry=skill_registry,
         )
     )
     while True:

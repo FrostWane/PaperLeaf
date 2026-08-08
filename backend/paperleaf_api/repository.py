@@ -11,7 +11,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Protocol, Union
 
 from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
@@ -153,8 +153,8 @@ class DiscoveryItemRecord:
 
 
 DiscoveryBatchPage = tuple[
-    DiscoveryBatchRecord | DiscoveryBatch,
-    list[DiscoveryItemRecord | DiscoveryItem],
+    Union[DiscoveryBatchRecord, DiscoveryBatch],
+    list[Union[DiscoveryItemRecord, DiscoveryItem]],
 ]
 
 
@@ -207,6 +207,9 @@ class AgentRunRecord:
     context_version: int = 1
     resolved_query: str | None = None
     reference_confidence: float | None = None
+    selected_skill: str | None = None
+    skill_version: int | None = None
+    harness_trace: dict = field(default_factory=dict)
     user_message_id: str | None = None
     assistant_message_id: str | None = None
     request_hash: str | None = None
@@ -547,6 +550,15 @@ class Repository(Protocol):
         context_snapshot: dict,
         resolved_query: str,
         reference_confidence: float,
+    ) -> AgentRunRecord | AgentRun | None: ...
+    async def update_agent_skill(
+        self,
+        run_id: str,
+        claim_token: str,
+        *,
+        selected_skill: str,
+        skill_version: int,
+        harness_trace: dict,
     ) -> AgentRunRecord | AgentRun | None: ...
     async def update_session_compaction(
         self,
@@ -2044,6 +2056,24 @@ class MemoryRepository:
         run.updated_at = now()
         return run
 
+    async def update_agent_skill(
+        self,
+        run_id: str,
+        claim_token: str,
+        *,
+        selected_skill: str,
+        skill_version: int,
+        harness_trace: dict,
+    ) -> AgentRunRecord | None:
+        run = self.agent_runs.get(run_id)
+        if not run or not self._agent_claim_is_current(run_id, claim_token):
+            return None
+        run.selected_skill = selected_skill
+        run.skill_version = skill_version
+        run.harness_trace = dict(harness_trace)
+        run.updated_at = now()
+        return run
+
     async def publish_agent_paragraph(
         self,
         run_id: str,
@@ -3274,6 +3304,29 @@ class SQLAlchemyRepository:
             run.context_version = int(context_snapshot.get("version", 1))
             run.resolved_query = resolved_query
             run.reference_confidence = reference_confidence
+            run.updated_at = now()
+            await session.commit()
+            await session.refresh(run)
+            return run
+
+    async def update_agent_skill(
+        self,
+        run_id: str,
+        claim_token: str,
+        *,
+        selected_skill: str,
+        skill_version: int,
+        harness_trace: dict,
+    ) -> AgentRun | None:
+        async with get_session_factory()() as session:
+            run = await session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if not run or not await self._sql_agent_claim_current(session, run_id, claim_token):
+                return None
+            run.selected_skill = selected_skill
+            run.skill_version = skill_version
+            run.harness_trace = dict(harness_trace)
             run.updated_at = now()
             await session.commit()
             await session.refresh(run)

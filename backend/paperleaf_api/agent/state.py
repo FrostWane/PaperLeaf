@@ -26,6 +26,13 @@ class AgentState(TypedDict, total=False):
     reference_confidence: float
     context_snapshot: dict[str, Any]
     context_budget: dict[str, int]
+    memory_ids: list[str]
+    selected_skill: str
+    skill_version: int
+    skill_instructions: str
+    skill_route_source: str
+    skill_route_confidence: float
+    tool_calls: list[dict[str, Any]]
     clarification_question: str | None
     clarification_requested: bool
     retrieved_evidence: list[Evidence]

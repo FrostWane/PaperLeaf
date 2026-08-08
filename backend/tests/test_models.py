@@ -46,7 +46,15 @@ def test_discovery_schema_keeps_batches_feedback_and_unique_items() -> None:
 
 
 def test_agent_run_schema_contains_context_snapshot_fields() -> None:
-    assert {"context_snapshot", "context_version", "resolved_query", "reference_confidence"} <= {
+    assert {
+        "context_snapshot",
+        "context_version",
+        "resolved_query",
+        "reference_confidence",
+        "selected_skill",
+        "skill_version",
+        "harness_trace",
+    } <= {
         column.name for column in AgentRun.__table__.columns
     }
 

@@ -34,6 +34,7 @@ from .agent.graph import (
     build_configured_evidence_support_grader,
 )
 from .agent.memory import MEMORY_TYPES, memory_hash, normalize_memory_value
+from .agent.skills import SkillRegistry
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .agent_execution import execute_agent_run
 from .artifacts import (
@@ -121,6 +122,7 @@ from .storage import ObjectStorage, create_storage, parse_byte_range, validate_p
 
 _PUBLIC_AGENT_NODES = {
     "resolve_context",
+    "select_skill",
     "validate_request",
     "retrieve_library",
     "grade_evidence",
@@ -156,6 +158,7 @@ class AppServices:
             DemoLibrarySearch() if config.is_demo else SQLLibrarySearch(config, self.model_router)
         )
         self.agent_graph = self.build_agent_graph()
+        self.skill_registry = SkillRegistry.default()
         self.checkpointer: Optional[Any] = None
         self._agent_tasks: dict[str, asyncio.Task[Any]] = {}
         self._agent_tasks_lock = asyncio.Lock()
@@ -215,6 +218,7 @@ class AppServices:
                         min_model_support_confidence=(self.config.answer_min_support_confidence),
                     ),
                     harness_config=self.config,
+                    skill_registry=self.skill_registry,
                 )
             finally:
                 task = asyncio.current_task()

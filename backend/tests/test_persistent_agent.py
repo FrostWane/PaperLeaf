@@ -197,7 +197,11 @@ def test_completed_harness_run_extracts_only_explicit_user_memory() -> None:
                 "type": "library",
                 "paper_ids": ["p1"],
                 "web_enabled": False,
-                "harness": {"context_engine_enabled": True, "memory_enabled": True},
+                "harness": {
+                    "context_engine_enabled": True,
+                    "memory_enabled": True,
+                    "skills_enabled": True,
+                },
             },
         )
         assert submission is not None
@@ -207,6 +211,7 @@ def test_completed_harness_run_extracts_only_explicit_user_memory() -> None:
             settings,
             memory_enabled=True,
             context_engine_enabled=True,
+            skills_enabled=True,
             embedding_enabled=False,
             fallback_embedding_enabled=False,
         )
@@ -226,6 +231,9 @@ def test_completed_harness_run_extracts_only_explicit_user_memory() -> None:
         run = await repository.get_agent_run(submission.run.id)
         assert run is not None
         assert run.context_snapshot["budget"]["model_window"] == config.model_context_tokens
+        assert run.selected_skill == "paper_qa"
+        assert run.skill_version == 1
+        assert run.harness_trace["skill_route_source"] == "deterministic_fallback"
 
     asyncio.run(scenario())
 

@@ -198,6 +198,13 @@ sequenceDiagram
 - `memory_items` 是当前事实，`memory_item_versions` 保存用户修改产生的版本。只允许用户原话中的明确记忆、偏好和研究方向进入；assistant、论文文本和工具结果不能自动写入。
 - 记忆选择先保留固定项，再结合关键词与可选 Embedding 排序，最多加载五条；Embedding 不可用时确定性降级为关键词。停用或删除的条目不会进入模型上下文。
 - PostgreSQL 是会话、摘要和记忆的唯一事实源。记忆提取发生在回答终态事件之后，不延迟已核验内容的展示；Redis 后续只承担合并锁与短期缓存，不保存记忆正文。
+
+### Skill Registry
+
+- `paperleaf_api/skills/*.md` 保存版本化 YAML Manifest 与任务指令。服务启动时会校验名称、版本、允许工具、最大步骤、联网与审批策略；未知字段、未知工具或重复名称会直接阻止启动。
+- 常驻上下文只暴露 Skill 名称、版本和一句描述。每轮选出一个主 Skill 后才加载其完整指令，避免把所有工作流一次性塞进模型上下文。
+- 当前提供 `paper_qa`、`trace_original`、`compare_papers`、`find_related_papers`、`verify_claim`、`summarize_paper` 与 `build_research_map`。Run 会保存最终选择、版本、路由来源和置信度，但不保存隐藏推理。
+- Skill 关闭时仍走 `legacy_agent`；开启后先使用可复现的确定性保底路由。模型驱动路由与强类型工具循环由 Function Calling 里程碑接管，仍受同一 Manifest 权限约束。
 - 模型通过兼容接口内部流式返回，但未经核验的 token 只保留在 Worker 内存。完整事实段落通过引用来源检查后才追加到助手消息与 `message_delta` 事件，前端再用稳定的自适应字符步长逐步呈现。失败、取消和过期租约不能写入未经核验的尾部内容。
 - arXiv 候选通过 `interrupt` 进入持久等待状态。批准或拒绝动作携带 `action_id`，相同决定可幂等重放；恢复后清除待确认动作并重新入队同一 Run。
 - 取消请求先持久化。Worker 在节点和写入边界检查取消与租约；失去租约的旧 Worker 不能取消或覆盖后来领取者的结果。

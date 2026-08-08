@@ -503,6 +503,9 @@ class AgentRun(Base):
     context_version: Mapped[int] = mapped_column(Integer, default=1)
     resolved_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reference_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    selected_skill: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    skill_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    harness_trace: Mapped[dict] = mapped_column(JSON, default=dict)
     user_message_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey(
             "chat_messages.id",
