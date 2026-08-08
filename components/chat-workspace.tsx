@@ -229,7 +229,8 @@ export function ChatWorkspace({
   const [connection, setConnection] = useState<"connected" | "reconnecting">("connected");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [dismissedContext, setDismissedContext] = useState<Set<"page" | "selection">>(new Set());
+  const contextIdentity = `${clientContext?.paperId ?? ""}:${clientContext?.physicalPage ?? ""}:${clientContext?.selectedTextHash ?? clientContext?.selectedText ?? ""}`;
+  const [dismissedContext, setDismissedContext] = useState<{ key: string; items: Set<"page" | "selection"> }>({ key: contextIdentity, items: new Set() });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const terminalReloadRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
@@ -239,20 +240,21 @@ export function ChatWorkspace({
   const narrowViewport = useSyncExternalStore(subscribeChatNarrow, getChatNarrow, () => false);
   const historyOpen = historyOverride ?? (!compact && !narrowViewport);
 
-  useEffect(() => {
-    setDismissedContext(new Set());
-  }, [clientContext?.paperId, clientContext?.physicalPage, clientContext?.selectedText]);
+  const dismissedContextItems = useMemo(
+    () => dismissedContext.key === contextIdentity ? dismissedContext.items : new Set<"page" | "selection">(),
+    [contextIdentity, dismissedContext],
+  );
 
   const effectiveClientContext = useMemo<ChatClientContext>(() => ({
     ...clientContext,
     paperId: binding.type === "paper" ? binding.paperId : clientContext?.paperId,
     collectionId: binding.type === "collection" ? binding.collectionId : clientContext?.collectionId,
     paperTitle: binding.type === "paper" ? scopeLabel : clientContext?.paperTitle,
-    physicalPage: dismissedContext.has("page") ? undefined : clientContext?.physicalPage,
-    selectedText: dismissedContext.has("selection") ? undefined : clientContext?.selectedText,
-    selectedTextHash: dismissedContext.has("selection") ? undefined : clientContext?.selectedTextHash,
+    physicalPage: dismissedContextItems.has("page") ? undefined : clientContext?.physicalPage,
+    selectedText: dismissedContextItems.has("selection") ? undefined : clientContext?.selectedText,
+    selectedTextHash: dismissedContextItems.has("selection") ? undefined : clientContext?.selectedTextHash,
     activePanel: clientContext?.activePanel ?? "chat",
-  }), [binding, clientContext, dismissedContext, scopeLabel]);
+  }), [binding, clientContext, dismissedContextItems, scopeLabel]);
   const shouldSubmitClientContext = Boolean(clientContext || binding.type !== "library");
 
   const workspaceKey = binding.type === "paper" ? `paper:${binding.paperId}` : "library";
@@ -600,8 +602,8 @@ export function ChatWorkspace({
       <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void submitQuestion(); }}>
         {(effectiveClientContext.paperTitle || effectiveClientContext.physicalPage || effectiveClientContext.selectedText) && <div className="chat-context-chips" aria-label="本次提问上下文">
           {effectiveClientContext.paperTitle && <span>{effectiveClientContext.paperTitle}</span>}
-          {effectiveClientContext.physicalPage && <button type="button" onClick={() => setDismissedContext((items) => new Set([...items, "page"]))}>PDF 第 {effectiveClientContext.physicalPage} 页<X size={12} aria-hidden="true" /></button>}
-          {effectiveClientContext.selectedText && <button type="button" title={effectiveClientContext.selectedText} onClick={() => setDismissedContext((items) => new Set([...items, "selection"]))}>已选原文<X size={12} aria-hidden="true" /></button>}
+          {effectiveClientContext.physicalPage && <button type="button" onClick={() => setDismissedContext((state) => ({ key: contextIdentity, items: new Set([...(state.key === contextIdentity ? state.items : []), "page"]) }))}>PDF 第 {effectiveClientContext.physicalPage} 页<X size={12} aria-hidden="true" /></button>}
+          {effectiveClientContext.selectedText && <button type="button" title={effectiveClientContext.selectedText} onClick={() => setDismissedContext((state) => ({ key: contextIdentity, items: new Set([...(state.key === contextIdentity ? state.items : []), "selection"]) }))}>已选原文<X size={12} aria-hidden="true" /></button>}
         </div>}
         <label><span className="sr-only">向文献提问</span><textarea ref={textareaRef} rows={compact ? 2 : 3} value={draft} disabled={disabled || creatingSession} onChange={(event) => { setDraft(event.target.value); if (error) setError(""); }} onKeyDown={(event) => {
           if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
