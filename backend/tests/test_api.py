@@ -66,6 +66,48 @@ def test_app_services_rebuild_keeps_quality_policy_and_checkpointer(tmp_path, mo
     assert callable(rebuilt["support_grader"])
 
 
+def test_user_can_manage_private_long_term_memories(tmp_path) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+    )
+    repository = MemoryRepository(config.session_secret)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+
+    with TestClient(app) as client:
+        csrf = _login(client, "admin@example.com", "admin-password-123")
+        created = client.post(
+            "/api/v1/memories",
+            headers={"X-CSRF-Token": csrf},
+            json={"type": "research_interest", "value": "药物靶点亲和力预测"},
+        )
+        assert created.status_code == 201, created.text
+        memory_id = created.json()["id"]
+        listed = client.get("/api/v1/memories")
+        assert listed.status_code == 200
+        assert listed.json()["active"] == 1
+        assert listed.json()["capacity"] == 200
+
+        disabled = client.patch(
+            f"/api/v1/memories/{memory_id}",
+            headers={"X-CSRF-Token": csrf},
+            json={"enabled": False, "value": "可信科研问答"},
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["enabled"] is False
+        assert disabled.json()["value"] == "可信科研问答"
+
+        cleared = client.post(
+            "/api/v1/memories/clear", headers={"X-CSRF-Token": csrf}
+        )
+        assert cleared.status_code == 200
+        assert cleared.json() == {"deleted": 1}
+        assert client.get("/api/v1/memories").json()["items"] == []
+
+
 def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes: bytes) -> None:
     config = replace(
         settings,

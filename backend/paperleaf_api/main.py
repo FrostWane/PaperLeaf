@@ -33,6 +33,7 @@ from .agent.graph import (
     build_configured_answerer,
     build_configured_evidence_support_grader,
 )
+from .agent.memory import MEMORY_TYPES, memory_hash, normalize_memory_value
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .agent_execution import execute_agent_run
 from .artifacts import (
@@ -63,6 +64,7 @@ from .repository import (
     DiscoveryItemRecord,
     LastAdminProtectionError,
     ManagedUserNotFoundError,
+    MemoryItemRecord,
     MemoryRepository,
     PaperRecord,
     SQLAlchemyRepository,
@@ -93,6 +95,11 @@ from .schemas import (
     DiscoveryRecommendationResponse,
     JobRead,
     LoginRequest,
+    MemoryClearRead,
+    MemoryCreate,
+    MemoryListRead,
+    MemoryRead,
+    MemoryUpdate,
     PaperBulkActionRequest,
     PaperBulkActionResponse,
     PaperRead,
@@ -207,6 +214,7 @@ class AppServices:
                         min_claim_lexical_support=(self.config.answer_min_claim_lexical_support),
                         min_model_support_confidence=(self.config.answer_min_support_confidence),
                     ),
+                    harness_config=self.config,
                 )
             finally:
                 task = asyncio.current_task()
@@ -551,6 +559,98 @@ def create_app(
         if not updated:  # pragma: no cover - 当前用户已由会话保证存在
             raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
         return _user_preferences_read(updated)
+
+    @app.get("/api/v1/memories", response_model=MemoryListRead)
+    async def list_memories(
+        user: Annotated[UserRecord, Depends(current_user)],
+    ) -> MemoryListRead:
+        records = await services.repository.list_memories(user.id)
+        return MemoryListRead(
+            items=[MemoryRead.model_validate(item) for item in records],
+            total=len(records),
+            active=sum(bool(item.enabled) for item in records),
+        )
+
+    @app.post(
+        "/api/v1/memories", response_model=MemoryRead, status_code=status.HTTP_201_CREATED
+    )
+    async def create_memory(
+        payload: MemoryCreate,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> MemoryRead:
+        value = normalize_memory_value(payload.value)
+        record = MemoryItemRecord(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            type=payload.type,
+            value=value,
+            normalized_hash=memory_hash(payload.type, value),
+            confidence=1.0,
+            source_kind="manual",
+            source_excerpt="由用户在设置页手动创建",
+            pinned=payload.pinned,
+        )
+        try:
+            created = await services.repository.create_memory_item(record)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        return MemoryRead.model_validate(created)
+
+    @app.patch("/api/v1/memories/{memory_id}", response_model=MemoryRead)
+    async def update_memory(
+        memory_id: str,
+        payload: MemoryUpdate,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> MemoryRead:
+        changes = payload.model_dump(exclude_unset=True)
+        memory_type = changes.get("type")
+        value = changes.get("value")
+        if memory_type is not None and memory_type not in MEMORY_TYPES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "不支持的记忆类型")
+        if value is not None:
+            changes["value"] = normalize_memory_value(str(value))
+        if value is not None or memory_type is not None:
+            existing = next(
+                (
+                    item
+                    for item in await services.repository.list_memories(user.id)
+                    if item.id == memory_id
+                ),
+                None,
+            )
+            if not existing:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "记忆不存在")
+            next_type = str(memory_type or existing.type)
+            next_value = str(changes.get("value", existing.value))
+            changes["normalized_hash"] = memory_hash(next_type, next_value)
+        try:
+            updated = await services.repository.update_owned_memory(
+                memory_id, user.id, **changes
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        if not updated:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "记忆不存在")
+        return MemoryRead.model_validate(updated)
+
+    @app.delete("/api/v1/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_memory(
+        memory_id: str,
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> Response:
+        if not await services.repository.delete_owned_memory(memory_id, user.id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "记忆不存在")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/v1/memories/clear", response_model=MemoryClearRead)
+    async def clear_memories(
+        user: Annotated[UserRecord, Depends(current_user)],
+        _: Annotated[None, Depends(csrf_protected)],
+    ) -> MemoryClearRead:
+        return MemoryClearRead(deleted=await services.repository.clear_memories(user.id))
 
     @app.post(
         "/api/v1/auth/logout",

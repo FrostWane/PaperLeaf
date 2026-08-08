@@ -410,6 +410,12 @@ class ChatSession(Base):
     collection_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("collections.id", ondelete="SET NULL"), nullable=True
     )
+    compact_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary_version: Mapped[int] = mapped_column(Integer, default=1)
+    compacted_through_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True
+    )
+    entity_state: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -544,4 +550,53 @@ class AgentRunEvent(Base):
     event_key: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     event: Mapped[str] = mapped_column(String(64))
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryItem(Base):
+    __tablename__ = "memory_items"
+    __table_args__ = (
+        Index("ix_memory_items_user_active", "user_id", "enabled", "updated_at"),
+        UniqueConstraint("user_id", "normalized_hash", name="uq_memory_user_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    type: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(Text)
+    normalized_hash: Mapped[str] = mapped_column(String(64))
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    source_kind: Mapped[str] = mapped_column(String(32), default="explicit")
+    source_session_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    source_message_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    source_excerpt: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MemoryItemVersion(Base):
+    __tablename__ = "memory_item_versions"
+    __table_args__ = (
+        UniqueConstraint("memory_item_id", "version", name="uq_memory_item_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    memory_item_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_items.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    value: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    source_kind: Mapped[str] = mapped_column(String(32))
+    source_excerpt: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

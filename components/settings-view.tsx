@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, KeyRound, Languages, LogOut, PanelLeft, Shield, SlidersHorizontal, Type, UserRound } from "lucide-react";
+import { Brain, Check, KeyRound, Languages, LogOut, PanelLeft, Pin, Plus, Shield, SlidersHorizontal, Trash2, Type, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -16,6 +16,15 @@ import {
   type UserPreferences,
 } from "@/lib/preferences-api";
 import { clearCurrentUserState } from "./current-user-provider";
+import {
+  clearMemories,
+  createMemory,
+  deleteMemory,
+  listMemories,
+  updateMemory,
+  type MemoryItem,
+  type MemoryType,
+} from "@/lib/memory-api";
 
 const passwordSchema = z.object({
   currentPassword: z.string().min(8, "请输入当前密码"),
@@ -58,6 +67,12 @@ export function SettingsView() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsError, setSettingsError] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [memoryCapacity, setMemoryCapacity] = useState(200);
+  const [memoryDraft, setMemoryDraft] = useState("");
+  const [memoryType, setMemoryType] = useState<MemoryType>("preference");
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memoryError, setMemoryError] = useState("");
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<PasswordValues>({
     resolver: zodResolver(passwordSchema),
     defaultValues: { currentPassword: "", newPassword: "", confirmPassword: "" },
@@ -82,6 +97,21 @@ export function SettingsView() {
       })
       .finally(() => {
         if (active) setIsLoading(false);
+      });
+    return () => { active = false; };
+  }, [usesDemoData]);
+
+  useEffect(() => {
+    if (usesDemoData) return;
+    let active = true;
+    void listMemories()
+      .then((result) => {
+        if (!active) return;
+        setMemories(result.items);
+        setMemoryCapacity(result.capacity);
+      })
+      .catch((error) => {
+        if (active) setMemoryError(error instanceof Error ? error.message : "长期记忆读取失败");
       });
     return () => { active = false; };
   }, [usesDemoData]);
@@ -117,6 +147,7 @@ export function SettingsView() {
             assistantPanelOpen: next.assistantPanelOpen,
             translationLanguage: next.translationLanguage,
             arxivSearchEnabled: next.arxivSearchEnabled,
+            memoryEnabled: next.memoryEnabled,
           },
         },
       }));
@@ -125,6 +156,66 @@ export function SettingsView() {
       setSettingsError(error instanceof Error ? error.message : "个人设置保存失败");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function addMemory() {
+    const value = memoryDraft.trim();
+    if (value.length < 2 || memoryBusy) return;
+    setMemoryBusy(true);
+    setMemoryError("");
+    try {
+      const created = usesDemoData
+        ? { id: crypto.randomUUID(), type: memoryType, value, confidence: 1, sourceKind: "manual", sourceExcerpt: "由用户手动创建", pinned: false, enabled: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        : await createMemory(memoryType, value);
+      setMemories((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+      setMemoryDraft("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "长期记忆保存失败");
+    } finally {
+      setMemoryBusy(false);
+    }
+  }
+
+  async function saveMemory(item: MemoryItem, changes: Partial<Pick<MemoryItem, "value" | "pinned" | "enabled">>) {
+    if (memoryBusy) return;
+    setMemoryBusy(true);
+    setMemoryError("");
+    try {
+      const updated = usesDemoData ? { ...item, ...changes, updatedAt: new Date().toISOString() } : await updateMemory(item.id, changes);
+      setMemories((items) => items.map((candidate) => candidate.id === item.id ? updated : candidate));
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "长期记忆更新失败");
+    } finally {
+      setMemoryBusy(false);
+    }
+  }
+
+  async function removeMemory(item: MemoryItem) {
+    if (!window.confirm("确定删除这条长期记忆吗？删除后不会再进入后续对话。")) return;
+    setMemoryBusy(true);
+    setMemoryError("");
+    try {
+      if (!usesDemoData) await deleteMemory(item.id);
+      setMemories((items) => items.filter((candidate) => candidate.id !== item.id));
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "长期记忆删除失败");
+    } finally {
+      setMemoryBusy(false);
+    }
+  }
+
+  async function removeAllMemories() {
+    if (!memories.length || !window.confirm("确定清空全部长期记忆吗？该操作不可撤销。")) return;
+    setMemoryBusy(true);
+    setMemoryError("");
+    try {
+      if (!usesDemoData) await clearMemories();
+      setMemories([]);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "长期记忆清空失败");
+    } finally {
+      setMemoryBusy(false);
     }
   }
 
@@ -159,6 +250,7 @@ export function SettingsView() {
         <a href="#profile" className="active">个人资料</a>
         <a href="#reading">阅读体验</a>
         <a href="#agent">AI 与翻译</a>
+        <a href="#memory">长期记忆</a>
         <a href="#change-password">密码</a>
         <a href="#privacy">隐私与安全</a>
       </nav>
@@ -208,6 +300,28 @@ export function SettingsView() {
             </select>
           </div>
           <div className="setting-row"><span><strong>允许联网发现与 Agent 搜索 arXiv</strong><small>发现页会发送由文献提取的少量主题词；不会上传 PDF，下载导入前仍需确认。</small></span><PreferenceSwitch checked={settings.arxivSearchEnabled} onChange={(value) => updateSetting("arxivSearchEnabled", value)} label="允许联网发现与 Agent 搜索 arXiv" disabled={!preferencesReady} /></div>
+        </section>
+
+        <section id="memory" className="settings-section">
+          <div className="setting-title"><Brain size={20} /><div><h2>长期记忆</h2><p>用于跨会话保留你的明确偏好和研究方向，不会把论文内容当成记忆。</p></div></div>
+          <div className="setting-row"><span><strong>允许 Agent 使用长期记忆</strong><small>关闭后保留既有条目，但不会读取或自动新增。</small></span><PreferenceSwitch checked={settings.memoryEnabled} onChange={(value) => updateSetting("memoryEnabled", value)} label="允许 Agent 使用长期记忆" disabled={!preferencesReady} /></div>
+          <div className="memory-create">
+            <select aria-label="新记忆类型" value={memoryType} onChange={(event) => setMemoryType(event.target.value as MemoryType)}>
+              <option value="preference">表达偏好</option><option value="research_interest">研究方向</option><option value="entity_alias">实体别名</option><option value="workflow">工作习惯</option><option value="pinned_context">固定背景</option>
+            </select>
+            <input aria-label="新增长期记忆" value={memoryDraft} maxLength={2000} placeholder="例如：回答默认使用中文" onChange={(event) => setMemoryDraft(event.target.value)} />
+            <button type="button" className="secondary-button" disabled={memoryBusy || memoryDraft.trim().length < 2} onClick={() => void addMemory()}><Plus size={16} />添加</button>
+          </div>
+          <div className="memory-toolbar"><span>{memories.filter((item) => item.enabled).length} 条启用 / {memories.length} 条，共 {memoryCapacity} 条容量</span><button type="button" className="text-button danger" disabled={memoryBusy || memories.length === 0} onClick={() => void removeAllMemories()}>清空全部</button></div>
+          {memoryError && <p className="settings-feedback error" role="alert">{memoryError}</p>}
+          <div className="memory-list">
+            {memories.length === 0 && <p className="memory-empty">还没有长期记忆。你也可以在对话中说“记住……”。</p>}
+            {memories.map((item) => <article key={item.id} className={item.enabled ? "memory-item" : "memory-item disabled"}>
+              <div><span>{item.type === "research_interest" ? "研究方向" : item.type === "entity_alias" ? "实体别名" : item.type === "workflow" ? "工作习惯" : item.type === "pinned_context" ? "固定背景" : "表达偏好"}</span><small title={item.sourceExcerpt}>来源：{item.sourceKind === "manual" ? "手动创建" : item.sourceKind === "explicit" ? "明确要求记住" : "用户原话"}</small></div>
+              <textarea aria-label={`编辑记忆 ${item.value}`} value={item.value} disabled={memoryBusy} onChange={(event) => setMemories((items) => items.map((candidate) => candidate.id === item.id ? { ...candidate, value: event.target.value } : candidate))} />
+              <div className="memory-actions"><button type="button" className="text-button" disabled={memoryBusy || item.value.trim().length < 2} onClick={() => void saveMemory(item, { value: item.value.trim() })}>保存</button><button type="button" className="icon-button" aria-label={item.pinned ? "取消固定" : "固定记忆"} disabled={memoryBusy} onClick={() => void saveMemory(item, { pinned: !item.pinned })}><Pin size={15} fill={item.pinned ? "currentColor" : "none"} /></button><PreferenceSwitch checked={item.enabled} onChange={(enabled) => void saveMemory(item, { enabled })} label={`${item.enabled ? "停用" : "启用"}记忆`} disabled={memoryBusy} /><button type="button" className="icon-button danger" aria-label="删除记忆" disabled={memoryBusy} onClick={() => void removeMemory(item)}><Trash2 size={15} /></button></div>
+            </article>)}
+          </div>
         </section>
 
         <button className="primary-button save-settings" type="button" disabled={!preferencesReady || isSaving} onClick={saveSettings}>{isSaving ? "正在保存…" : "保存个人设置"}</button>

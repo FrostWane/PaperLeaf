@@ -3,8 +3,11 @@ from sqlalchemy import create_engine
 from paperleaf_api.models import (
     AgentRun,
     Base,
+    ChatSession,
     DiscoveryBatch,
     DiscoveryItem,
+    MemoryItem,
+    MemoryItemVersion,
     PaperArtifact,
     PaperChunk,
 )
@@ -45,4 +48,19 @@ def test_discovery_schema_keeps_batches_feedback_and_unique_items() -> None:
 def test_agent_run_schema_contains_context_snapshot_fields() -> None:
     assert {"context_snapshot", "context_version", "resolved_query", "reference_confidence"} <= {
         column.name for column in AgentRun.__table__.columns
+    }
+
+
+def test_context_summary_and_versioned_memory_are_persistent_models() -> None:
+    assert {
+        "compact_summary",
+        "summary_version",
+        "compacted_through_message_id",
+        "entity_state",
+    } <= {column.name for column in ChatSession.__table__.columns}
+    assert {constraint.name for constraint in MemoryItem.__table__.constraints} >= {
+        "uq_memory_user_hash"
+    }
+    assert {constraint.name for constraint in MemoryItemVersion.__table__.constraints} >= {
+        "uq_memory_item_version"
     }

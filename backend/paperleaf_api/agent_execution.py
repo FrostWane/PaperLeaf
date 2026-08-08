@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
+import uuid
 from typing import Any
 
 from .agent.context import ContextResolution, resolve_context
+from .agent.context_budget import allocate_context_budget, compact_conversation
+from .agent.memory import (
+    extract_memory_candidates,
+    memory_hash,
+    select_relevant_memories,
+)
+from .config import settings
+from .discovery import embed_discovery_texts
 from .model_runtime import ModelRuntimeError, collect_model_attempts
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import CitationClaim, Evidence, validate_citations
@@ -16,6 +26,48 @@ from .rag_observability import (
     classify_intent,
     record_rag_run,
 )
+from .repository import MemoryItemRecord
+
+
+async def _embed_memory_text(config: Any, text: str) -> list[float] | None:
+    """复用 Embedding 路由；Ollama/向量服务故障时静默退回关键词选择。"""
+
+    try:
+        from .model_runtime import build_model_router
+
+        values = await embed_discovery_texts(config, build_model_router(config), [text])
+        return values[0] if values else None
+    except Exception:
+        return None
+
+
+async def _save_run_memories(
+    repository: Any,
+    config: Any,
+    run: Any,
+    query: str,
+) -> None:
+    """Run 已落终态后执行；失败不会回滚用户已经收到的回答。"""
+
+    for candidate in extract_memory_candidates("user", query):
+        embedding = await _embed_memory_text(config, candidate.value)
+        await repository.create_memory_item(
+            MemoryItemRecord(
+                id=str(uuid.uuid4()),
+                user_id=run.user_id,
+                type=candidate.type,
+                value=candidate.value,
+                normalized_hash=memory_hash(candidate.type, candidate.value),
+                confidence=candidate.confidence,
+                source_kind=candidate.source_kind,
+                source_session_id=run.session_id,
+                source_message_id=run.user_message_id,
+                source_excerpt=candidate.source_excerpt,
+                pinned=candidate.type == "pinned_context",
+                embedding=embedding,
+            )
+        )
+
 
 _CITATION_RE = re.compile(r"\[chunk:([^\]]+)\]")
 _CONTROLLED_NOTICE_RE = re.compile(r"^\s*>?\s*证据说明[：:]", re.IGNORECASE)
@@ -192,6 +244,7 @@ async def execute_agent_run(
     claim_token: str,
     *,
     answer_quality_policy: AnswerQualityPolicy,
+    harness_config: Any = settings,
 ) -> None:
     """执行 Graph；只把通过 citation + support 的完整段落写入持久层。"""
 
@@ -207,13 +260,69 @@ async def execute_agent_run(
     snapshot = dict(run.scope_snapshot or {})
     scope = str(snapshot.get("type", "library"))
     visible_history = await repository.list_chat_messages(run.session_id, run.user_id)
-    history = [
-        {"role": item.role, "content": item.content}
+    history_records = [
+        item
         for item in (visible_history or [])
         if item.content.strip() and item.id != run.assistant_message_id
     ]
     context_started_at = time.perf_counter()
     harness_flags = dict(snapshot.get("harness", {}))
+    budget = allocate_context_budget(
+        harness_config.model_context_tokens,
+        safety_ratio=harness_config.context_safety_ratio,
+        compact_ratio=harness_config.context_compact_ratio,
+        hard_limit_ratio=harness_config.context_hard_limit_ratio,
+    )
+    chat_session = await repository.get_owned_chat_session(run.session_id, run.user_id)
+    compaction = compact_conversation(
+        history_records,
+        existing_summary=dict(getattr(chat_session, "compact_summary", {}) or {}),
+        keep_recent_turns=harness_config.context_keep_recent_turns,
+        compact_at_tokens=budget.compact_at,
+    )
+    if compaction.compacted:
+        updated_session = await repository.update_session_compaction(
+            run.session_id,
+            run.user_id,
+            compact_summary=compaction.summary,
+            compacted_through_message_id=compaction.compacted_through_message_id,
+            entity_state=dict(getattr(chat_session, "entity_state", {}) or {}),
+        )
+        if updated_session is not None:
+            chat_session = updated_session
+    user = await repository.get_user(run.user_id)
+    user_preferences = dict(getattr(user, "preferences", {}) or {})
+    memory_allowed = bool(
+        harness_flags.get("memory_enabled") and user_preferences.get("memory_enabled", True)
+    )
+    selected_memories: list[Any] = []
+    if memory_allowed:
+        memories = await repository.list_memories(run.user_id, enabled_only=True)
+        query_embedding = None
+        if any(getattr(item, "embedding", None) for item in memories):
+            query_embedding = await _embed_memory_text(harness_config, query)
+        selected_memories = select_relevant_memories(
+            query,
+            memories,
+            query_embedding=query_embedding,
+            limit=harness_config.context_max_memories,
+        )
+    history = list(compaction.recent_messages)
+    cached_context: dict[str, Any] = {}
+    if compaction.summary:
+        cached_context["conversation_summary"] = compaction.summary
+    if selected_memories:
+        cached_context["user_memories"] = [
+            {"type": item.type, "value": item.value} for item in selected_memories
+        ]
+    if cached_context:
+        history.insert(
+            0,
+            {
+                "role": "context",
+                "content": json.dumps(cached_context, ensure_ascii=False, separators=(",", ":")),
+            },
+        )
     if harness_flags.get("context_engine_enabled"):
         resolution = resolve_context(
             query,
@@ -224,6 +333,16 @@ async def execute_agent_run(
     else:
         resolution = ContextResolution(query, query, {}, 1.0, ("legacy_agent",))
     context_snapshot = resolution.snapshot(dict(snapshot.get("client_context", {})))
+    context_snapshot["budget"] = budget.as_dict()
+    context_snapshot["usage"] = {
+        "conversation_before_tokens": compaction.before_tokens,
+        "conversation_after_tokens": compaction.after_tokens,
+        "compacted": compaction.compacted,
+    }
+    context_snapshot["summary_version"] = int(
+        getattr(chat_session, "summary_version", 1) or 1
+    )
+    context_snapshot["memory_ids"] = [item.id for item in selected_memories]
     context_ms = round((time.perf_counter() - context_started_at) * 1000)
     updated_run = await repository.update_agent_context(
         run.id,
@@ -249,7 +368,7 @@ async def execute_agent_run(
         "user_id": run.user_id,
         "query": resolution.resolved_query,
         "original_query": query,
-        "messages": history[-9:],
+        "messages": history,
         "intent": intent,
         "scope": scope,
         "selected_paper_ids": list(snapshot.get("paper_ids", [])),
@@ -259,6 +378,8 @@ async def execute_agent_run(
         "resolved_references": resolution.references,
         "reference_confidence": resolution.confidence,
         "context_snapshot": context_snapshot,
+        "context_budget": budget.as_dict(),
+        "memory_ids": [item.id for item in selected_memories],
         "clarification_question": resolution.clarification_question,
         "tool_steps": 0,
         "stage_timings_ms": {"context": context_ms, "intent": intent_ms},
@@ -551,3 +672,9 @@ async def execute_agent_run(
             "dropped_paragraph_count": dropped_paragraphs,
         },
     )
+    if result_status == "completed" and memory_allowed:
+        try:
+            await _save_run_memories(repository, harness_config, run, query)
+        except Exception:
+            # 记忆是可重建的异步增强，不能把已经核验并发布的回答改成失败。
+            return

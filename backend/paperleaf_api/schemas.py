@@ -192,6 +192,54 @@ class ChatSessionRead(BaseModel):
     updated_at: datetime
 
 
+MemoryType = Literal[
+    "preference", "research_interest", "entity_alias", "workflow", "pinned_context"
+]
+
+
+class MemoryCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: MemoryType
+    value: str = Field(min_length=2, max_length=2000)
+    pinned: bool = False
+
+
+class MemoryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: Optional[MemoryType] = None
+    value: Optional[str] = Field(default=None, min_length=2, max_length=2000)
+    pinned: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class MemoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    type: MemoryType
+    value: str
+    confidence: float
+    source_kind: str
+    source_excerpt: Optional[str]
+    pinned: bool
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemoryListRead(BaseModel):
+    items: list[MemoryRead]
+    total: int
+    active: int
+    capacity: int = 200
+
+
+class MemoryClearRead(BaseModel):
+    deleted: int
+
+
 class ChatMessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

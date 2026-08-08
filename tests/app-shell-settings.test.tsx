@@ -90,7 +90,10 @@ describe("AppShell 账户与角色导航", () => {
 });
 
 describe("SettingsView 真实偏好", () => {
-  beforeEach(() => vi.stubEnv("NEXT_PUBLIC_DATA_MODE", "real"));
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_DATA_MODE", "real");
+    server.use(http.get(`${api}/memories`, () => HttpResponse.json({ items: [], total: 0, active: 0, capacity: 200 })));
+  });
   afterEach(() => {
     cleanup();
     resetCurrentUserStateForTests();
@@ -171,5 +174,31 @@ describe("SettingsView 真实偏好", () => {
     expect(screen.getByLabelText(/默认 PDF 缩放/)).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "保存个人设置" }));
     expect(updates).toBe(0);
+  });
+
+  it("展示、停用并删除用户自己的长期记忆", async () => {
+    let patched: Record<string, unknown> | undefined;
+    let deleted = 0;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    server.use(
+      http.get(`${api}/users/me/preferences`, () => HttpResponse.json({ display_name: "研究者", ...preferences, memory_enabled: true })),
+      http.get(`${api}/memories`, () => HttpResponse.json({
+        items: [{ id: "m1", type: "research_interest", value: "药物靶点亲和力预测", confidence: 0.97, source_kind: "stated", source_excerpt: "我的研究方向是药物靶点亲和力预测", pinned: false, enabled: true, created_at: "2026-08-08T00:00:00Z", updated_at: "2026-08-08T00:00:00Z" }],
+        total: 1, active: 1, capacity: 200,
+      })),
+      http.patch(`${api}/memories/m1`, async ({ request }) => {
+        patched = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ id: "m1", type: "research_interest", value: "药物靶点亲和力预测", confidence: 0.97, source_kind: "stated", source_excerpt: "我的研究方向是药物靶点亲和力预测", pinned: false, enabled: false, created_at: "2026-08-08T00:00:00Z", updated_at: "2026-08-08T01:00:00Z" });
+      }),
+      http.delete(`${api}/memories/m1`, () => { deleted += 1; return new HttpResponse(null, { status: 204 }); }),
+    );
+    render(<SettingsView />);
+
+    expect(await screen.findByDisplayValue("药物靶点亲和力预测")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "停用记忆" }));
+    await waitFor(() => expect(patched).toEqual({ enabled: false }));
+    fireEvent.click(screen.getByRole("button", { name: "删除记忆" }));
+    await waitFor(() => expect(deleted).toBe(1));
+    expect(screen.queryByDisplayValue("药物靶点亲和力预测")).not.toBeInTheDocument();
   });
 });

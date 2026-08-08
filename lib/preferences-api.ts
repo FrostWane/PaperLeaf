@@ -7,6 +7,7 @@ export interface UserPreferences {
   assistantPanelOpen: boolean;
   translationLanguage: string;
   arxivSearchEnabled: boolean;
+  memoryEnabled: boolean;
 }
 
 export interface CurrentUser {
@@ -34,6 +35,7 @@ const defaultPreferences: UserPreferences = {
   assistantPanelOpen: true,
   translationLanguage: "zh-CN",
   arxivSearchEnabled: false,
+  memoryEnabled: true,
 };
 
 function readCookie(name: string): string {
@@ -69,6 +71,7 @@ function mapPreferences(raw: Record<string, unknown> | undefined): UserPreferenc
     assistantPanelOpen: raw?.assistant_panel_open !== false,
     translationLanguage: String(raw?.translation_language ?? defaultPreferences.translationLanguage),
     arxivSearchEnabled: raw?.arxiv_search_enabled === true,
+    memoryEnabled: raw?.memory_enabled !== false,
   };
 }
 
@@ -120,6 +123,7 @@ export async function updateUserPreferences(input: PreferencesUpdate): Promise<P
       ...(input.assistantPanelOpen === undefined ? {} : { assistant_panel_open: input.assistantPanelOpen }),
       ...(input.translationLanguage === undefined ? {} : { translation_language: input.translationLanguage }),
       ...(input.arxivSearchEnabled === undefined ? {} : { arxiv_search_enabled: input.arxivSearchEnabled }),
+      ...(input.memoryEnabled === undefined ? {} : { memory_enabled: input.memoryEnabled }),
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response, "个人设置保存失败"));

@@ -1229,6 +1229,7 @@ async def process_agent_run_job(
                 min_claim_lexical_support=settings.answer_min_claim_lexical_support,
                 min_model_support_confidence=settings.answer_min_support_confidence,
             ),
+            harness_config=settings,
         )
     )
     while True:

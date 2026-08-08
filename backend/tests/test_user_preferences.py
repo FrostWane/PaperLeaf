@@ -54,6 +54,7 @@ def test_preferences_are_persisted_and_returned_by_auth_me(tmp_path) -> None:
             "assistant_panel_open": True,
             "translation_language": "zh-CN",
             "arxiv_search_enabled": False,
+            "memory_enabled": True,
         }
 
         preferences = client.get("/api/v1/users/me/preferences")
@@ -77,6 +78,7 @@ def test_preferences_are_persisted_and_returned_by_auth_me(tmp_path) -> None:
                 "assistant_panel_open": False,
                 "translation_language": "zh-CN",
                 "arxiv_search_enabled": True,
+                "memory_enabled": False,
             },
         )
         assert updated.status_code == 200, updated.text
@@ -88,6 +90,7 @@ def test_preferences_are_persisted_and_returned_by_auth_me(tmp_path) -> None:
             "assistant_panel_open": False,
             "translation_language": "zh-CN",
             "arxiv_search_enabled": True,
+            "memory_enabled": False,
         }
 
         partial = client.patch(
@@ -103,6 +106,7 @@ def test_preferences_are_persisted_and_returned_by_auth_me(tmp_path) -> None:
         assert current["display_name"] == "林研究员"
         assert current["preferences"]["pdf_zoom"] == 140
         assert current["preferences"]["assistant_panel_open"] is False
+        assert current["preferences"]["memory_enabled"] is False
 
 
 def test_preferences_validate_zoom_and_unknown_fields(tmp_path) -> None:

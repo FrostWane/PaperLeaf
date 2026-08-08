@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
 from paperleaf_api.agent_execution import execute_agent_run
+from paperleaf_api.config import settings
 from paperleaf_api.model_runtime import ModelRuntimeError
+from paperleaf_api.models import UserRole
 from paperleaf_api.rag.answer_quality import AnswerQualityPolicy
 from paperleaf_api.rag.citations import CitationClaim, Evidence
 from paperleaf_api.repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
     MemoryRepository,
+    UserRecord,
 )
 
 
@@ -166,6 +170,62 @@ def test_verified_markdown_blocks_replay_to_exact_persisted_message() -> None:
         assert trace["scope"] == "library"
         assert trace["outcome"] == "cited_answer"
         assert trace["citation_count"] == 2
+
+    asyncio.run(scenario())
+
+
+def test_completed_harness_run_extracts_only_explicit_user_memory() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        repository.users["u1"] = UserRecord(
+            id="u1",
+            email="reader@example.com",
+            password_hash="unused",
+            preferences={"memory_enabled": True},
+            role=UserRole.user,
+        )
+        chat_session = await repository.create_chat_session(
+            "u1", "记忆测试", "library", None, None
+        )
+        submission = await repository.submit_chat_message(
+            chat_session.id,
+            "u1",
+            "请记住：以后回答默认使用中文",
+            "memory-client-1",
+            "memory-hash-1",
+            {
+                "type": "library",
+                "paper_ids": ["p1"],
+                "web_enabled": False,
+                "harness": {"context_engine_enabled": True, "memory_enabled": True},
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token is not None
+        config = replace(
+            settings,
+            memory_enabled=True,
+            context_engine_enabled=True,
+            embedding_enabled=False,
+            fallback_embedding_enabled=False,
+        )
+        await execute_agent_run(
+            repository,
+            ResultGraph(),
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=config,
+        )
+
+        memories = await repository.list_memories("u1")
+        assert len(memories) == 1
+        assert memories[0].value == "以后回答默认使用中文"
+        assert memories[0].pinned is True
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None
+        assert run.context_snapshot["budget"]["model_window"] == config.model_context_tokens
 
     asyncio.run(scenario())
 

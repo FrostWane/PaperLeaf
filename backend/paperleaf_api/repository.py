@@ -28,6 +28,8 @@ from .models import (
     DiscoveryItem,
     Job,
     JobStatus,
+    MemoryItem,
+    MemoryItemVersion,
     Paper,
     PaperArtifact,
     PaperPage,
@@ -259,6 +261,10 @@ class ChatSessionRecord:
     collection_id: str | None = None
     current_run_id: str | None = None
     current_run_status: str | None = None
+    compact_summary: dict = field(default_factory=dict)
+    summary_version: int = 1
+    compacted_through_message_id: str | None = None
+    entity_state: dict = field(default_factory=dict)
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
 
@@ -287,6 +293,38 @@ class AgentRunEventRecord:
     event: str
     data: dict = field(default_factory=dict)
     event_key: str | None = None
+    created_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class MemoryItemRecord:
+    id: str
+    user_id: str
+    type: str
+    value: str
+    normalized_hash: str
+    confidence: float
+    source_kind: str
+    source_session_id: str | None = None
+    source_message_id: str | None = None
+    source_excerpt: str | None = None
+    pinned: bool = False
+    enabled: bool = True
+    embedding: list[float] | None = None
+    created_at: datetime = field(default_factory=now)
+    updated_at: datetime = field(default_factory=now)
+
+
+@dataclass
+class MemoryItemVersionRecord:
+    id: str
+    memory_item_id: str
+    version: int
+    value: str
+    confidence: float
+    status: str
+    source_kind: str
+    source_excerpt: str | None = None
     created_at: datetime = field(default_factory=now)
 
 
@@ -510,6 +548,26 @@ class Repository(Protocol):
         resolved_query: str,
         reference_confidence: float,
     ) -> AgentRunRecord | AgentRun | None: ...
+    async def update_session_compaction(
+        self,
+        session_id: str,
+        user_id: str,
+        *,
+        compact_summary: dict,
+        compacted_through_message_id: str | None,
+        entity_state: dict,
+    ) -> ChatSessionRecord | ChatSession | None: ...
+    async def list_memories(
+        self, user_id: str, *, enabled_only: bool = False
+    ) -> list[MemoryItemRecord | MemoryItem]: ...
+    async def create_memory_item(
+        self, record: MemoryItemRecord
+    ) -> MemoryItemRecord | MemoryItem: ...
+    async def update_owned_memory(
+        self, memory_id: str, user_id: str, **changes: object
+    ) -> MemoryItemRecord | MemoryItem | None: ...
+    async def delete_owned_memory(self, memory_id: str, user_id: str) -> bool: ...
+    async def clear_memories(self, user_id: str) -> int: ...
 
 
 class MemoryRepository:
@@ -532,6 +590,8 @@ class MemoryRepository:
         self.chat_messages: dict[str, ChatMessageRecord] = {}
         self.agent_runs: dict[str, AgentRunRecord] = {}
         self.agent_run_events: dict[int, AgentRunEventRecord] = {}
+        self.memory_items: dict[str, MemoryItemRecord] = {}
+        self.memory_item_versions: dict[str, MemoryItemVersionRecord] = {}
         self._next_agent_event_id = 1
         self.session_secret = session_secret
         self._managed_user_lock = threading.Lock()
@@ -1593,6 +1653,140 @@ class MemoryRepository:
             (item for item in self.chat_messages.values() if item.session_id == session_id),
             key=lambda item: item.sequence,
         )
+
+    async def update_session_compaction(
+        self,
+        session_id: str,
+        user_id: str,
+        *,
+        compact_summary: dict,
+        compacted_through_message_id: str | None,
+        entity_state: dict,
+    ) -> ChatSessionRecord | None:
+        record = await self.get_owned_chat_session(session_id, user_id)
+        if not record:
+            return None
+        record.compact_summary = dict(compact_summary)
+        record.summary_version = 1
+        record.compacted_through_message_id = compacted_through_message_id
+        record.entity_state = dict(entity_state)
+        record.updated_at = now()
+        return record
+
+    async def list_memories(
+        self, user_id: str, *, enabled_only: bool = False
+    ) -> list[MemoryItemRecord]:
+        records = [item for item in self.memory_items.values() if item.user_id == user_id]
+        if enabled_only:
+            records = [item for item in records if item.enabled]
+        return sorted(records, key=lambda item: (not item.pinned, -item.updated_at.timestamp()))
+
+    async def create_memory_item(self, record: MemoryItemRecord) -> MemoryItemRecord:
+        existing = next(
+            (
+                item
+                for item in self.memory_items.values()
+                if item.user_id == record.user_id
+                and item.normalized_hash == record.normalized_hash
+            ),
+            None,
+        )
+        if existing:
+            existing.enabled = True
+            existing.confidence = max(existing.confidence, record.confidence)
+            existing.pinned = existing.pinned or record.pinned
+            existing.updated_at = now()
+            return existing
+        active_count = sum(
+            item.user_id == record.user_id and item.enabled
+            for item in self.memory_items.values()
+        )
+        if active_count >= 200:
+            raise ValueError("长期记忆已达到 200 条上限")
+        self.memory_items[record.id] = record
+        version = MemoryItemVersionRecord(
+            id=str(uuid.uuid4()),
+            memory_item_id=record.id,
+            version=1,
+            value=record.value,
+            confidence=record.confidence,
+            status="active",
+            source_kind=record.source_kind,
+            source_excerpt=record.source_excerpt,
+        )
+        self.memory_item_versions[version.id] = version
+        return record
+
+    async def update_owned_memory(
+        self, memory_id: str, user_id: str, **changes: object
+    ) -> MemoryItemRecord | None:
+        record = self.memory_items.get(memory_id)
+        if not record or record.user_id != user_id:
+            return None
+        if "normalized_hash" in changes:
+            collision = next(
+                (
+                    item
+                    for item in self.memory_items.values()
+                    if item.id != memory_id
+                    and item.user_id == user_id
+                    and item.normalized_hash == changes["normalized_hash"]
+                ),
+                None,
+            )
+            if collision:
+                raise ValueError("相同记忆已经存在")
+        content_changed = any(key in changes for key in ("value", "confidence", "type"))
+        if content_changed:
+            versions = [
+                item
+                for item in self.memory_item_versions.values()
+                if item.memory_item_id == memory_id
+            ]
+            for item in versions:
+                if item.status == "active":
+                    item.status = "superseded"
+            next_version = max((item.version for item in versions), default=0) + 1
+            version = MemoryItemVersionRecord(
+                id=str(uuid.uuid4()),
+                memory_item_id=record.id,
+                version=next_version,
+                value=str(changes.get("value", record.value)),
+                confidence=float(changes.get("confidence", record.confidence)),
+                status="active",
+                source_kind="user_edit",
+                source_excerpt=record.source_excerpt,
+            )
+            self.memory_item_versions[version.id] = version
+        for key in ("type", "value", "normalized_hash", "confidence", "pinned", "enabled"):
+            if key in changes:
+                setattr(record, key, changes[key])
+        record.updated_at = now()
+        return record
+
+    async def delete_owned_memory(self, memory_id: str, user_id: str) -> bool:
+        record = self.memory_items.get(memory_id)
+        if not record or record.user_id != user_id:
+            return False
+        self.memory_items.pop(memory_id, None)
+        self.memory_item_versions = {
+            key: value
+            for key, value in self.memory_item_versions.items()
+            if value.memory_item_id != memory_id
+        }
+        return True
+
+    async def clear_memories(self, user_id: str) -> int:
+        ids = {item.id for item in self.memory_items.values() if item.user_id == user_id}
+        self.memory_items = {
+            key: value for key, value in self.memory_items.items() if value.user_id != user_id
+        }
+        self.memory_item_versions = {
+            key: value
+            for key, value in self.memory_item_versions.items()
+            if value.memory_item_id not in ids
+        }
+        return len(ids)
 
     async def submit_chat_message(
         self,
@@ -4282,6 +4476,189 @@ class SQLAlchemyRepository:
             await session.refresh(user_message)
             await session.refresh(run)
             return ChatSubmission(user_message, run, False)
+
+    async def update_session_compaction(
+        self,
+        session_id: str,
+        user_id: str,
+        *,
+        compact_summary: dict,
+        compacted_through_message_id: str | None,
+        entity_state: dict,
+    ) -> ChatSession | None:
+        async with get_session_factory()() as session:
+            record = await session.scalar(
+                select(ChatSession)
+                .where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+                .with_for_update()
+            )
+            if not record:
+                return None
+            record.compact_summary = dict(compact_summary)
+            record.summary_version = 1
+            record.compacted_through_message_id = compacted_through_message_id
+            record.entity_state = dict(entity_state)
+            record.updated_at = now()
+            await session.commit()
+            await session.refresh(record)
+            return record
+
+    async def list_memories(
+        self, user_id: str, *, enabled_only: bool = False
+    ) -> list[MemoryItem]:
+        async with get_session_factory()() as session:
+            query = select(MemoryItem).where(MemoryItem.user_id == user_id)
+            if enabled_only:
+                query = query.where(MemoryItem.enabled.is_(True))
+            query = query.order_by(MemoryItem.pinned.desc(), MemoryItem.updated_at.desc())
+            return list((await session.scalars(query)).all())
+
+    async def create_memory_item(self, record: MemoryItemRecord) -> MemoryItem:
+        async with get_session_factory()() as session:
+            existing = await session.scalar(
+                select(MemoryItem)
+                .where(
+                    MemoryItem.user_id == record.user_id,
+                    MemoryItem.normalized_hash == record.normalized_hash,
+                )
+                .with_for_update()
+            )
+            if existing:
+                existing.enabled = True
+                existing.pinned = existing.pinned or record.pinned
+                existing.confidence = max(existing.confidence, record.confidence)
+                existing.updated_at = now()
+                await session.commit()
+                await session.refresh(existing)
+                return existing
+            active_count = await session.scalar(
+                select(func.count(MemoryItem.id)).where(
+                    MemoryItem.user_id == record.user_id,
+                    MemoryItem.enabled.is_(True),
+                )
+            )
+            if int(active_count or 0) >= 200:
+                raise ValueError("长期记忆已达到 200 条上限")
+            item = MemoryItem(
+                id=record.id,
+                user_id=record.user_id,
+                type=record.type,
+                value=record.value,
+                normalized_hash=record.normalized_hash,
+                confidence=record.confidence,
+                source_kind=record.source_kind,
+                source_session_id=record.source_session_id,
+                source_message_id=record.source_message_id,
+                source_excerpt=record.source_excerpt,
+                pinned=record.pinned,
+                enabled=record.enabled,
+                embedding=record.embedding,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+            )
+            session.add(item)
+            session.add(
+                MemoryItemVersion(
+                    memory_item_id=item.id,
+                    version=1,
+                    value=item.value,
+                    confidence=item.confidence,
+                    status="active",
+                    source_kind=item.source_kind,
+                    source_excerpt=item.source_excerpt,
+                )
+            )
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                duplicate = await session.scalar(
+                    select(MemoryItem).where(
+                        MemoryItem.user_id == record.user_id,
+                        MemoryItem.normalized_hash == record.normalized_hash,
+                    )
+                )
+                if duplicate:
+                    return duplicate
+                raise ValueError("长期记忆保存失败") from exc
+            await session.refresh(item)
+            return item
+
+    async def update_owned_memory(
+        self, memory_id: str, user_id: str, **changes: object
+    ) -> MemoryItem | None:
+        async with get_session_factory()() as session:
+            item = await session.scalar(
+                select(MemoryItem)
+                .where(MemoryItem.id == memory_id, MemoryItem.user_id == user_id)
+                .with_for_update()
+            )
+            if not item:
+                return None
+            if "normalized_hash" in changes:
+                collision = await session.scalar(
+                    select(MemoryItem.id).where(
+                        MemoryItem.user_id == user_id,
+                        MemoryItem.id != memory_id,
+                        MemoryItem.normalized_hash == changes["normalized_hash"],
+                    )
+                )
+                if collision:
+                    raise ValueError("相同记忆已经存在")
+            if any(key in changes for key in ("value", "confidence", "type")):
+                await session.execute(
+                    update(MemoryItemVersion)
+                    .where(
+                        MemoryItemVersion.memory_item_id == memory_id,
+                        MemoryItemVersion.status == "active",
+                    )
+                    .values(status="superseded")
+                )
+                latest_version = await session.scalar(
+                    select(func.max(MemoryItemVersion.version)).where(
+                        MemoryItemVersion.memory_item_id == memory_id
+                    )
+                )
+                session.add(
+                    MemoryItemVersion(
+                        memory_item_id=memory_id,
+                        version=int(latest_version or 0) + 1,
+                        value=str(changes.get("value", item.value)),
+                        confidence=float(changes.get("confidence", item.confidence)),
+                        status="active",
+                        source_kind="user_edit",
+                        source_excerpt=item.source_excerpt,
+                    )
+                )
+            for key in ("type", "value", "normalized_hash", "confidence", "pinned", "enabled"):
+                if key in changes:
+                    setattr(item, key, changes[key])
+            item.updated_at = now()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError("相同记忆已经存在") from exc
+            await session.refresh(item)
+            return item
+
+    async def delete_owned_memory(self, memory_id: str, user_id: str) -> bool:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                delete(MemoryItem).where(
+                    MemoryItem.id == memory_id, MemoryItem.user_id == user_id
+                )
+            )
+            await session.commit()
+            return bool(result.rowcount)
+
+    async def clear_memories(self, user_id: str) -> int:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                delete(MemoryItem).where(MemoryItem.user_id == user_id)
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def create_agent_run(
         self, run_id: str, user_id: str, session_id: str, thread_id: str
