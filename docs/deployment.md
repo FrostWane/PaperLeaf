@@ -151,6 +151,39 @@ Prometheus 默认保留 15 天时序数据。Compose 会把仓库内的采集规
 
 不配置 Key 时文献 CRUD、PDF 阅读、全文检索、引用校验和提取式产物仍可工作；全文翻译、向量、模型生成与视觉 OCR 会明确降级。主服务达到连续失败阈值后，相应用途会在冷却期内快速失败并切换备用服务；回答、证据核验、总结、翻译、嵌入与视觉 OCR 分别维护熔断状态，单项故障不会直接关闭全部模型能力。修改嵌入模型或维度后必须重新索引；主、备用嵌入模型也必须输出相同维度。
 
+### DeepSeek 聊天与独立向量服务
+
+DeepSeek 聊天接口不应被当作 Embeddings 接口使用。继续用 DeepSeek 生成回答时，把主服务的
+`PAPERLEAF_EMBEDDING_ENABLED` 设为 `false`，再用 `PAPERLEAF_FALLBACK_*` 接入另一个
+支持 OpenAI-compatible Embeddings 的服务。模型路由会继续优先用 DeepSeek 回答，并从第二
+服务获取文档和查询向量；第二服务也承担聊天降级，因此需要配置一个真实可用的备用聊天模型。
+
+```dotenv
+PAPERLEAF_OPENAI_BASE_URL=https://api.deepseek.com
+PAPERLEAF_OPENAI_API_KEY=your-deepseek-key
+PAPERLEAF_CHAT_MODEL=your-deepseek-chat-model
+PAPERLEAF_EMBEDDING_ENABLED=false
+
+PAPERLEAF_FALLBACK_OPENAI_BASE_URL=https://your-compatible-service.example/v1
+PAPERLEAF_FALLBACK_OPENAI_API_KEY=your-embedding-service-key
+PAPERLEAF_FALLBACK_CHAT_MODEL=your-fallback-chat-model
+PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
+PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
+PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
+```
+
+如果服务或模型不接受 `dimensions` 参数，保持 `PAPERLEAF_EMBEDDING_DIMENSIONS` 为空；否则
+必须填模型的真实输出维度。不要在同一批 Chunk 中混用不同模型或不同维度。修改配置后执行：
+
+```bash
+docker compose up -d --build api worker
+```
+
+新上传论文会自动生成向量。既有论文仍保留原 Chunk，但向量为空，因此需要逐篇进入“文献设置”
+执行“重新处理”；该操作会重新解析、使用当前 `structure_aware_v2` 策略切分并替换该论文的旧
+Page/Chunk/Embedding。完成后可在“管理 → AI 能力状态”确认向量检索可用，并在 RAG 可观测性
+面板确认新问答出现向量或混合召回通道。当前版本尚未提供全库批量重建索引按钮。
+
 问答提交只由 API 持久化，不在 Web 请求内运行模型。生产环境必须持续运行 Worker 才能处理
 `agent_run` 作业；反向代理应关闭 SSE 响应缓冲并允许 `Last-Event-ID` 请求头。SSE 断线只影响
 实时观察，重新连接会从 PostgreSQL 补发遗漏事件，不会重复提交模型请求。部署多个 Worker 时

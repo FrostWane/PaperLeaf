@@ -181,4 +181,29 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getByText("进程内状态存储 可用")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
+
+  it("后台任务每页展示 15 条并支持翻页", async () => {
+    const manyJobs = Array.from({ length: 16 }, (_, index) => ({
+      id: `job-${index + 1}`,
+      type: "parse_pdf",
+      status: "failed",
+      progress: 20,
+      attempts: 1,
+      max_attempts: 3,
+      error_message: `测试失败 ${index + 1}`,
+    }));
+    server.use(http.get(`${API_BASE_URL}/admin/jobs`, () => HttpResponse.json(manyJobs)));
+
+    const { container } = render(<AdminView />);
+
+    expect(await screen.findByText(/测试失败 1$/)).toBeInTheDocument();
+    expect(container.querySelectorAll(".job-row")).toHaveLength(15);
+    expect(screen.queryByText(/测试失败 16$/)).not.toBeInTheDocument();
+    expect(screen.getByText("第 1 / 2 页 · 共 16 个任务")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByText(/测试失败 16$/)).toBeInTheDocument();
+    expect(container.querySelectorAll(".job-row")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+  });
 });

@@ -628,6 +628,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .runtime-purposes i { width: 8px; height: 8px; }
 .job-row { min-height: 76px; grid-template-columns: 38px minmax(240px, 1fr) minmax(180px, 320px) minmax(76px, max-content) auto; }
 .job-row > .mono { min-width: 76px; font-size: var(--ui-support-font); text-align: center; white-space: nowrap; }
+.admin-job-pagination { min-height: 64px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 9px 16px; border-top: 1px solid var(--border); background: #fafbf9; }
+.admin-job-pagination span { color: var(--muted); font-size: var(--ui-support-font); white-space: nowrap; }
+.admin-job-pagination .secondary-button { min-width: 96px; }
 .rag-window { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: #f7f8f6; }
 .rag-window button { min-height: 36px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: var(--ui-support-font); }
 .rag-window button:hover { color: var(--ink); }
@@ -691,6 +694,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .rag-funnel li { grid-template-columns: 1fr 34px; }
   .rag-funnel li > div { grid-column: 1 / -1; grid-row: 2; }
   .rag-funnel b { grid-column: 2; grid-row: 1; }
+  .admin-job-pagination { justify-content: space-between; gap: 6px; padding-inline: 10px; }
+  .admin-job-pagination .secondary-button { min-width: 44px; padding-inline: 9px; font-size: 0; }
+  .admin-job-pagination span { font-size: 12px; }
 }
 
 /* 持久化问答工作台：用户消息右侧轻量收束，Agent 回答保持左侧连续阅读。 */

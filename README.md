@@ -130,6 +130,30 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 能力：关闭向量调用后仍可通过 PostgreSQL 全文检索获得证据并交给 DeepSeek 回答；如需
 语义向量检索，应另外配置支持 Embeddings 的服务并重建既有文献索引。
 
+例如继续使用 DeepSeek 回答，同时把一个支持 OpenAI-compatible Embeddings 的服务配置为
+备用服务：
+
+```dotenv
+# 主服务：DeepSeek 只负责聊天
+PAPERLEAF_OPENAI_API_KEY=your-deepseek-key
+PAPERLEAF_OPENAI_BASE_URL=https://api.deepseek.com
+PAPERLEAF_CHAT_MODEL=your-deepseek-chat-model
+PAPERLEAF_EMBEDDING_ENABLED=false
+
+# 第二服务：提供向量；同时可在主服务故障时承担聊天降级
+PAPERLEAF_FALLBACK_OPENAI_API_KEY=your-embedding-service-key
+PAPERLEAF_FALLBACK_OPENAI_BASE_URL=https://your-compatible-service.example/v1
+PAPERLEAF_FALLBACK_CHAT_MODEL=your-fallback-chat-model
+PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
+PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
+PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
+```
+
+`PAPERLEAF_EMBEDDING_DIMENSIONS` 必须等于所选模型的真实输出维度；服务不接受
+`dimensions` 参数时可以留空。保存配置后只需重建 API 和 Worker，随后在单篇文献的
+“文献设置”中执行“重新处理”，为已有 Chunk 补写向量。向量可用后，管理页的“AI 能力
+状态”会显示向量检索可用，新问答的 RAG 轨迹会记录实际使用的召回通道。
+
 完整环境变量和生产部署注意事项参见[部署指南](docs/deployment.md)。
 
 ## 基本使用

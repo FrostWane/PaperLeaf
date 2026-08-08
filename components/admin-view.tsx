@@ -2,13 +2,14 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import { Activity, Plus, RefreshCw, UserX, X } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Plus, RefreshCw, UserX, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAdminUser, getAdminModelHealth, getAdminRagObservability, listAdminJobs, listAdminUsers, retryAdminJob, setAdminUserActive } from "@/lib/data-source";
 import { users as fixtureUsers } from "@/lib/fixtures";
 import type { AdminJob, AdminRagObservability, ModelRuntimeHealth, UserRecord } from "@/lib/types";
 
 const helper = createColumnHelper<UserRecord>();
+const jobsPageSize = 15;
 const demoJobs: AdminJob[] = [{ id: "job-demo", paperId: "attention", type: "parse_pdf", status: "running", progress: 68, attempts: 1, maxAttempts: 3 }];
 const demoHealth: ModelRuntimeHealth = {
   configured: true,
@@ -119,6 +120,7 @@ export function AdminView() {
   const [observability, setObservability] = useState<AdminRagObservability>(emptyObservability);
   const [window, setWindow] = useState<"24h" | "7d" | "30d">("24h");
   const [observabilityLoading, setObservabilityLoading] = useState(real);
+  const [jobsPage, setJobsPage] = useState(1);
   const [message, setMessage] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [pendingDeactivation, setPendingDeactivation] = useState<UserRecord | null>(null);
@@ -152,6 +154,10 @@ export function AdminView() {
   }, [real, window]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const pageCount = Math.max(1, Math.ceil(jobs.length / jobsPageSize));
+    setJobsPage((current) => Math.min(current, pageCount));
+  }, [jobs.length]);
 
   const toggleUser = useCallback(async (user: UserRecord) => {
     const disabling = user.status === "正常";
@@ -199,6 +205,8 @@ export function AdminView() {
   const telemetrySamples = observability.totals.telemetryRuns;
   const terminalSamples = observability.totals.terminalRuns;
   const runtimeStoreLabel = runtimeStoreLabels[observability.runtimeStore.backend] ?? "运行状态存储";
+  const jobsPageCount = Math.max(1, Math.ceil(jobs.length / jobsPageSize));
+  const visibleJobs = jobs.slice((jobsPage - 1) * jobsPageSize, jobsPage * jobsPageSize);
 
   return <div className="admin-layout">
     <div className="metric-row rag-metrics"><article><span>Agent 运行</span><strong>{observability.totals.runs}</strong><small>全部运行记录</small></article><article><span>含引用回答</span><strong>{sampledPercent(observability.totals.citedAnswerRate, telemetrySamples)}</strong><small>{observability.totals.citedAnswers} / {telemetrySamples} 条已采集轨迹</small></article><article><span>RAG 异常/受限率</span><strong>{sampledPercent(observability.totals.ragIssueRate, telemetrySamples)}</strong><small>{observability.totals.ragIssueRuns} / {telemetrySamples} 条已采集轨迹</small></article><article><span>端到端 P95</span><strong>{duration(observability.latency.overall.p95Ms)}</strong><small>{observability.latency.overall.samples} 个终态耗时样本</small></article></div>
@@ -236,7 +244,8 @@ export function AdminView() {
     </section>
     <section className="admin-section jobs"><div className="section-bar"><div><span className="eyebrow">异步处理队列</span><h2>后台任务</h2><small>上传、导入、删除等耗时操作会在离开页面后继续执行。</small></div><button className="secondary-button" onClick={() => void refresh()}><RefreshCw size={15} />刷新</button></div>
       {!jobsLoaded ? <div className="table-message">正在读取后台任务…</div> : jobs.length === 0 && <div className="table-message">当前没有后台任务。</div>}
-      {jobs.map((job) => <div className="job-row" key={job.id}><span className="job-icon"><Activity size={16} /></span><span><strong>{jobTypeLabels[job.type] ?? "其他后台任务"}</strong><small>{jobStatusCopy(job)}</small></span><div className="job-progress" role={job.status === "running" ? "progressbar" : undefined} aria-label={job.status === "running" ? `处理进度 ${job.progress}%` : undefined} aria-valuemin={job.status === "running" ? 0 : undefined} aria-valuemax={job.status === "running" ? 100 : undefined} aria-valuenow={job.status === "running" ? job.progress : undefined}><span style={{ width: `${job.status === "completed" ? 100 : job.progress}%` }} /></div><span className="mono">{jobProgressLabel(job)}</span>{job.status === "failed" && <button className="secondary-button" onClick={async () => { try { const updated = await retryAdminJob(job.id); setJobs((items) => items.map((item) => item.id === updated.id ? updated : item)); } catch (error) { setMessage(error instanceof Error ? error.message : "重试失败"); } }}>重试</button>}</div>)}
+      {visibleJobs.map((job) => <div className="job-row" key={job.id}><span className="job-icon"><Activity size={16} /></span><span><strong>{jobTypeLabels[job.type] ?? "其他后台任务"}</strong><small>{jobStatusCopy(job)}</small></span><div className="job-progress" role={job.status === "running" ? "progressbar" : undefined} aria-label={job.status === "running" ? `处理进度 ${job.progress}%` : undefined} aria-valuemin={job.status === "running" ? 0 : undefined} aria-valuemax={job.status === "running" ? 100 : undefined} aria-valuenow={job.status === "running" ? job.progress : undefined}><span style={{ width: `${job.status === "completed" ? 100 : job.progress}%` }} /></div><span className="mono">{jobProgressLabel(job)}</span>{job.status === "failed" && <button className="secondary-button" onClick={async () => { try { const updated = await retryAdminJob(job.id); setJobs((items) => items.map((item) => item.id === updated.id ? updated : item)); } catch (error) { setMessage(error instanceof Error ? error.message : "重试失败"); } }}>重试</button>}</div>)}
+      {jobs.length > jobsPageSize && <nav className="admin-job-pagination" aria-label="后台任务分页"><button type="button" className="secondary-button" disabled={jobsPage === 1} onClick={() => setJobsPage((page) => Math.max(1, page - 1))}><ChevronLeft size={16} />上一页</button><span aria-live="polite">第 {jobsPage} / {jobsPageCount} 页 · 共 {jobs.length} 个任务</span><button type="button" className="secondary-button" disabled={jobsPage === jobsPageCount} onClick={() => setJobsPage((page) => Math.min(jobsPageCount, page + 1))}>下一页<ChevronRight size={16} /></button></nav>}
     </section>
   </div>;
 }
