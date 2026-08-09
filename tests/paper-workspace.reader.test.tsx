@@ -65,6 +65,31 @@ describe("PaperWorkspace PDF 主视区", () => {
     expect(desktop.getByLabelText("模拟 PDF 第 3 页")).toBe(pdfNode);
   });
 
+  it("拖选 PDF 原文后显示明确反馈，并可清除或在换页时自动清除", () => {
+    const { container } = render(<PaperWorkspace demo paperId="attention" initialPage={2} />);
+    const desktop = within(container.querySelector(".workspace-desktop") as HTMLElement);
+    const original = desktop.getByLabelText("原始 PDF，第 2 页");
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      anchorNode: original,
+      focusNode: original,
+      toString: () => "  蛋白质   序列编码段落  ",
+    } as unknown as Selection);
+
+    fireEvent.mouseUp(original);
+    expect(desktop.getByText("已选原文 10 字", { selector: ".reader-selection-status" })).toBeVisible();
+    expect(desktop.getByRole("button", { name: "清除已选原文" })).toBeVisible();
+    expect(desktop.getByRole("button", { name: "已选原文" })).toBeVisible();
+
+    fireEvent.click(desktop.getByRole("button", { name: "清除已选原文" }));
+    expect(desktop.queryByText(/已选原文 10 字/)).not.toBeInTheDocument();
+    expect(desktop.queryByRole("button", { name: "已选原文" })).not.toBeInTheDocument();
+
+    fireEvent.mouseUp(original);
+    fireEvent.click(desktop.getByRole("button", { name: "下一页" }));
+    expect(desktop.queryByText(/已选原文 10 字/)).not.toBeInTheDocument();
+    expect(desktop.queryByRole("button", { name: "已选原文" })).not.toBeInTheDocument();
+  });
+
   it("确认时传递当前页优先级，译文中的 HTML 只作为纯文本展示并可取消", async () => {
     const create = vi.spyOn(demoDataSource, "createPaperTranslation");
     vi.spyOn(demoDataSource, "getPaperTranslationPage").mockImplementation(async (_paperId, _translationId, page) => ({ page, status: "completed", text: page === 2 ? '<script>alert("x")</script>\n\n安全译文' : `第 ${page} 页缓存译文` }));

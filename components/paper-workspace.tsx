@@ -63,6 +63,23 @@ function clampZoom(value: number): number {
   return Math.max(50, Math.min(200, Math.round(value / 10) * 10));
 }
 
+type CaretDocument = Document & {
+  caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+};
+
+function caretRangeAtPoint(x: number, y: number): Range | null {
+  const caretDocument = document as CaretDocument;
+  const range = caretDocument.caretRangeFromPoint?.(x, y);
+  if (range) return range;
+  const position = caretDocument.caretPositionFromPoint?.(x, y);
+  if (!position) return null;
+  const fallback = document.createRange();
+  fallback.setStart(position.offsetNode, position.offset);
+  fallback.collapse(true);
+  return fallback;
+}
+
 function translationStatusLabel(translation: PaperTranslation): string {
   if (translation.status === "queued") return "等待后台处理";
   if (translation.status === "running") return `正在翻译 · ${translation.completedPages}/${translation.totalPages} 页`;
@@ -112,6 +129,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const [translationPageMessage, setTranslationPageMessage] = useState<{ page: number; text: string } | null>(null);
   const [translationRefresh, setTranslationRefresh] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const selectionStartRef = useRef<Range | null>(null);
   const lastPersistedZoomRef = useRef(100);
   const focusRestoreRef = useRef({ left: true, assistant: true });
   const setSelectedPaperId = useWorkspaceStore((state) => state.setSelectedPaperId);
@@ -291,7 +309,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   }, [activeTranslationId, activeTranslationStatus, currentPage, dataSource, paperId]);
 
   function openCitation(page: number) {
-    setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
+    goToPage(page);
     setMobilePane("pdf");
   }
 
@@ -437,12 +455,12 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     <div className="pane-heading"><a href={libraryHref} className="back-link"><ArrowLeft size={14} />返回文献库</a><button className="icon-button pane-settings" aria-label="编辑文献信息" onClick={() => setDetailsOpen(true)}><PencilLine size={14} /></button></div>
     <div className="paper-summary"><span className="paper-index">{isReal ? `PL–${paper.id.slice(0, 8).toUpperCase()}` : "PL–001"}</span><h2>{paper.title}</h2><p>{paper.authors || "作者待识别"}{paper.year > 0 ? ` · ${paper.year}` : ""}</p><PaperState paper={paper} /></div>
     <dl className="metadata"><div><dt>出版物</dt><dd>{paper.publication || "待识别"}</dd></div><div><dt>页数</dt><dd>{paper.pages ? `${paper.pages} 页` : "待识别"}</dd></div><div><dt>{paper.arxivId ? "arXiv" : "DOI"}</dt><dd className="mono">{paper.arxivId ?? paper.doi ?? "—"}</dd></div></dl>
-    <div className="outline-list"><span className="eyebrow">{isReal ? "页码导航" : "论文目录"}</span>{isReal ? pageShortcuts.map((page) => <button key={page} className={currentPage === page ? "active" : ""} onClick={() => setCurrentPage(page)}><span>{String(page).padStart(2, "0")}</span>{page === 1 ? "论文首页" : page === paper.pages ? "最后一页" : `跳到第 ${page} 页`}</button>) : ["摘要", "1. Introduction", "2. Background", "3. Model Architecture", "4. Why Self-Attention", "5. Training", "6. Results"].map((item, index) => <button key={item} className={currentPage === index + 1 ? "active" : ""} onClick={() => setCurrentPage(index + 1)}><span>{String(index + 1).padStart(2, "0")}</span>{item}</button>)}</div>
+    <div className="outline-list"><span className="eyebrow">{isReal ? "页码导航" : "论文目录"}</span>{isReal ? pageShortcuts.map((page) => <button key={page} className={currentPage === page ? "active" : ""} onClick={() => goToPage(page)}><span>{String(page).padStart(2, "0")}</span>{page === 1 ? "论文首页" : page === paper.pages ? "最后一页" : `跳到第 ${page} 页`}</button>) : ["摘要", "1. Introduction", "2. Background", "3. Model Architecture", "4. Why Self-Attention", "5. Training", "6. Results"].map((item, index) => <button key={item} className={currentPage === index + 1 ? "active" : ""} onClick={() => goToPage(index + 1)}><span>{String(index + 1).padStart(2, "0")}</span>{item}</button>)}</div>
     <div className="paper-pane-actions"><button className="secondary-button" onClick={() => setDetailsOpen(true)}><PencilLine size={14} />文献设置</button>{manageMessage && <p role="status">{manageMessage}</p>}</div>
   </aside>;
 
   const pdfPage = isReal
-    ? <RealPdfDocument url={dataSource.fileUrl(paperId)} page={currentPage} fitWidth={fitWidth} scalePercent={zoomPercent} onPageCount={(count) => { setPaper((item) => item ? { ...item, pages: count } : item); if (currentPage > count) setCurrentPage(count); }} />
+    ? <RealPdfDocument url={dataSource.fileUrl(paperId)} page={currentPage} fitWidth={fitWidth} scalePercent={zoomPercent} onPageCount={(count) => { setPaper((item) => item ? { ...item, pages: count } : item); if (currentPage > count) goToPage(count); }} />
     : <div className="mock-pdf-scale" style={{ width: fitWidth ? "min(700px, 100%)" : `${zoomPercent}%` }}><article className="mock-paper" aria-label={`模拟 PDF 第 ${currentPage} 页`}><div className="pdf-running"><span>NEURIPS 2017</span><span>ARXIV:{paper.arxivId}</span></div><h1>{paper.title}</h1><p className="pdf-authors">Ashish Vaswani · Noam Shazeer · Niki Parmar · Jakob Uszkoreit · Llion Jones · Aidan N. Gomez</p><h2>{currentPage === 2 ? "1 · Introduction" : `Section · Page ${currentPage}`}</h2><p>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder.</p><p className={currentPage === 2 ? "pdf-highlight" : ""}>We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.</p><p>Recurrent models typically factor computation along the symbol positions of the input and output sequences. This inherently sequential nature precludes parallelization within training examples.</p><div className="formula">Attention(Q, K, V) = softmax(QKᵀ / √dₖ)V</div><p>Self-attention connects all positions with a constant number of sequentially executed operations.</p><span className="pdf-page-number">{currentPage}</span></article></div>;
 
   const currentTranslationPage = translationPage?.page === currentPage ? translationPage : null;
@@ -481,10 +499,29 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
       </details>
     </div>
     <div className={translation && translationVisible ? "document-stage translation-stage" : "document-stage"} tabIndex={0} aria-label="PDF 页面，可滚动浏览">
-      <div className="translation-original" tabIndex={0} aria-label={`原始 PDF，第 ${currentPage} 页`} onMouseUp={(event) => {
+      <div className="translation-original" tabIndex={0} aria-label={`原始 PDF，第 ${currentPage} 页`} onMouseDown={(event) => {
+        const start = caretRangeAtPoint(event.clientX, event.clientY);
+        selectionStartRef.current = start && event.currentTarget.contains(start.startContainer) ? start : null;
+        window.getSelection()?.removeAllRanges();
+      }} onMouseUp={(event) => {
+        const container = event.currentTarget;
         const selection = window.getSelection();
-        const text = selection?.toString().replace(/\s+/g, " ").trim() ?? "";
-        if (text.length >= 2 && event.currentTarget.contains(selection?.anchorNode ?? null)) setSelectedText(text.slice(0, 4000));
+        let text = selection?.toString().replace(/\s+/g, " ").trim() ?? "";
+        const start = selectionStartRef.current;
+        const end = caretRangeAtPoint(event.clientX, event.clientY);
+        selectionStartRef.current = null;
+        if (!text && selection && start && end && container.contains(end.startContainer)) {
+          const range = document.createRange();
+          const startComesFirst = start.compareBoundaryPoints(Range.START_TO_START, end) <= 0;
+          const first = startComesFirst ? start : end;
+          const last = startComesFirst ? end : start;
+          range.setStart(first.startContainer, first.startOffset);
+          range.setEnd(last.startContainer, last.startOffset);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          text = selection.toString().replace(/\s+/g, " ").trim();
+        }
+        if (text.length >= 2 && container.contains(selection?.anchorNode ?? null) && container.contains(selection?.focusNode ?? null)) setSelectedText(text.slice(0, 4000));
       }}>{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
       {translation && translationVisible && <aside className="translation-page" aria-label={`${translationLanguageLabel(translation.targetLanguage)}译文，第 ${currentPage} 页`}>
         <div className="translation-page-head"><div><span>{translationLanguageLabel(translation.targetLanguage)}译文</span><strong>第 {currentPage} / {paper.pages || translation.totalPages} 页</strong></div><div className="translation-page-nav"><button type="button" className="icon-button" aria-label="上一页译文" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}><ChevronLeft size={16} /></button><button type="button" className="icon-button" aria-label="下一页译文" disabled={Boolean((paper.pages || translation.totalPages) && currentPage >= (paper.pages || translation.totalPages))} onClick={() => goToPage(currentPage + 1)}><ChevronRight size={16} /></button><button type="button" className="icon-button" aria-label="关闭译文双栏" onClick={() => setTranslationVisible(false)}><X size={16} /></button></div></div>
@@ -498,7 +535,15 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
         {translationPageMessage?.page === currentPage && <p className="field-error" role="alert">{translationPageMessage.text}</p>}
       </aside>}
     </div>
-    <div className="reader-status"><strong>{evidencePages.includes(currentPage) ? "证据页已定位" : "论文页面"}</strong><span>第 {currentPage} 页</span><span>{translation && translationVisible ? `原文 + ${translationLanguageLabel(translation.targetLanguage)}译文` : isReal ? "原始 PDF" : "模拟文本层"}</span></div>
+    <div className="reader-status">
+      <strong>{evidencePages.includes(currentPage) ? "证据页已定位" : "论文页面"}</strong>
+      <span>第 {currentPage} 页</span>
+      {selectedText && <span className="reader-selection-status" role="status" title={selectedText}>
+        <Quote size={13} aria-hidden="true" />已选原文 {selectedText.length} 字
+        <button type="button" aria-label="清除已选原文" title="清除已选原文" onClick={() => setSelectedText("")}><X size={12} aria-hidden="true" /></button>
+      </span>}
+      <span className="reader-source-status">{translation && translationVisible ? `原文 + ${translationLanguageLabel(translation.targetLanguage)}译文` : isReal ? "原始 PDF" : "模拟文本层"}</span>
+    </div>
   </section>;
 
   const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} clientContext={{ route: `/library/${paperId}`, paperId, paperTitle: paper.title, physicalPage: currentPage, selectedText: selectedText || undefined, activePanel: "chat" }} onOpenCitation={(citation) => openCitation(citation.page)} />;
