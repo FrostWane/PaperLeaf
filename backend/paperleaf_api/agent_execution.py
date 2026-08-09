@@ -17,9 +17,11 @@ from .agent.memory import (
     memory_hash,
     select_relevant_memories,
 )
-from .agent.skills import SkillRegistry
+from .agent.skills import SkillRegistry, route_verified_selection
+from .agent.tools import LibrarySearchInput
 from .config import settings
 from .discovery import embed_discovery_texts
+from .embedding_contract import configured_embedding_contract, vector_matches_contract
 from .model_runtime import ModelRuntimeError, collect_model_attempts
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import CitationClaim, Evidence, validate_citations
@@ -53,6 +55,16 @@ async def _save_run_memories(
 
     for candidate in extract_memory_candidates("user", query):
         embedding = await _embed_memory_text(config, candidate.value)
+        from .model_runtime import build_model_router
+
+        contract = configured_embedding_contract(config, build_model_router(config))
+        if contract is None or not embedding or not vector_matches_contract(
+            embedding, contract
+        ):
+            embedding = None
+            embedding_fingerprint = None
+        else:
+            embedding_fingerprint = contract.fingerprint
         await repository.create_memory_item(
             MemoryItemRecord(
                 id=str(uuid.uuid4()),
@@ -65,8 +77,9 @@ async def _save_run_memories(
                 source_session_id=run.session_id,
                 source_message_id=run.user_message_id,
                 source_excerpt=candidate.source_excerpt,
-                pinned=candidate.type == "pinned_context",
+                pinned=candidate.source_kind == "explicit",
                 embedding=embedding,
+                embedding_fingerprint=embedding_fingerprint,
             )
         )
 
@@ -74,6 +87,27 @@ async def _save_run_memories(
 _CITATION_RE = re.compile(r"\[chunk:([^\]]+)\]")
 _CONTROLLED_NOTICE_RE = re.compile(r"^\s*>?\s*证据说明[：:]", re.IGNORECASE)
 _STRUCTURAL_MARKDOWN_RE = re.compile(r"^\s*(?:#{1,6}\s+[^\n]+|[-*_]{3,})\s*$")
+
+
+def _selection_scope_is_locked(query: str) -> bool:
+    """选文默认只允许同页证据；只有明确要求结合全文时才放宽。"""
+
+    normalized = " ".join(query.casefold().split())
+    if re.search(r"(?:不要|不许|无需|别).{0,12}(?:全文|整篇|全篇)", normalized):
+        return True
+    if re.search(r"(?:只|仅).{0,12}(?:选中|所选|这段|原文)", normalized):
+        return True
+    expand_markers = (
+        "结合全文",
+        "基于全文",
+        "检索全文",
+        "扩展到全文",
+        "整篇论文",
+        "全篇论文",
+        "whole paper",
+        "entire paper",
+    )
+    return not any(marker in normalized for marker in expand_markers)
 
 
 def _answer_paragraphs(answer: str) -> list[str]:
@@ -122,6 +156,34 @@ def _citation_dicts(
             }
         )
     return result
+
+
+def _next_entity_state(
+    existing: dict[str, Any],
+    resolution: ContextResolution,
+    original_query: str,
+) -> dict[str, Any]:
+    """保存可审计的讨论实体，不保存选文正文或隐藏推理。"""
+
+    state = dict(existing)
+    references = resolution.references
+    paper_id = str(references.get("paper_id", "")).strip()
+    if paper_id and state.get("paper_id") not in {None, "", paper_id}:
+        state = {}
+    if paper_id:
+        state["paper_id"] = paper_id
+    if references.get("paper_title"):
+        state["paper_title"] = str(references["paper_title"])
+    if references.get("physical_page") is not None:
+        state["physical_page"] = int(references["physical_page"])
+    if references.get("discussion_entity"):
+        state["discussion_entity"] = str(references["discussion_entity"])
+    elif references.get("summary_entity"):
+        state["discussion_entity"] = str(references["summary_entity"])
+    if references.get("selected_text"):
+        state["selection_consumed"] = True
+    state["last_user_query"] = original_query[:500]
+    return state
 
 
 def _validate_publishable_paragraph(
@@ -403,18 +465,29 @@ async def execute_agent_run(
     if memory_allowed:
         memories = await repository.list_memories(run.user_id, enabled_only=True)
         query_embedding = None
+        from .model_runtime import build_model_router
+
+        memory_contract = configured_embedding_contract(
+            harness_config, build_model_router(harness_config)
+        )
         if any(getattr(item, "embedding", None) for item in memories):
             query_embedding = await _embed_memory_text(harness_config, query)
         selected_memories = select_relevant_memories(
             query,
             memories,
             query_embedding=query_embedding,
+            embedding_fingerprint=(
+                memory_contract.fingerprint if memory_contract is not None else None
+            ),
             limit=harness_config.context_max_memories,
         )
     history = list(compaction.recent_messages)
     cached_context: dict[str, Any] = {}
     if compaction.summary:
         cached_context["conversation_summary"] = compaction.summary
+    entity_state = dict(getattr(chat_session, "entity_state", {}) or {})
+    if entity_state:
+        cached_context["entity_state"] = entity_state
     if selected_memories:
         cached_context["user_memories"] = [
             {"type": item.type, "value": item.value} for item in selected_memories
@@ -427,16 +500,21 @@ async def execute_agent_run(
                 "content": json.dumps(cached_context, ensure_ascii=False, separators=(",", ":")),
             },
         )
+    verified_client_context = dict(snapshot.get("client_context", {}))
+    if scope == "paper" and snapshot.get("paper_id"):
+        verified_client_context.setdefault("paper_id", snapshot["paper_id"])
+    if scope == "collection" and snapshot.get("collection_id"):
+        verified_client_context.setdefault("collection_id", snapshot["collection_id"])
     if harness_flags.get("context_engine_enabled"):
         resolution = resolve_context(
             query,
-            dict(snapshot.get("client_context", {})),
+            verified_client_context,
             history,
             session_type=scope,
         )
     else:
         resolution = ContextResolution(query, query, {}, 1.0, ("legacy_agent",))
-    context_snapshot = resolution.snapshot(dict(snapshot.get("client_context", {})))
+    context_snapshot = resolution.snapshot(verified_client_context)
     context_snapshot["budget"] = budget.as_dict()
     context_snapshot["usage"] = {
         "conversation_before_tokens": compaction.before_tokens,
@@ -464,7 +542,12 @@ async def execute_agent_run(
     definition = None
     if harness_flags.get("skills_enabled"):
         registry = skill_registry or SkillRegistry.default()
-        if harness_flags.get("function_tools_enabled") and function_tool_harness is not None:
+        selected_text = str(resolution.references.get("selected_text", "")).strip()
+        if selected_text:
+            definition = route_verified_selection(registry, resolution.original_query)
+            route_source = "verified_selection_override"
+            route_confidence = 1.0
+        elif harness_flags.get("function_tools_enabled") and function_tool_harness is not None:
             try:
                 definition, route_source, route_confidence = (
                     await function_tool_harness.select_skill(
@@ -521,9 +604,12 @@ async def execute_agent_run(
         "skill_route_source": route_source,
         "skill_route_confidence": route_confidence,
         "tool_calls": [],
+        "tool_context_entries": [],
         "tool_mode_active": False,
         "pre_retrieved_evidence": [],
         "pre_arxiv_candidates": [],
+        "native_function_calling_attempted": False,
+        "tool_output_used": False,
     }
     updated_run = await repository.update_agent_skill(
         run.id,
@@ -559,6 +645,10 @@ async def execute_agent_run(
         "skill_route_source": route_source,
         "skill_route_confidence": route_confidence,
         "tool_calls": [],
+        "selection_evidence": [],
+        "selection_scope_locked": False,
+        "selection_physical_page": None,
+        "selection_paper_id": None,
         "clarification_question": resolution.clarification_question,
         "tool_steps": 0,
         "stage_timings_ms": {"context": context_ms, "intent": intent_ms},
@@ -588,6 +678,55 @@ async def execute_agent_run(
     with collect_model_attempts() as attempts:
         tool_mode_active = False
         tool_loop_result = None
+        selected_text = str(resolution.references.get("selected_text", "")).strip()
+        selection_page = resolution.references.get("physical_page")
+        selection_paper_id = str(resolution.references.get("paper_id", "")).strip()
+        selection_scope_locked = bool(selected_text) and _selection_scope_is_locked(
+            resolution.original_query
+        )
+        initial["selection_scope_locked"] = selection_scope_locked
+        initial["selection_physical_page"] = (
+            int(selection_page) if selection_page is not None else None
+        )
+        initial["selection_paper_id"] = selection_paper_id or None
+        harness_trace["selection_scope_locked"] = selection_scope_locked
+        if selected_text and selection_paper_id and function_tool_harness is not None:
+            try:
+                selected_evidence = await function_tool_harness.retriever(
+                    LibrarySearchInput(
+                        user_id=run.user_id,
+                        query=selected_text,
+                        paper_ids=[selection_paper_id],
+                        limit=6,
+                    )
+                )
+                initial["selection_evidence"] = [
+                    item
+                    for item in selected_evidence
+                    if selection_page is None or item.physical_page == int(selection_page)
+                ][:3]
+                if not initial["selection_evidence"] and selection_page is not None:
+                    page_loader = getattr(
+                        function_tool_harness.retriever,
+                        "page_selection_evidence",
+                        None,
+                    )
+                    if page_loader is not None:
+                        initial["selection_evidence"] = await page_loader(
+                            user_id=run.user_id,
+                            paper_id=selection_paper_id,
+                            physical_page=int(selection_page),
+                            selected_text=selected_text,
+                            limit=3,
+                        )
+                harness_trace["selection_evidence_count"] = len(
+                    initial["selection_evidence"]
+                )
+            except Exception:
+                harness_trace["selection_evidence_count"] = 0
+                harness_trace["selection_evidence_fallback_reason"] = (
+                    "selection_retrieval_failed"
+                )
         if (
             not resolution.needs_clarification
             and harness_flags.get("function_tools_enabled")
@@ -595,6 +734,20 @@ async def execute_agent_run(
             and function_tool_harness is not None
         ):
             tool_started_at = time.perf_counter()
+            scope_paper_titles: list[str] = []
+            # get_page_text 的模型参数必须使用服务端论文 ID；同时保留可信标题，
+            # 以便对模型偶尔返回标题而非 ID 的情况做单论文、无歧义的受控解析。
+            # 这份元数据也服务于外部学术检索，因此不能只在 web_enabled 时构建。
+            for paper_id in list(snapshot.get("paper_ids", []))[:8]:
+                try:
+                    scoped_paper = await repository.get_owned_paper(
+                        str(paper_id), run.user_id
+                    )
+                except Exception:
+                    scoped_paper = None
+                title = str(getattr(scoped_paper, "title", "") or "").strip()
+                if title and title not in scope_paper_titles:
+                    scope_paper_titles.append(title)
             try:
                 tool_loop_result = await _invoke_tools_with_cancel(
                     repository,
@@ -616,6 +769,11 @@ async def execute_agent_run(
                             else None
                         ),
                         web_enabled=bool(snapshot.get("web_enabled", False)),
+                        scope_paper_titles=tuple(scope_paper_titles),
+                        verified_selection_page=(
+                            int(selection_page) if selection_page is not None else None
+                        ),
+                        selection_scope_locked=selection_scope_locked,
                     ),
                 )
             except asyncio.CancelledError:
@@ -625,32 +783,25 @@ async def execute_agent_run(
                     provider_supported=False,
                     fallback_reason="function_tool_loop_failed",
                 )
-            tool_mode_active = bool(tool_loop_result.provider_supported and tool_loop_result.calls)
+            tool_mode_active = tool_loop_result.tool_mode_active
             harness_trace["tool_mode_active"] = tool_mode_active
+            harness_trace["native_function_calling_attempted"] = (
+                tool_loop_result.native_function_calling_attempted
+            )
+            harness_trace["explicit_source_fallback_used"] = (
+                tool_loop_result.explicit_source_fallback_used
+            )
+            harness_trace["tool_output_used"] = tool_mode_active
+            harness_trace["tool_activation_reason"] = tool_loop_result.activation_reason
+            # 即使工具结果不可用于激活 Tool Mode，也保留成对且已清洗的状态结果，
+            # 让回答能准确说明“OpenAlex 缺少 Key”等降级原因；旧检索仍照常执行。
+            initial["tool_context_entries"] = list(tool_loop_result.context_entries)
+            initial["tool_steps"] = tool_loop_result.steps
             if tool_mode_active:
                 initial["tool_mode_active"] = True
                 initial["pre_retrieved_evidence"] = list(tool_loop_result.evidence)
                 initial["pre_arxiv_candidates"] = list(tool_loop_result.arxiv_candidates)
-                initial["tool_steps"] = tool_loop_result.steps
                 initial["tool_calls"] = list(tool_loop_result.calls)
-                external_results = [
-                    item
-                    for item in tool_loop_result.calls
-                    if str(item.get("tool", "")).startswith("mcp__")
-                    and item.get("status") == "succeeded"
-                ]
-                if external_results:
-                    initial["messages"] = [
-                        *initial["messages"],
-                        {
-                            "role": "external_tool",
-                            "content": json.dumps(
-                                external_results,
-                                ensure_ascii=False,
-                                default=str,
-                            )[:16_000],
-                        },
-                    ]
                 initial["stage_timings_ms"]["retrieval"] = round(
                     (time.perf_counter() - tool_started_at) * 1000
                 )
@@ -663,7 +814,11 @@ async def execute_agent_run(
                 ]
                 harness_trace["function_calling"] = "native"
             else:
-                harness_trace["function_calling"] = "legacy_fallback"
+                harness_trace["function_calling"] = (
+                    "native_unused"
+                    if tool_loop_result.native_function_calling_attempted
+                    else "legacy_fallback"
+                )
                 harness_trace["function_fallback_reason"] = (
                     tool_loop_result.fallback_reason or "model_selected_no_tool"
                 )
@@ -790,6 +945,35 @@ async def execute_agent_run(
             return
     model_attempts = [item.as_dict() for item in attempts]
     stage_timings = dict(result.get("stage_timings_ms", {}))
+    final_context_usage = dict(result.get("context_usage", {}) or {})
+    if final_context_usage:
+        context_snapshot["usage"] = {
+            **dict(context_snapshot.get("usage", {})),
+            **final_context_usage,
+        }
+        harness_trace["context_budget"] = {
+            "final_input_tokens": final_context_usage.get("final_input_tokens", 0),
+            "hard_limit": final_context_usage.get("hard_limit", 0),
+            "compression_actions": list(
+                final_context_usage.get("compression_actions", [])
+            ),
+            "dropped_messages": final_context_usage.get("dropped_messages", 0),
+            "dropped_evidence": final_context_usage.get("dropped_evidence", 0),
+        }
+        await repository.update_agent_context(
+            run.id,
+            claim_token,
+            context_snapshot=context_snapshot,
+            resolved_query=resolution.resolved_query,
+            reference_confidence=resolution.confidence,
+        )
+        await repository.update_agent_skill(
+            run.id,
+            claim_token,
+            selected_skill=selected_skill,
+            skill_version=skill_version,
+            harness_trace=harness_trace,
+        )
     if resolution.needs_clarification:
         await repository.append_agent_run_event(
             run_id,
@@ -982,7 +1166,7 @@ async def execute_agent_run(
         result_status = "failed"
     published_answer = "\n\n".join(item[0] for item in validated)
     outcome = "cited_answer" if all_citation_dicts else "abstained"
-    await _finish_observed_run(
+    finished_run = await _finish_observed_run(
         repository,
         run_id,
         claim_token,
@@ -1007,6 +1191,24 @@ async def execute_agent_run(
             "dropped_paragraph_count": dropped_paragraphs,
         },
     )
+    if finished_run and result_status == "completed":
+        try:
+            await repository.update_session_compaction(
+                run.session_id,
+                run.user_id,
+                compact_summary=dict(getattr(chat_session, "compact_summary", {}) or {}),
+                compacted_through_message_id=getattr(
+                    chat_session, "compacted_through_message_id", None
+                ),
+                entity_state=_next_entity_state(
+                    dict(getattr(chat_session, "entity_state", {}) or {}),
+                    resolution,
+                    query,
+                ),
+            )
+        except Exception:
+            # 讨论实体是可重建的上下文缓存，不能改写已经核验的回答终态。
+            pass
     if result_status == "completed" and memory_allowed:
         try:
             await _save_run_memories(repository, harness_config, run, query)

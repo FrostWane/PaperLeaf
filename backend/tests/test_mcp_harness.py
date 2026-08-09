@@ -148,6 +148,48 @@ def test_mcp_gateway_caches_sanitized_public_metadata() -> None:
     asyncio.run(scenario())
 
 
+def test_mcp_disabled_after_cache_never_returns_stale_result() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        gateway = McpGateway(
+            repository,
+            MemoryRuntimeStore(),
+            replace(
+                settings,
+                mcp_enabled=True,
+                academic_mcp_allowed_hosts="academic-search-mcp",
+            ),
+        )
+        calls = 0
+
+        async def fake_session(_operation, *, require_enabled=True):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                isError=False,
+                structuredContent={
+                    "source": "OpenAlex",
+                    "available": True,
+                    "results": [{"external_id": "x", "title": "cached paper"}],
+                },
+            )
+
+        gateway._with_session = fake_session  # type: ignore[method-assign]
+        name = "mcp__academic__search_openalex"
+        arguments = {"query": "DTA", "limit": 3}
+        assert (await gateway.call(name, arguments))["cached"] is False
+        assert (await gateway.call(name, arguments))["cached"] is True
+        await gateway.set_enabled(False)
+
+        with pytest.raises(McpGatewayError) as captured:
+            await gateway.call(name, arguments)
+
+        assert captured.value.code == "MCP_DISABLED"
+        assert calls == 1
+
+    asyncio.run(scenario())
+
+
 def test_function_harness_exposes_mcp_only_when_web_enabled() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")
@@ -226,7 +268,12 @@ def test_harness_metrics_never_include_user_content_or_identifiers() -> None:
             "secret_question": "不要泄露",
         },
         harness_trace={"skill_route_source": "model_function_call"},
-        result_summary={"rag_trace": {"stage_timings_ms": {"context": 12}}},
+        result_summary={
+            "rag_trace": {
+                "stage_timings_ms": {"context": 12},
+                "vector_fallback_reasons": ["query_dimension_mismatch"],
+            }
+        },
         created_at=timestamp,
     )
     call = AgentToolCallRecord(
@@ -265,12 +312,25 @@ def test_harness_metrics_never_include_user_content_or_identifiers() -> None:
             "sources": {memory.source_kind: 1},
         },
         [],
+        embedding={
+            "configured": True,
+            "model": "qwen3-embedding:0.6b",
+            "dimensions": 1024,
+            "revision": 1,
+            "ready": 2,
+            "ready_current": 2,
+            "stale": 1,
+        },
         window_hours=24,
         limit_reached=False,
     )
     serialized = str(report)
     assert report["context"]["compression_rate"] == pytest.approx(0.6)
     assert report["tools"]["success_rate"] == 1
+    assert report["embedding"]["ready_current"] == 2
+    assert report["embedding"]["fallback_reasons"] == {
+        "query_dimension_mismatch": 1
+    }
     for secret in (
         "private-run-id",
         "private-user-id",

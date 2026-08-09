@@ -50,6 +50,14 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;])\s*|(?<=[.!?])\s+(?=[
 _FORMULA_RE = re.compile(
     r"(?:[=≈≃≤≥∑∏∫√]|\\(?:frac|sum|prod|int|sqrt|alpha|beta)|\([0-9]{1,3}\)\s*$)"
 )
+_UNSAFE_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\x7f]")
+
+
+def sanitize_pdf_text(value: str) -> str:
+    """移除 NUL 与无语义控制字符，同时保留表格和段落边界。"""
+
+    normalized = value.replace("\x0c", "\n")
+    return _UNSAFE_CONTROL_RE.sub("", normalized)
 
 
 def _tokens(text: str) -> list[str]:
@@ -201,7 +209,7 @@ def build_semantic_units(
         if page.physical_page < 1:
             raise ValueError("物理页码必须从 1 开始")
         page_units: list[tuple[str, str]] = []
-        for paragraph, kind in _structural_blocks(page.text.strip()):
+        for paragraph, kind in _structural_blocks(sanitize_pdf_text(page.text).strip()):
             for part in _split_oversized(
                 paragraph,
                 max_unit_tokens,
@@ -330,7 +338,7 @@ def chunk_pages_fixed_window(
     for page in pages:
         if page.physical_page < 1:
             raise ValueError("物理页码必须从 1 开始")
-        units = _tokens(page.text.strip())
+        units = _tokens(sanitize_pdf_text(page.text).strip())
         for chunk_index, start in enumerate(range(0, len(units), step)):
             window = units[start : start + target_tokens]
             if not window:

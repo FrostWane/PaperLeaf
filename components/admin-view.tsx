@@ -71,6 +71,7 @@ const emptyHarnessMetrics: AdminHarnessMetrics = {
   skills: { runs: 0, distribution: [], routeSources: {}, fallbackRuns: 0 },
   tools: { calls: 0, successful: 0, successRate: 0, retriedCalls: 0, timeouts: 0, permissionDenied: 0, statuses: {}, distribution: [], errorCategories: {} },
   mcp: { calls: 0, successful: 0, successRate: 0, servers: [] },
+  embedding: { configured: false, total: 0, ready: 0, readyCurrent: 0, stale: 0, unavailable: 0, failed: 0, fallbackRuns: 0, fallbackReasons: {} },
   privacy: { contentCollected: false, identifiersCollected: false },
 };
 const emptyMcpServers: AdminMcpServers = { featureEnabled: false, servers: [] };
@@ -98,6 +99,14 @@ const toolLabels: Record<string, string> = {
   mcp__academic__search_openalex: "OpenAlex 搜索",
   mcp__academic__search_semantic_scholar: "Semantic Scholar 搜索",
   mcp__academic__get_academic_metadata: "读取学术元数据",
+};
+
+const embeddingFallbackLabels: Record<string, string> = {
+  embedding_provider_unavailable: "向量服务不可用",
+  embedding_contract_mismatch: "索引契约不一致",
+  query_dimension_mismatch: "查询向量维度不一致",
+  stored_dimension_mismatch: "已存向量维度不一致",
+  vector_query_failed: "向量查询失败",
 };
 
 const mcpStatusLabels: Record<string, string> = {
@@ -440,6 +449,7 @@ export function AdminView() {
           <article className="rag-panel"><h3>长期记忆 <small>当前快照</small></h3>{harnessMetrics.memory.total === 0 ? <p className="rag-empty">当前没有长期记忆条目。管理员只能查看聚合数量，不能读取正文。</p> : <><dl className="harness-stat-list"><div><dt>启用 / 总数</dt><dd>{harnessMetrics.memory.active} / {harnessMetrics.memory.total}</dd></div><div><dt>固定 / 停用</dt><dd>{harnessMetrics.memory.pinned} / {harnessMetrics.memory.disabled}</dd></div><div><dt>有记忆用户</dt><dd>{harnessMetrics.memory.usersWithMemory}</dd></div><div><dt>这些用户的容量</dt><dd>{harnessMetrics.memory.capacity > 0 ? `${harnessMetrics.memory.active} / ${harnessMetrics.memory.capacity}` : "—"}</dd></div><div><dt>冲突旧版本</dt><dd>{harnessMetrics.memory.supersededVersions}</dd></div></dl><p className="rag-empty">管理员只能查看数量和容量，不能读取用户记忆正文。</p></>}</article>
           <article className="rag-panel"><h3>Skill 路由</h3>{harnessMetrics.skills.distribution.length === 0 ? <p className="rag-empty">当前窗口还没有 Skill 路由样本。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="Skill 路由分布"><thead><tr><th>Skill</th><th>运行</th><th>终态完成率</th></tr></thead><tbody>{harnessMetrics.skills.distribution.map((item) => <tr key={item.skill}><td>{skillLabels[item.skill] ?? item.skill}</td><td>{item.runs}</td><td>{item.terminalRuns > 0 ? percent(item.completionRate) : "—"}</td></tr>)}</tbody></table></div>}</article>
           <article className="rag-panel"><h3>工具调用</h3>{harnessMetrics.tools.distribution.length === 0 ? <p className="rag-empty">当前窗口还没有工具调用。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="工具调用分布"><thead><tr><th>工具</th><th>调用</th></tr></thead><tbody>{harnessMetrics.tools.distribution.slice(0, 8).map((item) => <tr key={item.tool}><td>{toolLabels[item.tool] ?? item.tool}</td><td>{item.calls}</td></tr>)}</tbody></table></div>}<dl className="harness-stat-list compact"><div><dt>P50 / P95</dt><dd>{duration(harnessMetrics.tools.p50Ms)} / {duration(harnessMetrics.tools.p95Ms)}</dd></div><div><dt>重试 / 超时 / 权限拒绝</dt><dd>{harnessMetrics.tools.retriedCalls} / {harnessMetrics.tools.timeouts} / {harnessMetrics.tools.permissionDenied}</dd></div></dl></article>
+          <article className="rag-panel"><h3>向量索引契约</h3><dl className="harness-stat-list"><div><dt>当前模型</dt><dd>{harnessMetrics.embedding.configured ? `${harnessMetrics.embedding.model} · ${harnessMetrics.embedding.dimensions} 维 · 修订 ${harnessMetrics.embedding.revision}` : "未配置"}</dd></div><div><dt>当前可用 / 全部就绪</dt><dd>{harnessMetrics.embedding.readyCurrent} / {harnessMetrics.embedding.ready}</dd></div><div><dt>过期 / 不可用 / 失败</dt><dd>{harnessMetrics.embedding.stale} / {harnessMetrics.embedding.unavailable} / {harnessMetrics.embedding.failed}</dd></div><div><dt>关键词降级</dt><dd>{harnessMetrics.embedding.fallbackRuns} 次</dd></div></dl>{Object.keys(harnessMetrics.embedding.fallbackReasons).length > 0 && <p className="rag-empty">{Object.entries(harnessMetrics.embedding.fallbackReasons).map(([reason, count]) => `${embeddingFallbackLabels[reason] ?? "其他向量异常"} ${count}`).join(" · ")}</p>}</article>
         </div>}
       </section>
       <section className="admin-section"><div className="section-bar"><div><span className="eyebrow">只读学术搜索</span><h2>MCP 服务</h2><small>仅允许服务端白名单中的 OpenAlex 与 Semantic Scholar 元数据工具。</small></div><button type="button" className="secondary-button" disabled={harnessLoading} onClick={() => void refreshHarness()}><RefreshCw size={15} />刷新状态</button></div>

@@ -36,6 +36,7 @@ describe("ChatWorkspace", () => {
   it("展示可移除的阅读上下文，并只提交保留的上下文", async () => {
     const session: ChatSession = { id: "s-context", title: "新对话", type: "paper", paperId: "paper-1", createdAt, updatedAt: createdAt };
     const submit = vi.fn().mockResolvedValue({ sessionId: session.id, messageId: "m-context", runId: "r-context", status: "pending", replayed: false });
+    const accepted = vi.fn();
     const source = {
       ...demoDataSource,
       listChatSessions: vi.fn().mockResolvedValue([session]),
@@ -50,6 +51,7 @@ describe("ChatWorkspace", () => {
       scopeLabel="DeepDTA"
       dataSource={source}
       clientContext={{ route: "/library/paper-1", paperId: "paper-1", physicalPage: 4, selectedText: "蛋白质序列编码段落", activePanel: "chat" }}
+      onClientContextAccepted={accepted}
     />);
 
     const context = await screen.findByLabelText("本次提问上下文");
@@ -73,6 +75,10 @@ describe("ChatWorkspace", () => {
         }),
       },
     ));
+    expect(accepted).toHaveBeenCalledWith(expect.objectContaining({
+      paperId: "paper-1",
+      selectedText: "蛋白质序列编码段落",
+    }));
   });
 
   it("Enter 发送，Shift+Enter 与中文输入法选词不误发，连续 Enter 不重复提交", async () => {

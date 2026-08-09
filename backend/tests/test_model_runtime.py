@@ -131,6 +131,21 @@ def test_timeout_is_classified_and_opens_circuit() -> None:
     assert breaker.snapshot("primary:embedding")["status"] == "open"
 
 
+def test_router_exposes_remaining_circuit_cooldown_for_controlled_retry() -> None:
+    clock = [10.0]
+    breaker = ModelCircuitBreaker(
+        failure_threshold=1,
+        cooldown_seconds=30,
+        clock=lambda: clock[0],
+    )
+    router = ModelRouter([_provider("primary")], circuit_breaker=breaker)
+    breaker.failure("primary:answer")
+
+    assert router.circuit_retry_after_seconds("answer") == 30.0
+    clock[0] += 12
+    assert router.circuit_retry_after_seconds("answer") == 18.0
+
+
 def test_cancellation_propagates_without_counting_as_provider_failure() -> None:
     breaker = ModelCircuitBreaker(failure_threshold=1, cooldown_seconds=30)
     router = ModelRouter(

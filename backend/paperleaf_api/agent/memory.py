@@ -53,16 +53,52 @@ def extract_memory_candidates(role: str, content: str) -> list[MemoryCandidate]:
         value = normalize_memory_value(match.group(1)).rstrip("。.!！")
         if len(value) < 2:
             return []
+        if memory_type == "pinned_context" and any(
+            marker in value for marker in ("回答", "语言", "中文", "英文", "格式")
+        ):
+            memory_type = "preference"
         return [MemoryCandidate(memory_type, value, confidence, source_kind, normalized[:500])]
     return []
 
 
 def _tokens(value: str) -> set[str]:
-    return {
+    latin = {
         token.casefold()
-        for token in re.findall(r"[A-Za-z0-9_\-]+|[\u3400-\u9fff]", value)
+        for token in re.findall(r"[A-Za-z0-9_\-]+", value)
         if token.strip()
     }
+    chinese = "".join(re.findall(r"[\u3400-\u9fff]", value))
+    bigrams = {
+        chinese[index : index + 2]
+        for index in range(max(0, len(chinese) - 1))
+    }
+    return latin | bigrams
+
+
+def _intent_matches(memory_type: str, query: str) -> bool:
+    normalized = query.casefold()
+    if memory_type == "preference":
+        return any(
+            marker in normalized for marker in ("怎么回答", "格式", "语言", "偏好", "习惯")
+        )
+    if memory_type == "research_interest":
+        return any(
+            marker in normalized
+            for marker in (
+                "我的研究方向",
+                "按我的兴趣",
+                "结合我的研究",
+                "我之前研究",
+                "研究方向",
+                "推荐一些相关论文",
+                "推荐相关论文",
+            )
+        )
+    if memory_type == "workflow":
+        return any(marker in normalized for marker in ("流程", "工作流", "下一步", "习惯"))
+    if memory_type == "entity_alias":
+        return any(marker in normalized for marker in ("简称", "别名", "指的是", "术语"))
+    return False
 
 
 def _cosine(left: Sequence[float] | None, right: Sequence[float] | None) -> float:
@@ -80,22 +116,33 @@ def select_relevant_memories(
     memories: Sequence[Any],
     *,
     query_embedding: Sequence[float] | None = None,
+    embedding_fingerprint: str | None = None,
     limit: int = 5,
 ) -> list[Any]:
     query_tokens = _tokens(query)
 
-    def score(item: Any) -> tuple[float, float, str]:
+    def relevance(item: Any) -> tuple[bool, float, float, float, str]:
         value = str(getattr(item, "value", ""))
         memory_tokens = _tokens(value)
-        lexical = len(query_tokens & memory_tokens) / max(1, len(query_tokens | memory_tokens))
-        semantic = _cosine(query_embedding, getattr(item, "embedding", None))
+        lexical = len(query_tokens & memory_tokens) / max(
+            1, min(len(query_tokens), len(memory_tokens))
+        )
+        compatible = bool(
+            embedding_fingerprint
+            and getattr(item, "embedding_fingerprint", None) == embedding_fingerprint
+        )
+        semantic = (
+            _cosine(query_embedding, getattr(item, "embedding", None)) if compatible else 0.0
+        )
         pinned = 1.0 if getattr(item, "pinned", False) else 0.0
         confidence = float(getattr(item, "confidence", 0.0))
-        return (pinned * 2 + semantic + lexical + confidence * 0.1, confidence, value)
+        intent_match = _intent_matches(str(getattr(item, "type", "")), query)
+        eligible = bool(pinned or semantic >= 0.55 or lexical >= 0.2 or intent_match)
+        # 置信度只在已经相关的候选之间排序，不能独立使无关记忆入选。
+        score = pinned * 2 + semantic + lexical + (0.25 if intent_match else 0)
+        return eligible, score, semantic, confidence, value
 
     eligible = [item for item in memories if getattr(item, "enabled", False)]
-    eligible.sort(key=score, reverse=True)
-    selected = [
-        item for item in eligible if score(item)[0] > 0.05 or getattr(item, "pinned", False)
-    ]
+    eligible.sort(key=lambda item: relevance(item)[1:], reverse=True)
+    selected = [item for item in eligible if relevance(item)[0]]
     return selected[: max(0, limit)]

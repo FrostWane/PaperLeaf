@@ -6,6 +6,7 @@ from paperleaf_api.agent.context_budget import (
     allocate_context_budget,
     compact_conversation,
     compress_tool_results,
+    enforce_context_envelope,
     estimate_tokens,
 )
 from paperleaf_api.agent.memory import (
@@ -13,6 +14,7 @@ from paperleaf_api.agent.memory import (
     memory_hash,
     select_relevant_memories,
 )
+from paperleaf_api.rag.citations import Evidence
 from paperleaf_api.repository import MemoryItemRecord, MemoryRepository
 
 
@@ -78,11 +80,67 @@ def test_tool_result_compaction_never_breaks_call_result_pair() -> None:
     assert "compacted" not in compacted[-1]
 
 
+def test_final_context_envelope_enforces_hard_limit_and_preserves_selection() -> None:
+    evidence = [
+        Evidence("selected", "p1", "论文", 2, "已验证选文" * 120),
+        Evidence("low-score", "p1", "论文", 8, "低分证据" * 1200),
+    ]
+    entries = [
+        {"kind": "call", "tool_call_id": f"t{index}", "content": "查询"}
+        if offset == 0
+        else {
+            "kind": "result",
+            "tool_call_id": f"t{index}",
+            "content": "工具结果" * 1200,
+        }
+        for index in range(5)
+        for offset in range(2)
+    ]
+    envelope = enforce_context_envelope(
+        query="这些讲了什么？\n本轮首要材料（已验证选文）：已验证选文",
+        messages=[
+            {"role": "user", "content": "旧消息" * 800},
+            {"role": "assistant", "content": "旧回答" * 800},
+            {"role": "skill", "content": "只回答选文"},
+        ],
+        evidence=evidence,
+        tool_entries=entries,
+        hard_limit=2600,
+        protected_evidence_ids={"selected"},
+        system_reserve=200,
+    )
+
+    assert envelope.exceeded is False
+    assert envelope.usage["final_input_tokens"] <= 2600
+    assert [item.chunk_id for item in envelope.evidence] == ["selected"]
+    assert envelope.usage["dropped_evidence"] == 1
+    assert len(envelope.tool_entries) % 2 == 0
+    for index in range(0, len(envelope.tool_entries), 2):
+        assert (
+            envelope.tool_entries[index]["tool_call_id"]
+            == envelope.tool_entries[index + 1]["tool_call_id"]
+        )
+
+
+def test_context_envelope_refuses_request_when_protected_input_alone_is_too_large() -> None:
+    envelope = enforce_context_envelope(
+        query="选文" * 2000,
+        messages=[],
+        evidence=[],
+        tool_entries=[],
+        hard_limit=500,
+        system_reserve=200,
+    )
+
+    assert envelope.exceeded is True
+    assert envelope.usage["final_input_tokens"] > envelope.usage["hard_limit"]
+
+
 def test_memory_extraction_only_accepts_user_statements_and_selection_has_fallback() -> None:
     explicit = extract_memory_candidates("user", "请记住：以后回答都使用中文")
     research = extract_memory_candidates("user", "我的研究方向是药物靶点亲和力预测")
 
-    assert explicit[0].type == "pinned_context"
+    assert explicit[0].type == "preference"
     assert explicit[0].confidence == 1.0
     assert research[0].type == "research_interest"
     assert extract_memory_candidates("assistant", "记住论文结论是有效的") == []
@@ -96,6 +154,47 @@ def test_memory_extraction_only_accepts_user_statements_and_selection_has_fallba
         ),
     ]
     assert select_relevant_memories("解释方法", memories, limit=5) == [memories[0]]
+
+
+def test_unrelated_high_confidence_memory_cannot_enter_context() -> None:
+    relevant = SimpleNamespace(
+        type="research_interest",
+        value="药物靶点亲和力预测",
+        confidence=0.7,
+        enabled=True,
+        pinned=False,
+        embedding=[1.0, 0.0],
+        embedding_fingerprint="fp-current",
+    )
+    unrelated = SimpleNamespace(
+        type="research_interest",
+        value="量子密码协议",
+        confidence=1.0,
+        enabled=True,
+        pinned=False,
+        embedding=[0.0, 1.0],
+        embedding_fingerprint="fp-current",
+    )
+    stale = SimpleNamespace(
+        type="research_interest",
+        value="完全无关内容",
+        confidence=1.0,
+        enabled=True,
+        pinned=False,
+        embedding=[1.0, 0.0],
+        embedding_fingerprint="fp-old",
+    )
+
+    selected = select_relevant_memories(
+        "推荐药物靶点相关论文",
+        [unrelated, stale, relevant],
+        query_embedding=[1.0, 0.0],
+        embedding_fingerprint="fp-current",
+    )
+
+    assert relevant in selected
+    assert unrelated not in selected
+    assert stale not in selected
 
 
 def test_memory_repository_versions_isolates_users_and_honors_disable_delete() -> None:
@@ -112,6 +211,8 @@ async def _memory_repository_scenario() -> None:
         normalized_hash=memory_hash("preference", "使用中文回答"),
         confidence=1.0,
         source_kind="manual",
+        embedding=[0.1, 0.2],
+        embedding_fingerprint="old-fingerprint",
     )
     await repository.create_memory_item(first)
     duplicate = await repository.create_memory_item(replace(first, id="m2", enabled=False))
@@ -122,6 +223,15 @@ async def _memory_repository_scenario() -> None:
     assert disabled is not None and disabled.enabled is False
     assert await repository.list_memories("u1", enabled_only=True) == []
     assert await repository.update_owned_memory("m1", "u2", enabled=True) is None
+    changed = await repository.update_owned_memory(
+        "m1",
+        "u1",
+        value="改为简洁回答",
+        normalized_hash=memory_hash("preference", "改为简洁回答"),
+    )
+    assert changed is not None
+    assert changed.embedding is None
+    assert changed.embedding_fingerprint is None
     assert await repository.delete_owned_memory("m1", "u2") is False
     assert await repository.delete_owned_memory("m1", "u1") is True
     assert await repository.list_memories("u1") == []

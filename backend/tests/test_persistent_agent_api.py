@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import time
 from dataclasses import replace
 
@@ -10,6 +11,99 @@ from paperleaf_api.main import create_app
 from paperleaf_api.models import PaperStatus
 from paperleaf_api.repository import MemoryRepository, PaperRecord
 from paperleaf_api.storage import LocalObjectStorage
+
+
+def test_pdf_selection_accepts_text_layer_variants_and_rejects_other_page(
+    tmp_path,
+) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+    )
+    repository = MemoryRepository(config.session_secret)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+    app.state.services.agent_graph = ResultGraph()
+
+    with TestClient(app) as client:
+        csrf = _login(client)
+        user = client.get("/api/v1/auth/me").json()
+        asyncio.run(
+            repository.create_paper(
+                PaperRecord(
+                    id="selection-paper",
+                    owner_id=user["id"],
+                    title="Selection paper",
+                    authors=[],
+                    year=None,
+                    abstract=None,
+                    doi=None,
+                    arxiv_id=None,
+                    filename="selection.pdf",
+                    storage_key=f"{user['id']}/selection.pdf",
+                    mime_type="application/pdf",
+                    size_bytes=100,
+                    sha256="b" * 64,
+                    page_count=2,
+                    status=PaperStatus.ready,
+                )
+            )
+        )
+        repository.paper_pages["selection-paper"] = {
+            1: "The fi-\nnal drug-target affinity prediction uses two CNN encoders.",
+            2: "This page only describes the evaluation datasets.",
+        }
+        session = client.post(
+            "/api/v1/chat/sessions",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "title": "选文验证",
+                "type": "paper",
+                "paper_id": "selection-paper",
+            },
+        )
+        assert session.status_code == 201
+        endpoint = f"/api/v1/chat/sessions/{session.json()['id']}/messages"
+
+        invalid_text = "This selection belongs to a different physical page entirely."
+        invalid = client.post(
+            endpoint,
+            headers={"X-CSRF-Token": csrf, "Idempotency-Key": "selection-invalid"},
+            json={
+                "content": "这些讲了什么？",
+                "client_context": {
+                    "paper_id": "selection-paper",
+                    "physical_page": 1,
+                    "selected_text": invalid_text,
+                    "selected_text_hash": hashlib.sha256(
+                        invalid_text.encode("utf-8")
+                    ).hexdigest(),
+                },
+            },
+        )
+        assert invalid.status_code == 422
+
+        selected = "The ﬁnal drug–target affinity prediction uses two CNN encoders."
+        accepted = client.post(
+            endpoint,
+            headers={"X-CSRF-Token": csrf, "Idempotency-Key": "selection-valid"},
+            json={
+                "content": "这些讲了什么？",
+                "client_context": {
+                    "paper_id": "selection-paper",
+                    "physical_page": 1,
+                    "selected_text": selected,
+                    "selected_text_hash": hashlib.sha256(selected.encode("utf-8")).hexdigest(),
+                },
+            },
+        )
+        assert accepted.status_code == 202
+        run = repository.agent_runs[accepted.json()["run_id"]]
+        assert run.scope_snapshot["client_context"]["selected_text"] == (
+            "the final drug-target affinity prediction uses two cnn encoders."
+        )
 
 
 def _login(client: TestClient) -> str:

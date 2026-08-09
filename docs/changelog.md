@@ -2,6 +2,17 @@
 
 ## 未发布：学术 MCP 与 Agent Harness 观测
 
+- 修复 PDF.js 与 PyMuPDF 在连字、软连字符、换行断词和标点上的选文校验差异；已验证
+  选文强制进入 Context，并默认把 Function Tool 证据限制在选文所在物理页。
+- Function Tool 全失败、拒绝或空结果时不再误激活 Tool Mode；最终模型调用前执行不可拆分
+  Tool Call/Result 的上下文硬预算。
+- Function Tool 规划器会收到服务端授权的论文 ID；单篇会话中模型偶尔用可信论文标题调用
+  `get_page_text` 时可做无歧义解析，任意标题、多论文歧义和跨范围参数仍由权限层拒绝。
+- 增加 Embedding 模型、维度与索引修订契约，旧索引不明时标记为过期，向量异常自动降级
+  关键词检索并记录原因。
+- 增加 100 例确定性 Harness evaluator 与显式真实模型 evaluator；后者不进入普通 CI，
+  并保留 `[实测]` 会话供本地界面复核。
+
 - 新增 Compose 私网 `academic-search-mcp`，以 Streamable HTTP 暴露 OpenAlex、Semantic Scholar 查询和学术元数据读取三个只读工具。
 - Gateway 增加工具发现、Schema/只读标注校验、名称隔离、连接池、Redis 缓存、健康状态、超时与连续失败熔断；外部结果不能转换成页级引用证据。
 - 管理后台新增 Agent Harness 页，展示 Context、记忆容量、Skill、Tool 与 MCP 的低基数聚合，并区分接口失败、无样本和截断样本。

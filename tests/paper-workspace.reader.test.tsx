@@ -14,6 +14,7 @@ class TestResizeObserver {
 describe("PaperWorkspace PDF 主视区", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    vi.stubGlobal("crypto", { subtle: { digest: vi.fn(async () => new Uint8Array(32).buffer) } });
     window.localStorage.clear();
   });
 
@@ -65,7 +66,7 @@ describe("PaperWorkspace PDF 主视区", () => {
     expect(desktop.getByLabelText("模拟 PDF 第 3 页")).toBe(pdfNode);
   });
 
-  it("拖选 PDF 原文后显示明确反馈，并可清除或在换页时自动清除", () => {
+  it("拖选 PDF 原文后显示明确反馈，并可清除或在换页时自动清除", async () => {
     const { container } = render(<PaperWorkspace demo paperId="attention" initialPage={2} />);
     const desktop = within(container.querySelector(".workspace-desktop") as HTMLElement);
     const original = desktop.getByLabelText("原始 PDF，第 2 页");
@@ -76,7 +77,7 @@ describe("PaperWorkspace PDF 主视区", () => {
     } as unknown as Selection);
 
     fireEvent.mouseUp(original);
-    expect(desktop.getByText("已选原文 10 字", { selector: ".reader-selection-status" })).toBeVisible();
+    expect(await desktop.findByText("已选原文 10 字", { selector: ".reader-selection-status" })).toBeVisible();
     expect(desktop.getByRole("button", { name: "清除已选原文" })).toBeVisible();
     expect(desktop.getByRole("button", { name: "已选原文" })).toBeVisible();
 
@@ -85,9 +86,30 @@ describe("PaperWorkspace PDF 主视区", () => {
     expect(desktop.queryByRole("button", { name: "已选原文" })).not.toBeInTheDocument();
 
     fireEvent.mouseUp(original);
+    expect(await desktop.findByText("已选原文 10 字", { selector: ".reader-selection-status" })).toBeVisible();
     fireEvent.click(desktop.getByRole("button", { name: "下一页" }));
     expect(desktop.queryByText(/已选原文 10 字/)).not.toBeInTheDocument();
     expect(desktop.queryByRole("button", { name: "已选原文" })).not.toBeInTheDocument();
+  });
+
+  it("从回答引用跳到其他物理页时清理旧页选文", async () => {
+    const { container } = render(<PaperWorkspace demo paperId="attention" initialPage={2} />);
+    const desktop = within(container.querySelector(".workspace-desktop") as HTMLElement);
+    const original = desktop.getByLabelText("原始 PDF，第 2 页");
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      anchorNode: original,
+      focusNode: original,
+      toString: () => "蛋白质 序列编码段落",
+    } as unknown as Selection);
+
+    fireEvent.mouseUp(original);
+    expect(await desktop.findByText("已选原文 10 字", { selector: ".reader-selection-status" })).toBeVisible();
+    const assistant = within(container.querySelector(".workspace-desktop .workspace-assistant") as HTMLElement);
+    fireEvent.click(await assistant.findByTitle(/PDF 第 6 页/));
+
+    expect(desktop.getByLabelText("第 6 页，共 15 页")).toBeVisible();
+    expect(desktop.queryByText(/已选原文 10 字/)).not.toBeInTheDocument();
+    expect(assistant.queryByRole("button", { name: "已选原文" })).not.toBeInTheDocument();
   });
 
   it("确认时传递当前页优先级，译文中的 HTML 只作为纯文本展示并可取消", async () => {

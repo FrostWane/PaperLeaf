@@ -1,4 +1,9 @@
-from paperleaf_api.rag.chunking import PageText, chunk_pages, chunk_pages_fixed_window
+from paperleaf_api.rag.chunking import (
+    PageText,
+    chunk_pages,
+    chunk_pages_fixed_window,
+    sanitize_pdf_text,
+)
 
 
 def test_chunk_never_crosses_physical_page() -> None:
@@ -96,6 +101,19 @@ def test_chunking_is_deterministic_and_ids_are_stable() -> None:
 
     assert first == second
     assert [chunk.id for chunk in first] == [f"paper:p3:c{index}" for index in range(len(first))]
+
+
+def test_pdf_text_sanitizer_removes_nul_but_preserves_structure() -> None:
+    raw = "2 Method\x00\n\nA\tB\x0cC\x01D"
+
+    sanitized = sanitize_pdf_text(raw)
+    chunks = chunk_pages(
+        [PageText("p1", 1, raw)], target_tokens=40, overlap_tokens=5
+    )
+
+    assert sanitized == "2 Method\n\nA\tB\nCD"
+    assert chunks
+    assert all("\x00" not in chunk.text and "\x01" not in chunk.text for chunk in chunks)
 
 
 def test_fixed_window_fallback_remains_page_safe() -> None:

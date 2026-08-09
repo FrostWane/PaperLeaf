@@ -178,7 +178,7 @@ def build_rag_trace(
     timings = {
         key: max(0, int(value))
         for key, value in (stage_timings_ms or result.get("stage_timings_ms", {}) or {}).items()
-        if key in RAG_METRIC_STAGES and isinstance(value, int | float)
+        if key in RAG_METRIC_STAGES and isinstance(value, (int, float))  # noqa: UP038
     }
     channels = sorted(
         {
@@ -192,6 +192,13 @@ def build_rag_trace(
             str(getattr(item, "chunking_strategy", "unknown"))[:48]
             for item in evidence
             if getattr(item, "chunking_strategy", None)
+        }
+    )
+    vector_fallback_reasons = sorted(
+        {
+            str(getattr(item, "vector_fallback_reason", ""))[:64]
+            for item in evidence
+            if getattr(item, "vector_fallback_reason", None)
         }
     )
     grade = str(quality.get("grade") or result.get("evidence_grade") or "unknown")
@@ -211,6 +218,7 @@ def build_rag_trace(
         "citation_count": len(result.get("citations", [])),
         "stage_timings_ms": timings,
         "chunking_strategies": strategies or ["unknown"],
+        "vector_fallback_reasons": vector_fallback_reasons,
     }
     trace["failure_category"] = failure_category(error_code, trace)
     return trace
@@ -281,11 +289,17 @@ def aggregate_rag_runs(
     )
 
     overall_durations = [getattr(run, "duration_ms", None) for run in terminal]
-    overall_durations = [value for value in overall_durations if isinstance(value, int | float)]
+    overall_durations = [
+        value
+        for value in overall_durations
+        if isinstance(value, (int, float))  # noqa: UP038
+    ]
     stage_values: dict[str, list[int]] = defaultdict(list)
     for _, trace in traces:
         for stage, value in dict(trace.get("stage_timings_ms", {})).items():
-            if stage in RAG_METRIC_STAGES and isinstance(value, int | float):
+            if stage in RAG_METRIC_STAGES and isinstance(  # noqa: UP038
+                value, (int, float)
+            ):
                 stage_values[stage].append(int(value))
 
     channel_stats: dict[str, dict[str, Any]] = {}
@@ -300,7 +314,9 @@ def aggregate_rag_runs(
         retrieval_times = [
             trace.get("stage_timings_ms", {}).get("retrieval")
             for _, trace in selected
-            if isinstance(trace.get("stage_timings_ms", {}).get("retrieval"), int | float)
+            if isinstance(  # noqa: UP038
+                trace.get("stage_timings_ms", {}).get("retrieval"), (int, float)
+            )
         ]
         channel_stats[channel] = {
             "channel": channel,
@@ -319,7 +335,11 @@ def aggregate_rag_runs(
         successes = sum(int(trace.get("citation_count", 0)) > 0 for _, trace in selected)
         adequate = sum(trace.get("retrieval_outcome") == "sufficient" for _, trace in selected)
         durations = [getattr(run, "duration_ms", None) for run, _ in selected]
-        durations = [value for value in durations if isinstance(value, int | float)]
+        durations = [
+            value
+            for value in durations
+            if isinstance(value, (int, float))  # noqa: UP038
+        ]
         intent_stats.append(
             {
                 "intent": intent,

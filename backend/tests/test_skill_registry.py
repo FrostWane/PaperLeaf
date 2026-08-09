@@ -34,6 +34,20 @@ def test_default_skill_registry_is_versioned_and_loads_only_catalog_on_start() -
         ("画研究脑图", "structure", "paper", False, "build_research_map"),
         ("概括这篇论文", "summary", "paper", False, "summarize_paper"),
         ("搜索相关论文", "discovery", "library", True, "find_related_papers"),
+        (
+            "请通过 OpenAlex 查找与集合主题相关的近期公开论文",
+            "comparison",
+            "collection",
+            True,
+            "find_related_papers",
+        ),
+        (
+            "请联网查找与当前集合研究主题相关的 arXiv 论文",
+            "comparison",
+            "collection",
+            True,
+            "find_related_papers",
+        ),
         ("解释这个概念", "fact_lookup", "library", False, "paper_qa"),
     ],
 )

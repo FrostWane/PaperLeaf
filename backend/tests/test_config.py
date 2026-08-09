@@ -50,6 +50,11 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
     [
         ({"model_timeout_seconds": 0}, "模型超时"),
         ({"model_timeout_seconds": 121}, "不能超过 120 秒"),
+        ({"agent_answer_timeout_seconds": 121}, "不能超过 120 秒"),
+        (
+            {"agent_answer_timeout_seconds": 30, "agent_answer_retry_timeout_seconds": 31},
+            "紧凑重试超时",
+        ),
         ({"artifact_timeout_seconds": 0}, "论文产物生成超时"),
         ({"artifact_retry_timeout_seconds": 241}, "论文产物单次超时"),
         (
@@ -66,6 +71,10 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
         ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),
         ({"embedding_batch_size": 0}, "向量批次大小"),
         ({"embedding_batch_size": 65}, "向量批次大小"),
+        ({"embedding_timeout_seconds": 0}, "向量批次超时"),
+        ({"embedding_timeout_seconds": 121}, "向量批次超时"),
+        ({"embedding_batch_attempts": 0}, "向量批次尝试次数"),
+        ({"embedding_batch_attempts": 4}, "向量批次尝试次数"),
         ({"redis_timeout_seconds": 0}, "Redis 超时"),
         ({"redis_timeout_seconds": 6}, "Redis 超时"),
         ({"agent_rate_limit_requests": 0}, "限流次数"),

@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import math
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -80,7 +81,7 @@ class MemoryRuntimeStore:
         self._windows: dict[str, tuple[int, float]] = {}
         self._decisions: dict[str, tuple[bool, float]] = {}
         self._json_cache: dict[str, tuple[dict[str, Any], float]] = {}
-        self._lock = asyncio.Lock()
+        self._lock = threading.RLock()
 
     async def ping(self) -> bool:
         return True
@@ -106,7 +107,7 @@ class MemoryRuntimeStore:
         now = float(self._clock())
         subject_key = f"{namespace}:{_digest(subject)}"
         decision_key = f"{subject_key}:{_digest(idempotency_key)}"
-        async with self._lock:
+        with self._lock:
             stored = self._decisions.get(decision_key)
             if stored and stored[1] > now:
                 used, expires_at = self._windows.get(subject_key, (0, now + window_seconds))
@@ -136,7 +137,7 @@ class MemoryRuntimeStore:
 
     async def get_cached_json(self, namespace: str, key: str) -> dict[str, Any] | None:
         cache_key = f"{namespace}:{_digest(key)}"
-        async with self._lock:
+        with self._lock:
             stored = self._json_cache.get(cache_key)
             if not stored:
                 return None
@@ -149,7 +150,7 @@ class MemoryRuntimeStore:
         self, namespace: str, key: str, value: dict[str, Any], *, ttl_seconds: int
     ) -> None:
         cache_key = f"{namespace}:{_digest(key)}"
-        async with self._lock:
+        with self._lock:
             self._json_cache[cache_key] = (dict(value), self._clock() + ttl_seconds)
 
     async def close(self) -> None:

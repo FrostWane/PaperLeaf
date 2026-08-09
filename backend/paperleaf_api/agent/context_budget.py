@@ -182,6 +182,15 @@ class CompactionResult:
     compacted: bool
 
 
+@dataclass(frozen=True)
+class ContextEnvelope:
+    messages: list[dict[str, Any]]
+    evidence: list[Any]
+    tool_entries: list[dict[str, Any]]
+    usage: dict[str, Any]
+    exceeded: bool
+
+
 def compact_conversation(
     messages: Sequence[Any],
     *,
@@ -247,3 +256,137 @@ def compress_tool_results(
         result["content"] = content[:limit] + "…"
         result["compacted"] = True
     return [entry for pair in pairs for entry in pair]
+
+
+def _envelope_tokens(
+    query: str,
+    messages: Sequence[dict[str, Any]],
+    evidence: Sequence[Any],
+    tool_entries: Sequence[dict[str, Any]],
+    *,
+    system_reserve: int,
+) -> dict[str, int]:
+    return {
+        "system": system_reserve,
+        "query": estimate_tokens(query),
+        "messages": sum(estimate_tokens(str(item.get("content", ""))) for item in messages),
+        "evidence": sum(estimate_tokens(str(getattr(item, "text", ""))) for item in evidence),
+        "tools": sum(estimate_tokens(str(item.get("content", ""))) for item in tool_entries),
+    }
+
+
+def enforce_context_envelope(
+    *,
+    query: str,
+    messages: Sequence[dict[str, Any]],
+    evidence: Sequence[Any],
+    tool_entries: Sequence[dict[str, Any]],
+    hard_limit: int,
+    protected_evidence_ids: set[str] | None = None,
+    system_reserve: int = 1200,
+) -> ContextEnvelope:
+    """在最后一次模型调用前执行确定性硬门禁。
+
+    当前问题与已验证选文位于 ``query``，因此不会被裁剪。Tool Call/Result
+    先按 call_id 原子压缩；证据只从低优先级尾部移除，受保护选文证据不删除。
+    """
+
+    protected = set(protected_evidence_ids or set())
+    kept_messages = [dict(item) for item in messages]
+    kept_evidence = list(evidence)
+    kept_tools = compress_tool_results(tool_entries, keep_complete=3, preview_tokens=800)
+    actions: list[str] = []
+    dropped_messages = 0
+    dropped_evidence = 0
+    original_tool_tokens = sum(
+        estimate_tokens(str(item.get("content", ""))) for item in tool_entries
+    )
+    compacted_tool_tokens = sum(
+        estimate_tokens(str(item.get("content", ""))) for item in kept_tools
+    )
+    if compacted_tool_tokens < original_tool_tokens:
+        actions.append("compress_old_tool_results")
+
+    def usage() -> dict[str, int]:
+        return _envelope_tokens(
+            query,
+            kept_messages,
+            kept_evidence,
+            kept_tools,
+            system_reserve=system_reserve,
+        )
+
+    current = usage()
+    while sum(current.values()) > hard_limit:
+        removable_index = next(
+            (
+                index
+                for index, item in enumerate(kept_messages)
+                if str(item.get("role", "")) in {"user", "assistant", "external_tool"}
+            ),
+            None,
+        )
+        if removable_index is None:
+            break
+        kept_messages.pop(removable_index)
+        dropped_messages += 1
+        current = usage()
+    if dropped_messages:
+        actions.append("drop_old_messages")
+
+    while sum(current.values()) > hard_limit:
+        removable_index = next(
+            (
+                index
+                for index in range(len(kept_evidence) - 1, -1, -1)
+                if str(getattr(kept_evidence[index], "chunk_id", "")) not in protected
+            ),
+            None,
+        )
+        if removable_index is None:
+            break
+        kept_evidence.pop(removable_index)
+        dropped_evidence += 1
+        current = usage()
+    if dropped_evidence:
+        actions.append("drop_low_priority_evidence")
+
+    # 紧急压缩仅执行一次：摘要/记忆或 Skill 仍可能很大，但不能删除其角色边界。
+    if sum(current.values()) > hard_limit:
+        emergency_tools = compress_tool_results(
+            kept_tools, keep_complete=0, preview_tokens=100
+        )
+        if emergency_tools != kept_tools:
+            kept_tools = emergency_tools
+            actions.append("emergency_compress_tool_results")
+            current = usage()
+    if sum(current.values()) > hard_limit:
+        changed = False
+        emergency: list[dict[str, Any]] = []
+        for item in kept_messages:
+            value = dict(item)
+            content = str(value.get("content", ""))
+            if value.get("role") in {"context", "skill"} and estimate_tokens(content) > 800:
+                value["content"] = content[:2400] + "…"
+                changed = True
+            emergency.append(value)
+        kept_messages = emergency
+        if changed:
+            actions.append("emergency_compaction")
+        current = usage()
+
+    total = sum(current.values())
+    return ContextEnvelope(
+        messages=kept_messages,
+        evidence=kept_evidence,
+        tool_entries=kept_tools,
+        usage={
+            **current,
+            "final_input_tokens": total,
+            "hard_limit": hard_limit,
+            "dropped_messages": dropped_messages,
+            "dropped_evidence": dropped_evidence,
+            "compression_actions": actions,
+        },
+        exceeded=total > hard_limit,
+    )

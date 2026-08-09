@@ -1,0 +1,48 @@
+{
+  "mode": "deterministic",
+  "evidence_level": "deterministic_no_external_model",
+  "case_count": 100,
+  "metrics": {
+    "reference": {
+      "correct": 67,
+      "total": 67,
+      "rate": 1.0
+    },
+    "clarification": {
+      "correct": 89,
+      "total": 89,
+      "rate": 1.0
+    },
+    "skill": {
+      "correct": 61,
+      "total": 61,
+      "rate": 1.0
+    },
+    "memory": {
+      "correct": 10,
+      "total": 10,
+      "rate": 1.0
+    },
+    "tool": {
+      "correct": 10,
+      "total": 10,
+      "rate": 1.0
+    },
+    "authorization": {
+      "correct": 10,
+      "total": 10,
+      "rate": 1.0
+    },
+    "approval": {
+      "correct": 2,
+      "total": 2,
+      "rate": 1.0
+    }
+  },
+  "guards": {
+    "failed_tools_activate_mode": false,
+    "final_input_exceeded": 0
+  },
+  "failure_count": 0,
+  "failures": []
+}

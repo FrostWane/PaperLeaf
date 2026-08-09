@@ -126,6 +126,14 @@ class Paper(Base):
     chunking_strategy: Mapped[str] = mapped_column(
         String(48), default="fixed_window_v1", server_default="fixed_window_v1"
     )
+    embedding_provider: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
+    embedding_dimensions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    embedding_index_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    embedding_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    embedding_status: Mapped[str] = mapped_column(
+        String(24), default="unavailable", server_default="unavailable"
+    )
     status: Mapped[PaperStatus] = mapped_column(Enum(PaperStatus), default=PaperStatus.uploaded)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_opened_at: Mapped[Optional[datetime]] = mapped_column(
@@ -606,6 +614,7 @@ class McpServerConfig(Base):
     transport: Mapped[str] = mapped_column(String(32), default="streamable_http")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     allowed_hosts: Mapped[list] = mapped_column(JSON, default=list)
+    cache_revision: Mapped[int] = mapped_column(Integer, default=1)
     health_status: Mapped[str] = mapped_column(String(32), default="unknown")
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     circuit_open_until: Mapped[Optional[datetime]] = mapped_column(
@@ -664,6 +673,7 @@ class MemoryItem(Base):
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(), nullable=True)
+    embedding_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

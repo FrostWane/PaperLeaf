@@ -34,6 +34,7 @@ def aggregate_harness_metrics(
     tool_calls: list[Any],
     memory: dict[str, object],
     mcp_servers: list[Any],
+    embedding: dict[str, object] | None = None,
     *,
     window_hours: int,
     limit_reached: bool,
@@ -50,6 +51,7 @@ def aggregate_harness_metrics(
     route_sources: Counter[str] = Counter()
     skill_completed: Counter[str] = Counter()
     skill_terminal: Counter[str] = Counter()
+    vector_fallback_reasons: Counter[str] = Counter()
 
     for run in runs:
         snapshot = _dict(getattr(run, "context_snapshot", {}))
@@ -63,15 +65,19 @@ def aggregate_harness_metrics(
         if usage.get("compacted") is True:
             compacted += 1
         confidence = getattr(run, "reference_confidence", None)
-        if isinstance(confidence, int | float):
+        if isinstance(confidence, (int, float)):  # noqa: UP038
             normalized = min(1.0, max(0.0, float(confidence)))
             confidences.append(normalized)
             if normalized < 0.55:
                 clarification += 1
         summary = _dict(getattr(run, "result_summary", {}))
         trace = _dict(summary.get("rag_trace"))
+        for reason in trace.get("vector_fallback_reasons", []):
+            normalized_reason = str(reason)[:64]
+            if normalized_reason:
+                vector_fallback_reasons[normalized_reason] += 1
         timing = _dict(trace.get("stage_timings_ms")).get("context")
-        if isinstance(timing, int | float):
+        if isinstance(timing, (int, float)):  # noqa: UP038
             context_latency.append(max(0, round(timing)))
         if "CONTEXT" in str(getattr(run, "error_code", "") or "").upper():
             context_limit_errors += 1
@@ -205,5 +211,10 @@ def aggregate_harness_metrics(
             "successful": mcp_success,
             "success_rate": _rate(mcp_success, mcp_calls),
             "servers": server_metrics,
+        },
+        "embedding": {
+            **dict(embedding or {}),
+            "fallback_reasons": dict(vector_fallback_reasons),
+            "fallback_runs": sum(vector_fallback_reasons.values()),
         },
     }

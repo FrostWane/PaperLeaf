@@ -682,6 +682,7 @@ export async function getAdminHarnessMetrics(window: "24h" | "7d" | "30d" = "24h
   const skills = (raw.skills ?? {}) as Record<string, unknown>;
   const tools = (raw.tools ?? {}) as Record<string, unknown>;
   const mcp = (raw.mcp ?? {}) as Record<string, unknown>;
+  const embedding = (raw.embedding ?? {}) as Record<string, unknown>;
   const privacy = (raw.privacy ?? {}) as Record<string, unknown>;
   const bands = (context.reference_confidence_bands ?? {}) as Record<string, unknown>;
   const optionalNumber = (value: unknown): number | undefined => typeof value === "number" ? value : undefined;
@@ -707,6 +708,21 @@ export async function getAdminHarnessMetrics(window: "24h" | "7d" | "30d" = "24h
     },
     mcp: {
       calls: Number(mcp.calls ?? 0), successful: Number(mcp.successful ?? 0), successRate: Number(mcp.success_rate ?? 0), servers: (Array.isArray(mcp.servers) ? mcp.servers : []).map((entry) => { const item = entry as Record<string, unknown>; return { id: String(item.id ?? "unknown"), displayName: String(item.display_name ?? "MCP"), enabled: item.enabled === true, healthStatus: String(item.health_status ?? "unknown"), consecutiveFailures: Number(item.consecutive_failures ?? 0), circuitOpenUntil: item.circuit_open_until ? String(item.circuit_open_until) : undefined, lastCheckedAt: item.last_checked_at ? String(item.last_checked_at) : undefined, lastErrorCode: item.last_error_code ? String(item.last_error_code) : undefined }; }),
+    },
+    embedding: {
+      configured: embedding.configured === true,
+      provider: embedding.provider ? String(embedding.provider) : undefined,
+      model: embedding.model ? String(embedding.model) : undefined,
+      dimensions: optionalNumber(embedding.dimensions),
+      revision: optionalNumber(embedding.revision),
+      total: Number(embedding.total ?? 0),
+      ready: Number(embedding.ready ?? 0),
+      readyCurrent: Number(embedding.ready_current ?? 0),
+      stale: Number(embedding.stale ?? 0),
+      unavailable: Number(embedding.unavailable ?? 0),
+      failed: Number(embedding.failed ?? 0),
+      fallbackRuns: Number(embedding.fallback_runs ?? 0),
+      fallbackReasons: numberMap(embedding.fallback_reasons),
     },
     privacy: { contentCollected: privacy.content_collected === true, identifiersCollected: privacy.identifiers_collected === true },
   };

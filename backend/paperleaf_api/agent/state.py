@@ -33,8 +33,13 @@ class AgentState(TypedDict, total=False):
     skill_route_source: str
     skill_route_confidence: float
     tool_calls: list[dict[str, Any]]
+    tool_context_entries: list[dict[str, Any]]
     tool_mode_active: bool
     pre_retrieved_evidence: list[Evidence]
+    selection_evidence: list[Evidence]
+    selection_scope_locked: bool
+    selection_physical_page: int | None
+    selection_paper_id: str | None
     pre_arxiv_candidates: list[dict[str, Any]]
     clarification_question: str | None
     clarification_requested: bool
@@ -46,6 +51,9 @@ class AgentState(TypedDict, total=False):
     pending_action: dict[str, Any] | None
     citations: list[CitationClaim]
     citation_validation_passed: bool
+    answer_repair_attempted: bool
+    answer_repair_succeeded: bool
+    context_usage: dict[str, Any]
     answer: str
     error: str | None
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]

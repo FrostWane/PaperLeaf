@@ -99,6 +99,10 @@ jobs:
           --manifest evaluation/datasets/paperleaf-qasper-selective-holdout-v2/manifest.json
           --questions evaluation/datasets/paperleaf-qasper-selective-holdout-v2/questions.jsonl
           --exclusion-manifest evaluation/datasets/paperleaf-qasper-calibration-v1/manifest.json
+      - name: 运行 Agent Harness 确定性评测
+        run: >-
+          python -m paperleaf_api.evaluation_harness
+          --cases evaluation/context-harness-v1/cases.jsonl
       - name: 升级测试数据库
         run: alembic upgrade head
       - run: pytest

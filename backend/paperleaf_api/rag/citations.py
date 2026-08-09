@@ -20,6 +20,7 @@ class Evidence:
     retrieval_query: str = ""
     # 仅用于版本化评测与聚合指标，不向模型或普通用户展示。
     chunking_strategy: str = "unknown"
+    vector_fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)

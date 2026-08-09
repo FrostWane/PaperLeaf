@@ -105,6 +105,12 @@ class PaperRead(BaseModel):
     size_bytes: int
     sha256: str
     page_count: Optional[int]
+    embedding_provider: Optional[str]
+    embedding_model: Optional[str]
+    embedding_dimensions: Optional[int]
+    embedding_index_revision: Optional[int]
+    embedding_fingerprint: Optional[str]
+    embedding_status: Literal["ready", "stale", "unavailable", "failed"]
     status: PaperStatus
     archived_at: Optional[datetime]
     last_opened_at: Optional[datetime]

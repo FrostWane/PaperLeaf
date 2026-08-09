@@ -14,11 +14,13 @@ from sqlalchemy import func, or_, select
 
 from ..config import settings
 from ..db import get_session_factory
+from ..embedding_contract import configured_embedding_contract
 from ..model_runtime import ModelRouter, ModelRuntimeError, build_model_router
 from ..models import Paper, PaperChunk
 from ..rag.citations import Evidence
 from ..rag.retrieval_quality import deduplicate_evidence_by_page
 from ..rag.rrf import RankedHit, reciprocal_rank_fusion
+from ..selection_context import match_selection_to_page
 
 _LATIN_QUERY_TOKEN_RE = re.compile(r"[a-zA-Z0-9]+(?:[-_.][a-zA-Z0-9]+)*")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
@@ -154,13 +156,22 @@ class SQLLibrarySearch:
     ) -> None:
         self.config = config
         self.model_router = model_router or build_model_router(config)
+        self.last_vector_fallback_reason: str | None = None
 
     async def _embed_query(self, query: str) -> list[float] | None:
+        self.last_vector_fallback_reason = None
         if not self.model_router.has_provider("embedding"):
+            self.last_vector_fallback_reason = "embedding_provider_unavailable"
+            return None
+        contract = configured_embedding_contract(self.config, self.model_router)
+        if contract is None:
+            self.last_vector_fallback_reason = "embedding_contract_mismatch"
             return None
         from langchain_openai import OpenAIEmbeddings
 
         async def invoke(provider: Any) -> list[float]:
+            if provider.embedding_model != contract.model:
+                raise RuntimeError("EMBEDDING_CONTRACT_MISMATCH")
             kwargs: dict[str, Any] = {
                 "model": provider.embedding_model,
                 "api_key": provider.api_key,
@@ -175,10 +186,81 @@ class SQLLibrarySearch:
             return await OpenAIEmbeddings(**kwargs).aembed_query(query)
 
         try:
-            return await self.model_router.execute("embedding", invoke)
+            vector = await self.model_router.execute(
+                "embedding", invoke, required_model=contract.model
+            )
         except ModelRuntimeError:
             # 向量服务故障时保留关键词检索，不让整个文库问答不可用。
+            self.last_vector_fallback_reason = "embedding_provider_unavailable"
             return None
+        if len(vector) != contract.dimensions:
+            self.last_vector_fallback_reason = "query_dimension_mismatch"
+            return None
+        return vector
+
+    async def page_selection_evidence(
+        self,
+        *,
+        user_id: str,
+        paper_id: str,
+        physical_page: int,
+        selected_text: str,
+        limit: int = 3,
+    ) -> list[Evidence]:
+        """用服务端真实 Chunk 构造选文及同页相邻证据，不依赖检索词命中。"""
+
+        async with get_session_factory()() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(PaperChunk, Paper)
+                        .join(Paper, Paper.id == PaperChunk.paper_id)
+                        .where(
+                            Paper.owner_id == user_id,
+                            Paper.id == paper_id,
+                            PaperChunk.physical_page == physical_page,
+                        )
+                        .order_by(PaperChunk.chunk_index)
+                    )
+                ).all()
+            )
+        if not rows:
+            return []
+        matches = [
+            index
+            for index, (chunk, _paper) in enumerate(rows)
+            if match_selection_to_page(selected_text, chunk.text).accepted
+        ]
+        anchor = matches[0] if matches else 0
+        indexes = [anchor]
+        distance = 1
+        while len(indexes) < min(limit, len(rows)):
+            for candidate in (anchor - distance, anchor + distance):
+                if 0 <= candidate < len(rows) and candidate not in indexes:
+                    indexes.append(candidate)
+                    if len(indexes) >= min(limit, len(rows)):
+                        break
+            distance += 1
+        result: list[Evidence] = []
+        for index in indexes:
+            chunk, paper = rows[index]
+            result.append(
+                Evidence(
+                    chunk_id=chunk.id,
+                    paper_id=paper.id,
+                    paper_title=paper.title,
+                    physical_page=chunk.physical_page,
+                    text=chunk.text,
+                    retrieval_score=1.0 if index == anchor else 0.8,
+                    retrieval_channels=(
+                        "verified_selection" if index == anchor else "selection_neighbor",
+                    ),
+                    channel_scores=(("selection", 1.0 if index == anchor else 0.8),),
+                    retrieval_query=selected_text,
+                    chunking_strategy=getattr(paper, "chunking_strategy", "unknown"),
+                )
+            )
+        return result
 
     async def _rewrite_query(self, query: str) -> str | None:
         """将中文/口语问题改写成少量英文论文检索词；失败时安静回退到原查询。"""
@@ -317,6 +399,53 @@ class SQLLibrarySearch:
             for chunk, paper in selected_rows
         ]
 
+    async def _has_stored_dimension_mismatch(
+        self,
+        session: Any,
+        request: LibrarySearchInput,
+        dimensions: int,
+    ) -> bool:
+        conditions = [
+            Paper.owner_id == request.user_id,
+            Paper.embedding_status == "ready",
+            Paper.embedding_dimensions == dimensions,
+            PaperChunk.embedding.is_not(None),
+            func.vector_dims(PaperChunk.embedding) != dimensions,
+        ]
+        if request.paper_ids:
+            conditions.append(Paper.id.in_(request.paper_ids))
+        count = await session.scalar(
+            select(func.count(PaperChunk.id))
+            .join(Paper, Paper.id == PaperChunk.paper_id)
+            .where(*conditions)
+        )
+        return int(count or 0) > 0
+
+    async def _has_scope_contract_mismatch(
+        self,
+        session: Any,
+        request: LibrarySearchInput,
+        contract: Any,
+    ) -> bool:
+        """检查请求范围内是否存在不能参与当前向量空间的论文。
+
+        向量查询可以继续使用范围内其余 ready 论文，但必须把部分关键词降级写入
+        RAG Trace；否则管理员会把“静默排除 stale 论文”误认为完整的混合召回。
+        """
+
+        conditions = [
+            Paper.owner_id == request.user_id,
+            or_(
+                Paper.embedding_status != "ready",
+                Paper.embedding_fingerprint != contract.fingerprint,
+                Paper.embedding_dimensions != contract.dimensions,
+            ),
+        ]
+        if request.paper_ids:
+            conditions.append(Paper.id.in_(request.paper_ids))
+        count = await session.scalar(select(func.count(Paper.id)).where(*conditions))
+        return int(count or 0) > 0
+
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
         if len(request.paper_ids) == 1 and _is_scoped_overview_query(request.query):
             return await self._scoped_overview_evidence(request)
@@ -337,22 +466,48 @@ class SQLLibrarySearch:
             vector_rows: list[Any] = []
             query_vector = await self._embed_query(request.query)
             if query_vector:
-                distance = PaperChunk.embedding.cosine_distance(query_vector)
-                vector_conditions = [
-                    Paper.owner_id == request.user_id,
-                    PaperChunk.embedding.is_not(None),
-                ]
-                if request.paper_ids:
-                    vector_conditions.append(Paper.id.in_(request.paper_ids))
-                vector_rows = (
-                    await session.execute(
-                        select(PaperChunk, Paper, distance.label("distance"))
-                        .join(Paper, Paper.id == PaperChunk.paper_id)
-                        .where(*vector_conditions)
-                        .order_by(distance)
-                        .limit(max(request.limit * 5, 40))
-                    )
-                ).all()
+                contract = configured_embedding_contract(self.config, self.model_router)
+                if contract is None:
+                    self.last_vector_fallback_reason = "embedding_contract_mismatch"
+                else:
+                    if await self._has_scope_contract_mismatch(session, request, contract):
+                        self.last_vector_fallback_reason = "embedding_contract_mismatch"
+                    try:
+                        stored_mismatch = await self._has_stored_dimension_mismatch(
+                            session, request, contract.dimensions
+                        )
+                    except Exception:
+                        stored_mismatch = False
+                        self.last_vector_fallback_reason = "vector_query_failed"
+                    if stored_mismatch:
+                        self.last_vector_fallback_reason = "stored_dimension_mismatch"
+                    if stored_mismatch or self.last_vector_fallback_reason == "vector_query_failed":
+                        query_vector = None
+                if contract is not None and query_vector:
+                    distance = PaperChunk.embedding.cosine_distance(query_vector)
+                    vector_conditions = [
+                        Paper.owner_id == request.user_id,
+                        Paper.embedding_status == "ready",
+                        Paper.embedding_fingerprint == contract.fingerprint,
+                        Paper.embedding_dimensions == contract.dimensions,
+                        PaperChunk.embedding.is_not(None),
+                    ]
+                    if request.paper_ids:
+                        vector_conditions.append(Paper.id.in_(request.paper_ids))
+                    try:
+                        vector_rows = (
+                            await session.execute(
+                                select(PaperChunk, Paper, distance.label("distance"))
+                                .join(Paper, Paper.id == PaperChunk.paper_id)
+                                .where(*vector_conditions)
+                                .order_by(distance)
+                                .limit(max(request.limit * 5, 40))
+                            )
+                        ).all()
+                    except Exception:
+                        # pgvector 维度/索引错误不得中断关键词召回。
+                        self.last_vector_fallback_reason = "vector_query_failed"
+                        vector_rows = []
 
         def evidence_from(row: Any, *, matched_query: str = "") -> Evidence:
             chunk, paper = row[0], row[1]
@@ -364,6 +519,7 @@ class SQLLibrarySearch:
                 text=chunk.text,
                 retrieval_query=matched_query,
                 chunking_strategy=getattr(paper, "chunking_strategy", "unknown"),
+                vector_fallback_reason=self.last_vector_fallback_reason,
             )
 
         keyword_hits = [
@@ -409,6 +565,7 @@ class SQLLibrarySearch:
                     channel_scores=channel_scores,
                     retrieval_query=hit.payload.retrieval_query,
                     chunking_strategy=hit.payload.chunking_strategy,
+                    vector_fallback_reason=hit.payload.vector_fallback_reason,
                 )
             )
         return deduplicate_evidence_by_page(fused_evidence, limit=request.limit)

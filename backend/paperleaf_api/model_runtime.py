@@ -228,12 +228,28 @@ class ModelRouter(Generic[T]):
     def has_provider(self, purpose: ModelPurpose) -> bool:
         return any(provider.supports(purpose) for provider in self.providers)
 
+    def circuit_retry_after_seconds(self, purpose: ModelPurpose) -> float:
+        """返回该用途已配置端点中最长的剩余冷却时间。"""
+
+        delays = [
+            float(
+                self.circuit_breaker.snapshot(f"{provider.name}:{purpose}").get(
+                    "retry_after_ms", 0
+                )
+            )
+            / 1000
+            for provider in self.providers
+            if provider.supports(purpose)
+        ]
+        return max(delays, default=0.0)
+
     async def execute(
         self,
         purpose: ModelPurpose,
         operation: Callable[[ModelProvider], Awaitable[T]],
         *,
         timeout_seconds: float | None = None,
+        required_model: str | None = None,
     ) -> T:
         """执行一次受控模型调用。
 
@@ -246,7 +262,12 @@ class ModelRouter(Generic[T]):
         if effective_timeout <= 0 or effective_timeout > 120:
             raise ValueError("模型调用超时必须位于 0 到 120 秒之间")
         attempts: list[ModelAttempt] = []
-        candidates = [provider for provider in self.providers if provider.supports(purpose)]
+        candidates = [
+            provider
+            for provider in self.providers
+            if provider.supports(purpose)
+            and (required_model is None or provider.model_for(purpose) == required_model)
+        ]
         if not candidates:
             raise ModelRuntimeError("MODEL_NOT_CONFIGURED", attempts)
 

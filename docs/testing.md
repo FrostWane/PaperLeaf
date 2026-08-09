@@ -145,9 +145,35 @@ Redis 专项覆盖固定窗口、幂等键不重复计数、标识哈希、`429 
 
 工具调用成功率 ≥95%、中断恢复成功率 100%、跨用户泄露为 0 均为发布目标；在对应容器测试和故障注入完成前不发布这些指标。
 
+### Harness 专项评测
+
+`context-harness-v1` 提供两种明确分级的入口：
+
+```bash
+# 确定性模式：调用生产解析、Skill 路由、记忆筛选和 Token 门禁；进入 CI，不调用模型
+cd backend
+python -m paperleaf_api.evaluation_harness \
+  --cases evaluation/context-harness-v1/cases.jsonl \
+  --output evaluation/context-harness-v1/latest-deterministic.json
+
+# 真实模式：必须在 Docker Compose 已运行且本地模型凭证可用时显式执行
+docker compose run --rm api python -m paperleaf_api.evaluation_harness_live \
+  --runs 100 --concurrency 3 --timeout-seconds 300
+```
+
+真实模式通过 HTTP 创建并保留 `[实测]` 会话，等待 Worker 与当前 DeepSeek 配置完成回答，
+再从 PostgreSQL 核对 Skill、Function Calling、持久 Tool Call、最终 Token、引用范围和选文
+物理页。它还会创建或复用 `[系统验收] Harness 真实闭环` 集合，并可导入三篇公开 arXiv
+论文。真实模式不进入 GitHub Actions，避免外部网络、额度或 Provider 波动反复发送 CI 失败邮件。
+报告中的 `deterministic_no_external_model`、`real_model_real_infrastructure` 必须原样保留，
+不得把前者写成真实模型通过率。完整 100 次运行才适用 `≥99/100` 结构门禁；少量冒烟只报告
+实际分子和分母。
+
 ## 前端与无障碍
 
-2026-08-08 Agent Harness 里程碑回归：后端完整 Pytest 测试集通过，仅保留 6 个依赖可选外部环境的跳过项；Ruff 覆盖 API、测试和独立 MCP 服务并通过。前端完整 Vitest 为 108/108，TypeScript 检查通过，ESLint 为 0 error（保留 2 个既有 TanStack Table 编译器提示）。隔离 PostgreSQL 完成全新升级、`0015 → 0014 → 0015` 回滚再升级与 `alembic check`；Compose 成功构建 API、Worker、迁移与学术 MCP 镜像。真实 MCP 协议发现 3 个只读工具，缺失 OpenAlex Key 和 Semantic Scholar 限流均返回结构化降级结果；该记录不把外部服务不可用误报为 PaperLeaf 本地问答失败。
+2026-08-09 Harness 可靠性回归：后端收集 330 项，324 项通过、6 项因可选外部基础设施跳过；Ruff 全部通过。确定性 evaluator 冻结 100 例，指代 67/67、澄清 89/89、Skill 61/61、记忆 10/10、工具 10/10、授权 10/10、审批 2/2，最终输入超限为 0；证据级别明确标记为 `deterministic_no_external_model`。前端 Vitest 112/112，Playwright 52 项通过、8 项按视口设计跳过，Storybook、TypeScript、ESLint（0 error，保留 2 个既有 TanStack Table 编译器提示）和生产构建通过。隔离 PostgreSQL 完成全新升级到 `20260809_0017`、`0017 → 0016 → 0017` 回滚再升级；Compose 的 API、Worker、Web 和学术 MCP 镜像构建及健康检查通过。
+
+同日真实本地复测使用 DeepSeek、Ollama、PostgreSQL、pgvector、Redis 与真实 PDF.js 文本层：鼠标拖选 37 字后，Run `8a237abb-196c-436d-b97d-7c448bf58a83` 以 `trace_original` 完成，引用 3 条且均为物理页 1，最终模型输入 5366/21307 Token；`get_page_text` 的精确 ID 与唯一可信标题解析都成功。此前 5 次向量故障注入均完成关键词降级。OpenAlex 严格联网门禁仍因本机未配置 `OPENALEX_API_KEY` 未完成，不能计入 99/100 真实模型结构性结论；已有 5 个 arXiv 工具场景通过，5 个 OpenAlex 场景按失败保留。这里记录的是单机当前配置的证据，不外推为全部 Provider 的语义准确率。
 
 当前 Vitest 覆盖登录表单校验、登录/改密/上传、持久会话 CRUD、202 幂等提交、会话切换竞态、Agent 断线补发与暂停恢复、安全 Markdown、单篇与集合范围绑定、管理员模型状态、文献修改/重试/删除、总结与结构图映射、层级集合、PDF 缩放与布局恢复、翻译确认/取消/失败/partial 终态。Storybook 提供上传弹窗、论文工作台、文献组织工作台和组织管理弹层供人工检查。
 

@@ -9,11 +9,12 @@ from __future__ import annotations
 import hashlib
 import threading
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Protocol, Union
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -112,6 +113,12 @@ class PaperRecord:
     sha256: str
     page_count: int | None
     publication: str | None = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None
+    embedding_index_revision: int | None = None
+    embedding_fingerprint: str | None = None
+    embedding_status: str = "unavailable"
     status: PaperStatus = PaperStatus.uploaded
     archived_at: datetime | None = None
     last_opened_at: datetime | None = None
@@ -284,6 +291,7 @@ class McpServerConfigRecord:
     transport: str = "streamable_http"
     enabled: bool = True
     allowed_hosts: list[str] = field(default_factory=list)
+    cache_revision: int = 1
     health_status: str = "unknown"
     consecutive_failures: int = 0
     circuit_open_until: datetime | None = None
@@ -377,6 +385,7 @@ class MemoryItemRecord:
     pinned: bool = False
     enabled: bool = True
     embedding: list[float] | None = None
+    embedding_fingerprint: str | None = None
     created_at: datetime = field(default_factory=now)
     updated_at: datetime = field(default_factory=now)
 
@@ -533,6 +542,11 @@ class Repository(Protocol):
     async def delete_session(self, token: str) -> None: ...
     async def set_password(self, user_id: str, password: str) -> UserRecord: ...
     async def create_paper(self, paper: PaperRecord) -> PaperRecord: ...
+
+    async def mark_embedding_contract_stale(self, fingerprint: str | None) -> int: ...
+    async def embedding_contract_counts(
+        self, fingerprint: str | None
+    ) -> dict[str, int]: ...
     async def list_papers(
         self,
         owner_id: str,
@@ -843,6 +857,35 @@ class MemoryRepository:
         job = JobRecord(id=str(uuid.uuid4()), paper_id=paper.id, type="parse_pdf")
         self.jobs[job.id] = job
         return paper
+
+    async def mark_embedding_contract_stale(self, fingerprint: str | None) -> int:
+        changed = 0
+        for paper in self.papers.values():
+            if paper.embedding_status == "ready" and (
+                not fingerprint or paper.embedding_fingerprint != fingerprint
+            ):
+                paper.embedding_status = "stale"
+                changed += 1
+        return changed
+
+    async def embedding_contract_counts(
+        self, fingerprint: str | None
+    ) -> dict[str, int]:
+        statuses = Counter(paper.embedding_status for paper in self.papers.values())
+        return {
+            "total": len(self.papers),
+            "ready": statuses.get("ready", 0),
+            "ready_current": sum(
+                1
+                for paper in self.papers.values()
+                if paper.embedding_status == "ready"
+                and fingerprint is not None
+                and paper.embedding_fingerprint == fingerprint
+            ),
+            "stale": statuses.get("stale", 0),
+            "unavailable": statuses.get("unavailable", 0),
+            "failed": statuses.get("failed", 0),
+        }
 
     async def list_papers(
         self,
@@ -1884,7 +1927,22 @@ class MemoryRepository:
                 source_excerpt=record.source_excerpt,
             )
             self.memory_item_versions[version.id] = version
-        for key in ("type", "value", "normalized_hash", "confidence", "pinned", "enabled"):
+        if any(key in changes for key in ("value", "type")):
+            # 正文变化后绝不复用旧向量；调用方只有在新向量成功时才显式传入。
+            record.embedding = changes.get("embedding")  # type: ignore[assignment]
+            record.embedding_fingerprint = changes.get(  # type: ignore[assignment]
+                "embedding_fingerprint"
+            )
+        for key in (
+            "type",
+            "value",
+            "normalized_hash",
+            "confidence",
+            "pinned",
+            "enabled",
+            "embedding",
+            "embedding_fingerprint",
+        ):
             if key in changes:
                 setattr(record, key, changes[key])
         record.updated_at = now()
@@ -2298,8 +2356,15 @@ class MemoryRepository:
         record = self.mcp_server_configs.get(server_id)
         if not record:
             return None
+        config_changed = any(
+            key in changes and getattr(record, key, None) != changes[key]
+            for key in ("enabled", "endpoint_url", "transport", "allowed_hosts")
+        )
         for key in (
             "enabled",
+            "endpoint_url",
+            "transport",
+            "allowed_hosts",
             "health_status",
             "consecutive_failures",
             "circuit_open_until",
@@ -2308,6 +2373,8 @@ class MemoryRepository:
         ):
             if key in changes:
                 setattr(record, key, changes[key])
+        if config_changed:
+            record.cache_revision += 1
         record.updated_at = now()
         return record
 
@@ -2321,6 +2388,10 @@ class MemoryRepository:
         }
         for record in records:
             self.mcp_tool_snapshots[record.id] = record
+        server = self.mcp_server_configs.get(server_id)
+        if server:
+            server.cache_revision += 1
+            server.updated_at = now()
         return records
 
     async def list_mcp_tool_snapshots(
@@ -3704,8 +3775,15 @@ class SQLAlchemyRepository:
             value = await session.get(McpServerConfig, server_id)
             if not value:
                 return None
+            config_changed = any(
+                key in changes and getattr(value, key, None) != changes[key]
+                for key in ("enabled", "endpoint_url", "transport", "allowed_hosts")
+            )
             for key in (
                 "enabled",
+                "endpoint_url",
+                "transport",
+                "allowed_hosts",
                 "health_status",
                 "consecutive_failures",
                 "circuit_open_until",
@@ -3714,6 +3792,8 @@ class SQLAlchemyRepository:
             ):
                 if key in changes:
                     setattr(value, key, changes[key])
+            if config_changed:
+                value.cache_revision += 1
             value.updated_at = now()
             await session.commit()
             await session.refresh(value)
@@ -3728,6 +3808,10 @@ class SQLAlchemyRepository:
             )
             values = [McpToolSnapshot(**record.__dict__) for record in records]
             session.add_all(values)
+            server = await session.get(McpServerConfig, server_id)
+            if server:
+                server.cache_revision += 1
+                server.updated_at = now()
             await session.commit()
             for value in values:
                 await session.refresh(value)
@@ -5020,6 +5104,52 @@ class SQLAlchemyRepository:
             await session.refresh(record)
             return record
 
+    async def mark_embedding_contract_stale(self, fingerprint: str | None) -> int:
+        async with get_session_factory()() as session:
+            conditions = [Paper.embedding_status == "ready"]
+            if fingerprint:
+                conditions.append(
+                    or_(
+                        Paper.embedding_fingerprint.is_(None),
+                        Paper.embedding_fingerprint != fingerprint,
+                    )
+                )
+            result = await session.execute(
+                update(Paper).where(*conditions).values(embedding_status="stale")
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    async def embedding_contract_counts(
+        self, fingerprint: str | None
+    ) -> dict[str, int]:
+        async with get_session_factory()() as session:
+            grouped = await session.execute(
+                select(Paper.embedding_status, func.count(Paper.id)).group_by(
+                    Paper.embedding_status
+                )
+            )
+            statuses = {str(status): int(count) for status, count in grouped.all()}
+            ready_current = 0
+            if fingerprint:
+                ready_current = int(
+                    await session.scalar(
+                        select(func.count(Paper.id)).where(
+                            Paper.embedding_status == "ready",
+                            Paper.embedding_fingerprint == fingerprint,
+                        )
+                    )
+                    or 0
+                )
+            return {
+                "total": sum(statuses.values()),
+                "ready": statuses.get("ready", 0),
+                "ready_current": ready_current,
+                "stale": statuses.get("stale", 0),
+                "unavailable": statuses.get("unavailable", 0),
+                "failed": statuses.get("failed", 0),
+            }
+
     async def list_memories(
         self, user_id: str, *, enabled_only: bool = False
     ) -> list[MemoryItem]:
@@ -5070,6 +5200,7 @@ class SQLAlchemyRepository:
                 pinned=record.pinned,
                 enabled=record.enabled,
                 embedding=record.embedding,
+                embedding_fingerprint=record.embedding_fingerprint,
                 created_at=record.created_at,
                 updated_at=record.updated_at,
             )
@@ -5147,7 +5278,19 @@ class SQLAlchemyRepository:
                         source_excerpt=item.source_excerpt,
                     )
                 )
-            for key in ("type", "value", "normalized_hash", "confidence", "pinned", "enabled"):
+            if any(key in changes for key in ("value", "type")):
+                item.embedding = changes.get("embedding")
+                item.embedding_fingerprint = changes.get("embedding_fingerprint")
+            for key in (
+                "type",
+                "value",
+                "normalized_hash",
+                "confidence",
+                "pinned",
+                "enabled",
+                "embedding",
+                "embedding_fingerprint",
+            ):
                 if key in changes:
                     setattr(item, key, changes[key])
             item.updated_at = now()

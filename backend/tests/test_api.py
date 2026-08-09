@@ -142,6 +142,21 @@ def test_auth_paper_contract_and_cross_user_isolation(tmp_path, valid_pdf_bytes:
             "content_collected": False,
             "identifiers_collected": False,
         }
+        assert harness_metrics.json()["embedding"] == {
+            "configured": False,
+            "provider": None,
+            "model": None,
+            "dimensions": None,
+            "revision": None,
+            "total": 0,
+            "ready": 0,
+            "ready_current": 0,
+            "stale": 0,
+            "unavailable": 0,
+            "failed": 0,
+            "fallback_reasons": {},
+            "fallback_runs": 0,
+        }
         mcp_servers = admin_client.get("/api/v1/admin/mcp/servers")
         assert mcp_servers.status_code == 200
         assert mcp_servers.json()["feature_enabled"] is False

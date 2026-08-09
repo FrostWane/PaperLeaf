@@ -152,8 +152,12 @@ Prometheus 默认保留 15 天时序数据。Compose 会把仓库内的采集规
 | `PAPERLEAF_OPENAI_BASE_URL` | 接口根地址 |
 | `PAPERLEAF_CHAT_MODEL` | 问答、总结与全文翻译模型 |
 | `PAPERLEAF_EMBEDDING_MODEL` | 嵌入模型 |
+| `PAPERLEAF_EMBEDDING_PROVIDER` | 指定向量空间来源：`primary`、`fallback` 或 `auto` |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 嵌入向量维度 |
+| `PAPERLEAF_EMBEDDING_INDEX_REVISION` | 索引契约修订号；主动更换空间时递增 |
 | `PAPERLEAF_EMBEDDING_BATCH_SIZE` | Worker 单次提交给向量服务的 Chunk 数，默认 8，范围 1～64 |
+| `PAPERLEAF_EMBEDDING_TIMEOUT_SECONDS` | 单个向量批次的超时，默认 90 秒，范围 1～120 秒 |
+| `PAPERLEAF_EMBEDDING_BATCH_ATTEMPTS` | 单个向量批次的受控尝试次数，默认 2，范围 1～3 |
 | `PAPERLEAF_VISION_MODEL` | 可选 OCR 视觉模型 |
 | `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用 OpenAI-compatible Key |
 | `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用服务根地址 |
@@ -161,6 +165,8 @@ Prometheus 默认保留 15 天时序数据。Compose 会把仓库内的采集规
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用嵌入模型，维度必须与主模型一致 |
 | `PAPERLEAF_FALLBACK_VISION_MODEL` | 可选备用 OCR 视觉模型 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 每次模型调用的超时秒数 |
+| `PAPERLEAF_AGENT_ANSWER_TIMEOUT_SECONDS` | 最终回答首次生成超时，默认 90 秒 |
+| `PAPERLEAF_AGENT_ANSWER_RETRY_TIMEOUT_SECONDS` | 仅超时时使用的同证据紧凑重试超时，默认 60 秒，且不得大于首次超时 |
 | `PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS` | 单页全文翻译超时，默认 90 秒 |
 | `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括首次生成超时，默认 120 秒 |
 | `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台全文概括精简证据重试超时，默认 90 秒且不得大于首次超时 |
@@ -191,22 +197,26 @@ PAPERLEAF_FALLBACK_OPENAI_API_KEY=your-embedding-service-key
 PAPERLEAF_FALLBACK_CHAT_MODEL=
 PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
 PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
+PAPERLEAF_EMBEDDING_PROVIDER=fallback
 PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
+PAPERLEAF_EMBEDDING_INDEX_REVISION=1
 PAPERLEAF_EMBEDDING_BATCH_SIZE=8
 ```
 
-如果服务或模型不接受 `dimensions` 参数，保持 `PAPERLEAF_EMBEDDING_DIMENSIONS` 为空；否则
-必须填模型的真实输出维度。不要在同一批 Chunk 中混用不同模型或不同维度。修改配置后执行：
+`PAPERLEAF_EMBEDDING_DIMENSIONS` 必须填写模型的真实输出维度；维度未知时 PaperLeaf
+会禁用向量写入与查询。不要在同一批 Chunk 中混用不同模型、维度或索引修订。修改配置后执行：
 
 ```bash
 docker compose up -d --build api worker
 ```
 
-新上传论文会自动生成向量。既有论文仍保留原 Chunk，但向量为空，因此可在文献库勾选多篇论文
+新上传论文会自动生成向量。升级前无法证明模型来源的既有向量会标记为“过期”并停止参与查询，
+但原 Chunk 仍保留；可在文献库勾选多篇论文
 执行“重新识别与索引”，也可逐篇进入“文献设置”重新处理。该操作会复用原始 PDF，重新解析、
 使用当前 `structure_aware_v2` 策略切分并替换该论文的旧
 Page/Chunk/Embedding。完成后可在“管理 → AI 能力状态”确认向量检索可用，并在 RAG 可观测性
-面板确认新问答出现向量或混合召回通道。单次批量操作最多选择 100 篇；正在处理或删除中的论文会被安全跳过。
+面板确认新问答出现向量或混合召回通道。管理页的 Agent Harness 还会显示当前模型、维度、
+修订、就绪/过期数量和关键词降级原因。单次批量操作最多选择 100 篇；正在处理或删除中的论文会被安全跳过。
 
 Windows/macOS 的 Docker Desktop 若使用宿主机 Ollama，应把备用服务根地址设为
 `http://host.docker.internal:11434/v1`，Key 可使用非空占位值 `ollama`。本机浏览器或

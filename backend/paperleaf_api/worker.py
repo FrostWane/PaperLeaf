@@ -37,6 +37,7 @@ from .arxiv_import import import_arxiv_paper
 from .config import settings
 from .crossref_service import crossref_client
 from .db import get_session_factory
+from .embedding_contract import configured_embedding_contract, vector_matches_contract
 from .mcp_gateway import McpGateway
 from .model_runtime import ModelProvider, ModelRouter, ModelRuntimeError, build_model_router
 from .models import (
@@ -61,7 +62,12 @@ from .pdf_metadata import (
     normalize_doi,
 )
 from .rag.answer_quality import AnswerQualityPolicy
-from .rag.chunking import PageText, chunk_pages, chunk_pages_fixed_window
+from .rag.chunking import (
+    PageText,
+    chunk_pages,
+    chunk_pages_fixed_window,
+    sanitize_pdf_text,
+)
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import SQLAlchemyRepository
 from .runtime_store import create_runtime_store
@@ -591,16 +597,23 @@ async def embed_texts(
     runtime = router or model_router
     if not texts or not runtime.has_provider("embedding"):
         return None
+    contract = configured_embedding_contract(settings, runtime)
+    if contract is None:
+        return None
     from langchain_openai import OpenAIEmbeddings
 
     vectors: list[list[float]] = []
     batch_size = settings.embedding_batch_size
+    batch_attempts = int(getattr(settings, "embedding_batch_attempts", 2))
+    timeout_seconds = float(getattr(settings, "embedding_timeout_seconds", 90))
     for offset in range(0, len(texts), batch_size):
         batch = texts[offset : offset + batch_size]
 
         async def invoke(
             provider: ModelProvider, current_batch: list[str] = batch
         ) -> list[list[float]]:
+            if provider.embedding_model != contract.model:
+                raise RuntimeError("EMBEDDING_CONTRACT_MISMATCH")
             kwargs = {
                 "model": provider.embedding_model,
                 "api_key": provider.api_key,
@@ -614,11 +627,57 @@ async def embed_texts(
                 kwargs["dimensions"] = settings.embedding_dimensions
             return await OpenAIEmbeddings(**kwargs).aembed_documents(current_batch)
 
-        try:
-            batch_vectors = await runtime.execute("embedding", invoke)
-        except ModelRuntimeError:
+        batch_vectors: list[list[float]] | None = None
+        last_error: ModelRuntimeError | None = None
+        for attempt in range(1, batch_attempts + 1):
+            try:
+                batch_vectors = await runtime.execute(
+                    "embedding",
+                    invoke,
+                    required_model=contract.model,
+                    timeout_seconds=timeout_seconds,
+                )
+            except ModelRuntimeError as error:
+                last_error = error
+                logger.warning(
+                    "向量批次失败 offset=%s size=%s attempt=%s/%s code=%s",
+                    offset,
+                    len(batch),
+                    attempt,
+                    batch_attempts,
+                    error.error_code,
+                )
+                if attempt < batch_attempts:
+                    retry_after = getattr(runtime, "circuit_retry_after_seconds", None)
+                    delay = float(retry_after("embedding")) if callable(retry_after) else 0.0
+                    if delay > 0:
+                        await asyncio.sleep(min(delay + 0.05, timeout_seconds))
+                    continue
+                break
+            else:
+                break
+        if batch_vectors is None:
+            logger.error(
+                "论文向量化未完成 completed=%s total=%s code=%s",
+                len(vectors),
+                len(texts),
+                last_error.error_code if last_error else "EMPTY_EMBEDDING_RESPONSE",
+            )
             return None
         if len(batch_vectors) != len(batch):
+            logger.error(
+                "向量批次数量不匹配 offset=%s expected=%s actual=%s",
+                offset,
+                len(batch),
+                len(batch_vectors),
+            )
+            return None
+        if any(not vector_matches_contract(vector, contract) for vector in batch_vectors):
+            logger.error(
+                "向量批次维度不匹配 offset=%s expected_dimensions=%s",
+                offset,
+                contract.dimensions,
+            )
             return None
         vectors.extend(batch_vectors)
     return vectors
@@ -746,13 +805,13 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
             pages = []
             for index in range(document.page_count):
                 page = document.load_page(index)
-                text = page.get_text("text").strip()
+                text = sanitize_pdf_text(page.get_text("text")).strip()
                 method = "text"
                 if len(text) < 30:
                     png = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False).tobytes("png")
                     ocr_text = await vision_ocr(png)
                     if ocr_text:
-                        text, method = ocr_text, "vision_ocr"
+                        text, method = sanitize_pdf_text(ocr_text).strip(), "vision_ocr"
                     elif not text:
                         method = "ocr_unavailable"
                 physical_page = index + 1
@@ -797,7 +856,20 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
         chunking_strategy = "fixed_window_v1_fallback"
     for chunk in chunks:
         chunks_by_page.setdefault(chunk.physical_page, []).append(chunk)
+    embedding_contract = configured_embedding_contract(settings, model_router)
     embeddings = await embed_texts([chunk.text for chunk in chunks])
+    if embedding_contract is None:
+        embedding_status = "unavailable"
+        embeddings = None
+    elif not embeddings:
+        embedding_status = "unavailable"
+    elif len(embeddings) != len(chunks) or any(
+        not vector_matches_contract(vector, embedding_contract) for vector in embeddings
+    ):
+        embedding_status = "failed"
+        embeddings = None
+    else:
+        embedding_status = "ready"
     embedding_by_id = (
         {chunk.id: vector for chunk, vector in zip(chunks, embeddings)} if embeddings else {}
     )
@@ -861,6 +933,22 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
                 )
         paper.page_count = len(pages)
         paper.chunking_strategy = chunking_strategy
+        paper.embedding_provider = (
+            embedding_contract.provider if embedding_contract is not None else None
+        )
+        paper.embedding_model = (
+            embedding_contract.model if embedding_contract is not None else None
+        )
+        paper.embedding_dimensions = (
+            embedding_contract.dimensions if embedding_contract is not None else None
+        )
+        paper.embedding_index_revision = (
+            embedding_contract.revision if embedding_contract is not None else None
+        )
+        paper.embedding_fingerprint = (
+            embedding_contract.fingerprint if embedding_contract is not None else None
+        )
+        paper.embedding_status = embedding_status
         # 使用最终事务内重新加载的最新字段做条件回填，避免覆盖解析期间的用户编辑。
         backfill_pdf_metadata(paper, pdf_metadata)
         apply_crossref_publication(paper, crossref_enrichment)
@@ -1555,6 +1643,10 @@ async def run_worker() -> None:
 
     start_http_server(settings.worker_metrics_port, addr="0.0.0.0")
     logger.info("PaperLeaf Worker 已启动")
+    contract = configured_embedding_contract(settings, model_router)
+    await agent_repository.mark_embedding_contract_stale(
+        contract.fingerprint if contract else None
+    )
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
     checkpoint_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)

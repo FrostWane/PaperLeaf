@@ -1,4 +1,6 @@
 import asyncio
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -10,7 +12,7 @@ from paperleaf_api.agent.graph import (
     build_configured_answerer,
 )
 from paperleaf_api.agent.tools import ArxivSearchInput, LibrarySearchInput, ToolResult
-from paperleaf_api.model_runtime import ModelRouter, ModelRuntimeError
+from paperleaf_api.model_runtime import ModelAttempt, ModelRouter, ModelRuntimeError
 from paperleaf_api.rag.citations import CitationClaim, Evidence
 from paperleaf_api.rag.retrieval_quality import AnswerSupport
 
@@ -159,12 +161,106 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
 
 
+def test_selection_lock_discards_legacy_evidence_from_other_pages() -> None:
+    selected = Evidence("selected", "p1", "测试论文", 2, "选中段落的可信内容。")
+    graph = build_agent_graph(EvidenceRetriever(), answerer)
+    result = asyncio.run(
+        graph.ainvoke(
+            {
+                "user_id": "u1",
+                "query": "解释选中内容",
+                "selected_paper_ids": ["p1"],
+                "selection_evidence": [selected],
+                "selection_scope_locked": True,
+                "selection_physical_page": 2,
+                "selection_paper_id": "p1",
+            },
+            {"recursion_limit": 8},
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert [item.physical_page for item in result["citations"]] == [2]
+    assert [item.physical_page for item in result["retrieved_evidence"]] == [2]
+
+
 def test_graph_does_not_disguise_raw_extract_as_ai_answer_without_model() -> None:
     no_model_answerer = build_configured_answerer(model_router=ModelRouter([]))
     with pytest.raises(ModelRuntimeError) as captured:
         _run(build_agent_graph(MultiSentenceEvidenceRetriever(), no_model_answerer))
 
     assert captured.value.error_code == "MODEL_NOT_CONFIGURED"
+
+
+@pytest.mark.parametrize("first_error", ["MODEL_TIMEOUT", "MODEL_CIRCUIT_OPEN"])
+def test_configured_answerer_retries_transient_failure_once_with_compact_context(
+    monkeypatch, first_error: str
+) -> None:
+    captured_prompts: list[list[tuple[str, str]]] = []
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            assert kwargs["max_tokens"] == 850
+
+        async def astream(self, prompt_messages):
+            captured_prompts.append(prompt_messages)
+            yield SimpleNamespace(content="精简回答 [chunk:E1]")
+
+    class TransientFailureThenSuccessRouter:
+        timeout_seconds = 30.0
+
+        def __init__(self):
+            self.timeouts: list[float] = []
+
+        def has_provider(self, purpose):
+            return purpose == "answer"
+
+        async def execute(self, purpose, operation, *, timeout_seconds=None):
+            self.timeouts.append(timeout_seconds)
+            if len(self.timeouts) == 1:
+                status = "timed_out" if first_error == "MODEL_TIMEOUT" else "circuit_open"
+                attempt = ModelAttempt(
+                    "answer", "primary", "deepseek-chat", status, 90000, 1, False,
+                    first_error,
+                )
+                raise ModelRuntimeError(first_error, [attempt])
+            provider = SimpleNamespace(
+                chat_model="deepseek-chat",
+                api_key="test-key",
+                base_url="http://model.invalid/v1",
+            )
+            return await operation(provider)
+
+        def circuit_retry_after_seconds(self, _purpose):
+            return 0.0
+
+    fake_langchain = ModuleType("langchain_openai")
+    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
+    router = TransientFailureThenSuccessRouter()
+    config = SimpleNamespace(
+        evidence_min_confidence=0.35,
+        evidence_min_vector_score=0.35,
+        evidence_min_lexical_coverage=0.18,
+        agent_answer_timeout_seconds=90.0,
+        agent_answer_retry_timeout_seconds=60.0,
+    )
+    evidence = [
+        Evidence(f"c{index}", "p1", "测试论文", index, f"第 {index} 条证据")
+        for index in range(1, 13)
+    ]
+
+    text, citations = asyncio.run(
+        build_configured_answerer(config, router)("比较这些证据", evidence)
+    )
+
+    assert router.timeouts == [90.0, 60.0]
+    assert text == "精简回答 [chunk:c1]"
+    assert citations[0].chunk_id == "c1"
+    prompt = "\n".join(content for _, content in captured_prompts[0])
+    assert "首次回答因模型响应超时" in prompt
+    assert "[chunk:E10" in prompt
+    assert "[chunk:E11" not in prompt
 
 
 def test_graph_abstains_when_no_evidence_exists() -> None:
@@ -191,6 +287,79 @@ def test_graph_suppresses_answer_with_forged_citation() -> None:
     assert result["status"] == "completed"
     assert result["citations"] == []
     assert "未通过服务端校验" in result["answer"]
+
+
+def test_graph_repairs_invalid_citation_once_without_user_retry() -> None:
+    calls = 0
+
+    async def repairing_answerer(query, evidence, messages=None):
+        nonlocal calls
+        calls += 1
+        source = evidence[0]
+        if calls == 1:
+            return "第一稿引用不存在 [chunk:forged]。", [
+                CitationClaim("forged", "p1", 99)
+            ]
+        assert any(item.get("role") == "answer_repair" for item in (messages or []))
+        return f"修复后的结论 [chunk:{source.chunk_id}]。", [
+            CitationClaim(source.chunk_id, source.paper_id, source.physical_page)
+        ]
+
+    result = _run(build_agent_graph(EvidenceRetriever(), repairing_answerer))
+
+    assert calls == 2
+    assert result["status"] == "completed"
+    assert result["answer_repair_attempted"] is True
+    assert result["answer_repair_succeeded"] is True
+    assert result["citations"][0].chunk_id == "c1"
+
+
+def test_graph_applies_final_budget_and_keeps_tool_call_result_pair_in_model_context() -> None:
+    captured_messages: list[dict] = []
+
+    async def capturing_answerer(query, evidence, messages=None):
+        captured_messages.extend(messages or [])
+        source = evidence[0]
+        return f"工具证据已进入回答 [chunk:{source.chunk_id}]。", [
+            CitationClaim(source.chunk_id, source.paper_id, source.physical_page)
+        ]
+
+    evidence = Evidence("c1", "p1", "测试论文", 4, "论文方法证据。")
+    graph = build_agent_graph(EvidenceRetriever(), capturing_answerer)
+    result = asyncio.run(
+        graph.ainvoke(
+            {
+                "user_id": "u1",
+                "query": "方法是什么？",
+                "selected_paper_ids": ["p1"],
+                "tool_mode_active": True,
+                "pre_retrieved_evidence": [evidence],
+                "tool_context_entries": [
+                    {
+                        "kind": "call",
+                        "tool_call_id": "call-1",
+                        "tool": "search_current_paper",
+                        "content": '{"query":"方法"}',
+                    },
+                    {
+                        "kind": "result",
+                        "tool_call_id": "call-1",
+                        "tool": "search_current_paper",
+                        "content": '{"status":"succeeded"}',
+                    },
+                ],
+                "context_budget": {"hard_limit": 3000},
+            },
+            {"recursion_limit": 8},
+        )
+    )
+
+    tool_messages = [
+        item for item in captured_messages if item.get("role") == "tool_context"
+    ]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"].count('"tool_call_id": "call-1"') == 2
+    assert result["context_usage"]["final_input_tokens"] <= 3000
 
 
 def test_secondary_support_grader_cannot_replace_a_valid_cited_answer() -> None:

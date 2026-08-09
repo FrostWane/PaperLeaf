@@ -325,9 +325,16 @@ async def embed_discovery_texts(
 
     if not texts or not model_router.has_provider("embedding"):
         return None
+    from .embedding_contract import configured_embedding_contract
+
+    contract = configured_embedding_contract(config, model_router)
+    if contract is None:
+        return None
     from langchain_openai import OpenAIEmbeddings
 
     async def invoke(provider: Any) -> list[list[float]]:
+        if provider.embedding_model != contract.model:
+            raise RuntimeError("EMBEDDING_CONTRACT_MISMATCH")
         kwargs: dict[str, Any] = {
             "model": provider.embedding_model,
             "api_key": provider.api_key,
@@ -345,7 +352,9 @@ async def embed_discovery_texts(
         return vectors
 
     try:
-        return await model_router.execute("embedding", invoke)
+        return await model_router.execute(
+            "embedding", invoke, required_model=contract.model
+        )
     except Exception:
         return None
 

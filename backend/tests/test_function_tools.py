@@ -10,11 +10,12 @@ from paperleaf_api.agent.function_tools import (
     ToolExecutionContext,
 )
 from paperleaf_api.agent.skills import SkillRegistry
-from paperleaf_api.agent_execution import execute_agent_run
+from paperleaf_api.agent_execution import _selection_scope_is_locked, execute_agent_run
 from paperleaf_api.config import settings
+from paperleaf_api.model_runtime import ModelRuntimeError
 from paperleaf_api.rag.answer_quality import AnswerQualityPolicy
 from paperleaf_api.rag.citations import CitationClaim, Evidence
-from paperleaf_api.repository import MemoryRepository, PaperArtifactRecord
+from paperleaf_api.repository import MemoryRepository, PaperArtifactRecord, PaperRecord
 
 
 class SequencePlanner:
@@ -56,6 +57,14 @@ class SelectingPlanner(SequencePlanner):
 
     async def select_skill(self, **_kwargs) -> str:
         return self.selected
+
+
+def test_selection_scope_defaults_to_same_page_and_requires_explicit_expansion() -> None:
+    assert _selection_scope_is_locked("这些讲了什么？") is True
+    assert _selection_scope_is_locked("只解释选中的原文") is True
+    assert _selection_scope_is_locked("不要扩展成全文总结") is True
+    assert _selection_scope_is_locked("结合全文解释这段原文") is False
+    assert _selection_scope_is_locked("Explain this using the whole paper") is False
 
 
 async def _context(repository: MemoryRepository, skill_name: str, *, web: bool = False):
@@ -107,6 +116,34 @@ def test_native_read_tool_uses_trusted_scope_and_persists_audit() -> None:
         assert record.status == "succeeded"
         assert record.tool_name == "search_current_paper"
         assert "user_id" not in record.arguments and "paper_ids" not in record.arguments
+
+    asyncio.run(scenario())
+
+
+def test_verified_selection_locks_tool_evidence_to_bound_physical_page() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        retriever = FakeRetriever()
+        planner = SequencePlanner(
+            PlannerDecision(
+                (ToolCallRequest("call-1", "search_current_paper", {"query": "全文"}),)
+            ),
+            PlannerDecision(),
+        )
+        harness = FunctionToolHarness(
+            repository, retriever, UnusedRouter(), planner=planner
+        )
+        context = replace(
+            await _context(repository, "paper_qa"),
+            verified_selection_page=1,
+            selection_scope_locked=True,
+        )
+        result = await harness.run("这些讲了什么？", context)
+
+        assert result.evidence == []
+        assert result.tool_mode_active is False
+        assert result.fallback_reason == "tool_outputs_not_usable"
+        assert result.calls[0]["status"] == "succeeded"
 
     asyncio.run(scenario())
 
@@ -213,6 +250,58 @@ def test_page_tool_cannot_read_paper_outside_trusted_scope() -> None:
         record = next(iter(repository.agent_tool_calls.values()))
         assert record.status == "failed"
         assert record.error_code == "TOOL_PERMISSION_DENIED"
+
+    asyncio.run(scenario())
+
+
+def test_page_tool_resolves_unique_trusted_title_to_current_paper_id() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        repository.papers["p1"] = PaperRecord(
+            id="p1",
+            owner_id="u1",
+            title="DeepDTA",
+            authors=[],
+            year=2018,
+            abstract=None,
+            doi=None,
+            arxiv_id=None,
+            filename="deepdta.pdf",
+            storage_key="papers/u1/p1.pdf",
+            mime_type="application/pdf",
+            size_bytes=1024,
+            sha256="page-tool-paper",
+            page_count=1,
+        )
+        repository.paper_pages["p1"] = {1: "服务端验证后的第一页原文。"}
+        planner = SequencePlanner(
+            PlannerDecision(
+                (
+                    ToolCallRequest(
+                        "page-title-alias",
+                        "get_page_text",
+                        {"paper_id": "DeepDTA", "physical_page": 1},
+                    ),
+                )
+            ),
+            PlannerDecision(),
+        )
+        harness = FunctionToolHarness(
+            repository, FakeRetriever(), UnusedRouter(), planner=planner
+        )
+        context = replace(
+            await _context(repository, "trace_original"),
+            scope_paper_titles=("DeepDTA",),
+            selection_scope_locked=True,
+            verified_selection_page=1,
+        )
+
+        result = await harness.run("解释选文", context)
+
+        assert [item.chunk_id for item in result.evidence] == ["page:p1:p1"]
+        record = next(iter(repository.agent_tool_calls.values()))
+        assert record.status == "succeeded"
+        assert result.calls[0]["argument_resolution"] == "trusted_current_paper_title"
 
     asyncio.run(scenario())
 
@@ -384,8 +473,119 @@ def test_provider_without_native_function_calling_falls_back_cleanly() -> None:
         result = await harness.run("方法", await _context(repository, "paper_qa"))
 
         assert result.provider_supported is False
+        assert result.native_function_calling_attempted is True
+        assert result.tool_mode_active is False
         assert result.fallback_reason == "provider_without_native_function_calling"
         assert repository.agent_tool_calls == {}
+
+    asyncio.run(scenario())
+
+
+def test_all_failed_or_rejected_calls_do_not_activate_tool_mode() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        planner = SequencePlanner(
+            PlannerDecision((ToolCallRequest("bad", "unknown_tool", {}),)),
+            PlannerDecision(),
+        )
+        harness = FunctionToolHarness(
+            repository, FakeRetriever(), UnusedRouter(), planner=planner
+        )
+
+        result = await harness.run("解释方法", await _context(repository, "paper_qa"))
+
+        assert result.native_function_calling_attempted is True
+        assert result.calls[0]["status"] == "rejected"
+        assert result.tool_mode_active is False
+        assert result.usable_evidence is False
+        assert result.fallback_reason == "tool_outputs_not_usable"
+
+    asyncio.run(scenario())
+
+
+def test_explicit_openalex_request_uses_scoped_titles_when_model_omits_tool_call() -> None:
+    class FakeMcpGateway:
+        async def call(self, name: str, arguments: dict) -> dict:
+            assert name == "mcp__academic__search_openalex"
+            return {
+                "source": "OpenAlex",
+                "available": True,
+                "cached": False,
+                "results": [
+                    {
+                        "external_id": f"openalex:{arguments['query']}",
+                        "title": f"Related to {arguments['query']}",
+                        "year": 2026,
+                    }
+                ],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        planner = SequencePlanner(PlannerDecision())
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=planner,
+            mcp_gateway=FakeMcpGateway(),
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("DeepDTA", "AttentionDTA"),
+        )
+
+        result = await harness.run(
+            "请只调用 OpenAlex 查找集合相关论文，不使用本地文献库。", context
+        )
+
+        assert result.native_function_calling_attempted is True
+        assert result.explicit_source_fallback_used is True
+        assert result.usable_external_context is True
+        assert result.tool_mode_active is True
+        assert [item["tool"] for item in result.calls] == [
+            "mcp__academic__search_openalex",
+            "mcp__academic__search_openalex",
+        ]
+        assert all(item["status"] == "succeeded" for item in result.calls)
+        assert len(repository.agent_tool_calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_later_planner_timeout_preserves_completed_tool_audit_and_evidence() -> None:
+    class TimeoutAfterFirstCallPlanner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def decide(self, **_kwargs) -> PlannerDecision:
+            self.calls += 1
+            if self.calls == 1:
+                return PlannerDecision(
+                    (ToolCallRequest("kept-call", "search_current_paper", {"query": "方法"}),)
+                )
+            raise ModelRuntimeError("MODEL_TIMEOUT", [])
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=TimeoutAfterFirstCallPlanner(),
+        )
+
+        result = await harness.run(
+            "这篇论文的方法是什么？", await _context(repository, "paper_qa")
+        )
+
+        assert result.native_function_calling_attempted is True
+        assert result.tool_mode_active is True
+        assert result.fallback_reason == "tool_planner_model_timeout"
+        assert len(result.calls) == 1
+        assert result.calls[0]["status"] == "succeeded"
+        assert [item.chunk_id for item in result.evidence] == ["p1:p2:c0"]
+        assert len(repository.agent_tool_calls) == 1
 
     asyncio.run(scenario())
 
@@ -396,7 +596,7 @@ def test_function_tool_evidence_is_reused_by_agent_graph_without_duplicate_retri
 
         async def ainvoke(self, initial, _config):
             self.initial = initial
-            evidence = list(initial["pre_retrieved_evidence"])
+            evidence = list(initial.get("pre_retrieved_evidence", []))
             return {
                 "status": "completed",
                 "answer": "论文使用了服务端验证的方法 [chunk:p1:p2:c0]。",
@@ -469,5 +669,199 @@ def test_function_tool_evidence_is_reused_by_agent_graph_without_duplicate_retri
         assert run is not None and run.status == "completed"
         assert run.harness_trace["function_calling"] == "native"
         assert run.tool_steps == 1
+
+    asyncio.run(scenario())
+
+
+def test_rejected_function_tool_falls_back_to_legacy_retrieval_in_agent_run() -> None:
+    class FallbackGraph:
+        initial = None
+
+        def __init__(self, retriever):
+            self.retriever = retriever
+
+        async def ainvoke(self, initial, _config):
+            self.initial = initial
+            evidence = list(initial.get("pre_retrieved_evidence", []))
+            if not initial.get("tool_mode_active", False):
+                evidence = await self.retriever(
+                    type(
+                        "Request",
+                        (),
+                        {
+                            "user_id": initial["user_id"],
+                            "paper_ids": initial["selected_paper_ids"],
+                        },
+                    )()
+                )
+            return {
+                "status": "completed",
+                "answer": "兼容检索仍返回可信证据 [chunk:p1:p2:c0]。",
+                "retrieved_evidence": evidence,
+                "citations": [CitationClaim("p1:p2:c0", "p1", 2)],
+                "evidence_quality": {
+                    "grade": "sufficient",
+                    "answer_support_grade": "supported",
+                    "answer_support_confidence": 1.0,
+                    "reason_code": "answer_supported",
+                },
+                "tool_steps": initial["tool_steps"],
+                "stage_timings_ms": initial["stage_timings_ms"],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session("u1", "工具降级", "paper", "p1", None)
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "解释论文方法",
+            "fallback-client",
+            "fallback-hash",
+            {
+                "type": "paper",
+                "paper_ids": ["p1"],
+                "web_enabled": False,
+                "client_context": {"paper_id": "p1"},
+                "harness": {
+                    "context_engine_enabled": True,
+                    "skills_enabled": True,
+                    "function_tools_enabled": True,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token is not None
+        retriever = FakeRetriever()
+        harness = FunctionToolHarness(
+            repository,
+            retriever,
+            UnusedRouter(),
+            planner=SequencePlanner(
+                PlannerDecision((ToolCallRequest("rejected", "unknown_tool", {}),)),
+                PlannerDecision(),
+            ),
+        )
+        graph = FallbackGraph(retriever)
+
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=replace(
+                settings,
+                context_engine_enabled=True,
+                skills_enabled=True,
+                function_tools_enabled=True,
+            ),
+            skill_registry=SkillRegistry.default(),
+            function_tool_harness=harness,
+        )
+
+        assert graph.initial is not None
+        assert graph.initial.get("tool_mode_active", False) is False
+        assert graph.initial.get("pre_retrieved_evidence", []) == []
+        assert [item["kind"] for item in graph.initial["tool_context_entries"]] == [
+            "call",
+            "result",
+        ]
+        assert "TOOL_NOT_ALLOWED" in graph.initial["tool_context_entries"][1]["content"]
+        assert len(retriever.requests) == 1
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert run.harness_trace["native_function_calling_attempted"] is True
+        assert run.harness_trace["tool_output_used"] is False
+        assert run.harness_trace["function_fallback_reason"] == "tool_outputs_not_usable"
+        assert next(iter(repository.agent_tool_calls.values())).status == "rejected"
+
+    asyncio.run(scenario())
+
+
+def test_verified_selection_is_forced_into_skill_context_and_evidence() -> None:
+    class SelectionGraph:
+        initial = None
+
+        async def ainvoke(self, initial, _config):
+            self.initial = initial
+            evidence = list(initial["selection_evidence"])
+            return {
+                "status": "completed",
+                "answer": "选文说明了服务端验证的方法 [chunk:p1:p2:c0]。",
+                "retrieved_evidence": evidence,
+                "citations": [CitationClaim("p1:p2:c0", "p1", 2)],
+                "evidence_quality": {
+                    "grade": "sufficient",
+                    "answer_support_grade": "supported",
+                    "answer_support_confidence": 1.0,
+                    "reason_code": "answer_supported",
+                },
+                "tool_steps": initial["tool_steps"],
+                "stage_timings_ms": initial["stage_timings_ms"],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session("u1", "选文解释", "paper", "p1", None)
+        selected = "这是服务端验证后的论文证据。"
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "这些讲了什么？",
+            "selection-client",
+            "selection-hash",
+            {
+                "type": "paper",
+                "paper_ids": ["p1"],
+                "web_enabled": False,
+                "client_context": {
+                    "paper_id": "p1",
+                    "physical_page": 2,
+                    "selected_text": selected,
+                    "selected_text_hash": "trusted-by-api",
+                },
+                "harness": {
+                    "context_engine_enabled": True,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token is not None
+        retriever = FakeRetriever()
+        harness = FunctionToolHarness(
+            repository, retriever, UnusedRouter(), planner=SequencePlanner()
+        )
+        graph = SelectionGraph()
+
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=replace(
+                settings,
+                context_engine_enabled=True,
+                skills_enabled=True,
+                function_tools_enabled=False,
+            ),
+            skill_registry=SkillRegistry.default(),
+            function_tool_harness=harness,
+        )
+
+        assert graph.initial is not None
+        assert graph.initial["selected_skill"] == "paper_qa"
+        assert graph.initial["resolved_references"]["selected_text"] == selected
+        assert graph.initial["selection_evidence"][0].physical_page == 2
+        assert retriever.requests[0].query == selected
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert run.context_snapshot["resolved_references"]["selected_text"] == selected
+        assert run.harness_trace["skill_route_source"] == "verified_selection_override"
 
     asyncio.run(scenario())

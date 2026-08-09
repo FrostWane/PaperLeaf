@@ -125,23 +125,103 @@ class SkillRegistry:
         # 内部说明污染 Skill 分类。
         user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
         normalized = user_query.casefold()
-        if any(marker in normalized for marker in ("原文", "哪一页", "出处", "怎么写")):
-            selected = "trace_original"
-        elif intent == "comparison" or any(marker in normalized for marker in ("比较", "对比")):
-            selected = "compare_papers"
-        elif any(marker in normalized for marker in ("验证", "核实", "是否真的", "支持吗")):
-            selected = "verify_claim"
-        elif any(marker in normalized for marker in ("结构图", "脑图", "研究逻辑")):
-            selected = "build_research_map"
-        elif any(marker in normalized for marker in ("总结", "概括", "讲了什么")):
-            selected = "summarize_paper"
-        elif web_enabled and any(
-            marker in normalized for marker in ("相关论文", "搜索论文", "最新研究")
-        ):
+        explicit_web_discovery = web_enabled and (
+            any(
+                marker in normalized
+                for marker in (
+                    "相关论文",
+                    "相关新论文",
+                    "近期公开论文",
+                    "最新研究",
+                    "找一批",
+                    "openalex",
+                    "semantic scholar",
+                    "arxiv",
+                )
+            )
+            or bool(re.search(r"(?:查找|搜索|检索).{0,24}(?:论文|研究)", normalized))
+        )
+        if explicit_web_discovery:
             selected = "find_related_papers"
+        elif "传统方法" in normalized and "有何不同" in normalized:
+            selected = "paper_qa"
+        elif intent == "comparison" or any(
+            marker in normalized for marker in ("比较", "对比", "有何不同", "有什么不同")
+        ):
+            selected = "compare_papers"
+        elif any(
+            marker in normalized
+            for marker in (
+                "验证",
+                "核实",
+                "是否真的",
+                "支持吗",
+                "可靠吗",
+                "成立吗",
+                "消融",
+                "证明",
+                "提升了多少",
+                "实验支持",
+                "相互矛盾",
+            )
+        ):
+            selected = "verify_claim"
+        elif any(marker in normalized for marker in ("结构图", "脑图", "研究逻辑", "研究脉络")):
+            selected = "build_research_map"
+        elif "为什么" in normalized and "原文" not in normalized:
+            selected = "paper_qa"
+        elif any(
+            marker in normalized
+            for marker in (
+                "原文",
+                "哪一页",
+                "出处",
+                "怎么写",
+                "这一页",
+                "这里",
+                "这张表",
+                "这个公式",
+                "输入维度",
+                "数据集",
+            )
+        ):
+            selected = "trace_original"
+        elif any(marker in normalized for marker in ("总结", "概括")):
+            selected = "summarize_paper"
         else:
             selected = "paper_qa"
+        if scope == "collection" and selected in {
+            "paper_qa",
+            "summarize_paper",
+            "trace_original",
+        }:
+            selected = "compare_papers"
         definition = self.get(selected)
         if scope == "library" and selected == "trace_original":
             return self.get("paper_qa")
         return definition
+
+
+def route_verified_selection(registry: SkillRegistry, query: str) -> SkillDefinition:
+    """已验证选文的 Harness 强制路由，模型不能改写其证据范围。"""
+
+    normalized = query.casefold()
+    if any(
+        marker in normalized
+        for marker in (
+            "验证",
+            "核实",
+            "支持吗",
+            "可靠吗",
+            "是否正确",
+            "有证据",
+            "数字",
+            "创新",
+        )
+    ):
+        name = "verify_claim"
+    elif any(marker in normalized for marker in ("概括", "总结", "讲了什么", "翻译")):
+        name = "paper_qa"
+    else:
+        name = "trace_original"
+    return registry.get(name)

@@ -23,6 +23,7 @@ const RealPdfDocument = dynamic(
 );
 
 type AssistantView = "ask" | "summary" | "structure";
+type SelectedPassage = { paperId: string; page: number; text: string; hash: string };
 
 const tabItems: { id: MobilePane; label: string; icon: typeof FileText }[] = [
   { id: "pdf", label: "论文", icon: FileText },
@@ -80,6 +81,11 @@ function caretRangeAtPoint(x: number, y: number): Range | null {
   return fallback;
 }
 
+async function hashSelectedText(text: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function translationStatusLabel(translation: PaperTranslation): string {
   if (translation.status === "queued") return "等待后台处理";
   if (translation.status === "running") return `正在翻译 · ${translation.completedPages}/${translation.totalPages} 页`;
@@ -96,7 +102,7 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const fallbackPaper = papers.find((item) => item.id === paperId) ?? papers[0];
   const [paper, setPaper] = useState<Paper | null>(isReal ? null : fallbackPaper);
   const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage ?? (demo ? 2 : 1)));
-  const [selectedText, setSelectedText] = useState("");
+  const [selectedPassage, setSelectedPassage] = useState<SelectedPassage | null>(null);
   const [mobilePane, setMobilePane] = useState<MobilePane>("pdf");
   const [assistantView, setAssistantView] = useState<AssistantView>("ask");
   const [summary, setSummary] = useState<PaperSummary | null>(null);
@@ -130,12 +136,22 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   const [translationRefresh, setTranslationRefresh] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const selectionStartRef = useRef<Range | null>(null);
+  const selectionVersionRef = useRef(0);
   const lastPersistedZoomRef = useRef(100);
   const focusRestoreRef = useRef({ left: true, assistant: true });
   const setSelectedPaperId = useWorkspaceStore((state) => state.setSelectedPaperId);
   const libraryHref = demo ? "/library?demo=1" : "/library";
   const activeTranslationId = translation?.id;
   const activeTranslationStatus = translation?.status;
+  const activeSelection = selectedPassage?.paperId === paperId && selectedPassage.page === currentPage ? selectedPassage : null;
+
+  useEffect(() => {
+    const version = ++selectionVersionRef.current;
+    queueMicrotask(() => {
+      if (selectionVersionRef.current !== version) return;
+      setSelectedPassage((current) => current && (current.paperId !== paperId || current.page !== currentPage) ? null : current);
+    });
+  }, [currentPage, paperId]);
 
   useEffect(() => {
     if (!isReal) return;
@@ -397,7 +413,8 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
   }
 
   function goToPage(page: number) {
-    setSelectedText("");
+    selectionVersionRef.current += 1;
+    setSelectedPassage(null);
     setCurrentPage(Math.max(1, Math.min(paper?.pages || page, page)));
   }
 
@@ -521,7 +538,15 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
           selection.addRange(range);
           text = selection.toString().replace(/\s+/g, " ").trim();
         }
-        if (text.length >= 2 && container.contains(selection?.anchorNode ?? null) && container.contains(selection?.focusNode ?? null)) setSelectedText(text.slice(0, 4000));
+        if (text.length >= 2 && container.contains(selection?.anchorNode ?? null) && container.contains(selection?.focusNode ?? null)) {
+          const normalizedText = text.slice(0, 4000);
+          const selectionPage = currentPage;
+          const version = ++selectionVersionRef.current;
+          void hashSelectedText(normalizedText).then((hash) => {
+            if (selectionVersionRef.current !== version) return;
+            setSelectedPassage({ paperId, page: selectionPage, text: normalizedText, hash });
+          });
+        }
       }}>{pdfPage}<div className="citation-rail" aria-hidden="true">{evidencePages.map((page) => <span key={page} className={page === currentPage ? "active" : ""} />)}</div></div>
       {translation && translationVisible && <aside className="translation-page" aria-label={`${translationLanguageLabel(translation.targetLanguage)}译文，第 ${currentPage} 页`}>
         <div className="translation-page-head"><div><span>{translationLanguageLabel(translation.targetLanguage)}译文</span><strong>第 {currentPage} / {paper.pages || translation.totalPages} 页</strong></div><div className="translation-page-nav"><button type="button" className="icon-button" aria-label="上一页译文" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}><ChevronLeft size={16} /></button><button type="button" className="icon-button" aria-label="下一页译文" disabled={Boolean((paper.pages || translation.totalPages) && currentPage >= (paper.pages || translation.totalPages))} onClick={() => goToPage(currentPage + 1)}><ChevronRight size={16} /></button><button type="button" className="icon-button" aria-label="关闭译文双栏" onClick={() => setTranslationVisible(false)}><X size={16} /></button></div></div>
@@ -538,15 +563,22 @@ export function PaperWorkspace({ paperId = "attention", demo = false, initialPag
     <div className="reader-status">
       <strong>{evidencePages.includes(currentPage) ? "证据页已定位" : "论文页面"}</strong>
       <span>第 {currentPage} 页</span>
-      {selectedText && <span className="reader-selection-status" role="status" title={selectedText}>
-        <Quote size={13} aria-hidden="true" />已选原文 {selectedText.length} 字
-        <button type="button" aria-label="清除已选原文" title="清除已选原文" onClick={() => setSelectedText("")}><X size={12} aria-hidden="true" /></button>
+      {activeSelection && <span className="reader-selection-status" role="status" title={activeSelection.text}>
+        <Quote size={13} aria-hidden="true" />已选原文 {activeSelection.text.length} 字
+        <button type="button" aria-label="清除已选原文" title="清除已选原文" onClick={() => { selectionVersionRef.current += 1; setSelectedPassage(null); }}><X size={12} aria-hidden="true" /></button>
       </span>}
       <span className="reader-source-status">{translation && translationVisible ? `原文 + ${translationLanguageLabel(translation.targetLanguage)}译文` : isReal ? "原始 PDF" : "模拟文本层"}</span>
     </div>
   </section>;
 
-  const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} clientContext={{ route: `/library/${paperId}`, paperId, paperTitle: paper.title, physicalPage: currentPage, selectedText: selectedText || undefined, activePanel: "chat" }} onOpenCitation={(citation) => openCitation(citation.page)} />;
+  const selectionVersion = selectionVersionRef.current;
+  const askContent = <ChatWorkspace compact binding={{ type: "paper", paperId }} scopeLabel={paper.title} dataSource={dataSource} disabled={!readyForArtifacts} webEnabled={webEnabled} clientContext={{ route: `/library/${paperId}`, paperId, paperTitle: paper.title, physicalPage: currentPage, selectedText: activeSelection?.text, selectedTextHash: activeSelection?.hash, activePanel: "chat" }} onClientContextAccepted={(context) => {
+    if (!context.selectedText || selectionVersionRef.current !== selectionVersion) return;
+    setSelectedPassage((current) => {
+      if (!current) return current;
+      return current.paperId === context.paperId && current.page === context.physicalPage && current.hash === context.selectedTextHash ? null : current;
+    });
+  }} onOpenCitation={(citation) => openCitation(citation.page)} />;
 
   const summaryContent = <div className="artifact-panel">
     <div className="artifact-heading"><div><h3>论文概览</h3></div>{summary?.status !== "failed" && !artifactMessage && <button className="secondary-button" disabled={!readyForArtifacts || Boolean(busy) || summary?.status === "processing"} onClick={() => void generateSummary(Boolean(summary))}>{busy === "summary" ? "正在提交" : summary?.status === "processing" ? "后台生成中" : summary ? "重新生成" : "生成概览"}</button>}</div>

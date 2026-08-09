@@ -437,6 +437,21 @@ export interface AdminHarnessMetrics {
       lastErrorCode?: string;
     }>;
   };
+  embedding: {
+    configured: boolean;
+    provider?: string;
+    model?: string;
+    dimensions?: number;
+    revision?: number;
+    total: number;
+    ready: number;
+    readyCurrent: number;
+    stale: number;
+    unavailable: number;
+    failed: number;
+    fallbackRuns: number;
+    fallbackReasons: Record<string, number>;
+  };
   privacy: { contentCollected: boolean; identifiersCollected: boolean };
 }
 

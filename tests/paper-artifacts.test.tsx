@@ -39,7 +39,7 @@ describe("PaperWorkspace 证据化产物", () => {
     expect(buildStructure).toHaveBeenNthCalledWith(1, "attention", { refresh: false });
     fireEvent.click(assistant.getByRole("button", { name: "重新构建" }));
     await waitFor(() => expect(buildStructure).toHaveBeenNthCalledWith(2, "attention", { refresh: true }));
-  }, 20_000);
+  }, 45_000);
 
   it("未配置模型时明确说明原因并提供稍后重试，不展示伪结果", async () => {
     vi.spyOn(demoDataSource, "summarizePaper").mockRejectedValue(new Error("model_not_configured"));

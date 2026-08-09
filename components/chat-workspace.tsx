@@ -200,6 +200,7 @@ export function ChatWorkspace({
   dataSource = getDataSource(),
   onBindingChange,
   onOpenCitation,
+  onClientContextAccepted,
   clientContext,
 }: {
   binding: ChatBinding;
@@ -210,6 +211,7 @@ export function ChatWorkspace({
   dataSource?: PaperLeafDataSource;
   onBindingChange?: (binding: ChatBinding) => void;
   onOpenCitation?: (citation: Citation) => void;
+  onClientContextAccepted?: (context: ChatClientContext) => void;
   clientContext?: ChatClientContext;
 }) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -469,6 +471,7 @@ export function ChatWorkspace({
         webEnabled,
         ...(shouldSubmitClientContext ? { clientContext: effectiveClientContext } : {}),
       });
+      if (effectiveClientContext.selectedText) onClientContextAccepted?.(effectiveClientContext);
       submissionAttemptRef.current = null;
       const timestamp = new Date().toISOString();
       const pendingRun: AgentRunSnapshot = { runId: submission.runId, sessionId: session.id, status: "pending", cancelRequested: false, answer: "", citations: [], createdAt: timestamp, updatedAt: timestamp };

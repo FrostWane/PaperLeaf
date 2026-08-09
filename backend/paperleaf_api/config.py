@@ -97,6 +97,7 @@ class Settings:
     chat_model: str = os.getenv("PAPERLEAF_CHAT_MODEL", "gpt-4.1-mini")
     vision_model: str | None = os.getenv("PAPERLEAF_VISION_MODEL")
     embedding_enabled: bool = _bool("PAPERLEAF_EMBEDDING_ENABLED", True)
+    embedding_provider: str = os.getenv("PAPERLEAF_EMBEDDING_PROVIDER", "auto")
     embedding_model: str = os.getenv("PAPERLEAF_EMBEDDING_MODEL", "text-embedding-3-small")
     embedding_dimensions: int | None = (
         int(os.environ["PAPERLEAF_EMBEDDING_DIMENSIONS"])
@@ -104,17 +105,34 @@ class Settings:
         else None
     )
     embedding_batch_size: int = int(os.getenv("PAPERLEAF_EMBEDDING_BATCH_SIZE", "8"))
+    embedding_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_EMBEDDING_TIMEOUT_SECONDS", "90")
+    )
+    embedding_batch_attempts: int = int(
+        os.getenv("PAPERLEAF_EMBEDDING_BATCH_ATTEMPTS", "2")
+    )
+    embedding_index_revision: int = int(
+        os.getenv("PAPERLEAF_EMBEDDING_INDEX_REVISION", "1")
+    )
     fallback_openai_api_key: str | None = os.getenv("PAPERLEAF_FALLBACK_OPENAI_API_KEY")
     fallback_openai_base_url: str = os.getenv(
         "PAPERLEAF_FALLBACK_OPENAI_BASE_URL", "https://api.openai.com/v1"
     )
-    fallback_chat_model: str = os.getenv("PAPERLEAF_FALLBACK_CHAT_MODEL", "gpt-4.1-mini")
+    # 备用端点可能只提供 Embedding（例如本地 Ollama）。聊天模型必须显式配置，
+    # 避免把仅向量端点误当成回答服务并制造一次无意义的失败尝试。
+    fallback_chat_model: str = os.getenv("PAPERLEAF_FALLBACK_CHAT_MODEL", "")
     fallback_vision_model: str | None = os.getenv("PAPERLEAF_FALLBACK_VISION_MODEL")
     fallback_embedding_enabled: bool = _bool("PAPERLEAF_FALLBACK_EMBEDDING_ENABLED", True)
     fallback_embedding_model: str = os.getenv(
         "PAPERLEAF_FALLBACK_EMBEDDING_MODEL", "text-embedding-3-small"
     )
     model_timeout_seconds: float = float(os.getenv("PAPERLEAF_MODEL_TIMEOUT_SECONDS", "30"))
+    agent_answer_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_AGENT_ANSWER_TIMEOUT_SECONDS", "90")
+    )
+    agent_answer_retry_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_AGENT_ANSWER_RETRY_TIMEOUT_SECONDS", "60")
+    )
     translation_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS", "90")
     )
@@ -174,13 +192,25 @@ class Settings:
         )
         if any(value < 0 or value > 1 for value in quality_values):
             raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
-        if self.model_timeout_seconds <= 0 or self.translation_timeout_seconds <= 0:
+        if (
+            self.model_timeout_seconds <= 0
+            or self.agent_answer_timeout_seconds <= 0
+            or self.agent_answer_retry_timeout_seconds <= 0
+            or self.translation_timeout_seconds <= 0
+        ):
             raise RuntimeError("模型超时必须大于 0")
         if (
-            max(self.model_timeout_seconds, self.translation_timeout_seconds)
+            max(
+                self.model_timeout_seconds,
+                self.agent_answer_timeout_seconds,
+                self.agent_answer_retry_timeout_seconds,
+                self.translation_timeout_seconds,
+            )
             > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS
         ):
             raise RuntimeError("模型单次超时不能超过 120 秒，以确保明显短于 Worker 租约")
+        if self.agent_answer_retry_timeout_seconds > self.agent_answer_timeout_seconds:
+            raise RuntimeError("回答紧凑重试超时不能大于首次回答超时")
         artifact_timeouts = (
             self.artifact_timeout_seconds,
             self.artifact_retry_timeout_seconds,
@@ -203,6 +233,12 @@ class Settings:
             raise RuntimeError("模型断路器冷却时间必须大于 0")
         if not 1 <= self.embedding_batch_size <= 64:
             raise RuntimeError("向量批次大小必须位于 1 到 64 之间")
+        if not 1 <= self.embedding_timeout_seconds <= MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS:
+            raise RuntimeError("向量批次超时必须位于 1 到 120 秒之间")
+        if not 1 <= self.embedding_batch_attempts <= 3:
+            raise RuntimeError("向量批次尝试次数必须位于 1 到 3 之间")
+        if self.embedding_provider not in {"auto", "primary", "fallback"}:
+            raise RuntimeError("向量 Provider 仅支持 auto、primary 或 fallback")
         if self.redis_timeout_seconds <= 0 or self.redis_timeout_seconds > 5:
             raise RuntimeError("Redis 超时必须位于 0 到 5 秒之间")
         if self.agent_rate_limit_requests < 1:

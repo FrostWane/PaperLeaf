@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -50,7 +51,13 @@ from .arxiv_service import (
     search_related_arxiv,
 )
 from .config import Settings, settings
-from .discovery import build_discovery_profile, collect_recommendations, with_indexed_text
+from .discovery import (
+    build_discovery_profile,
+    collect_recommendations,
+    embed_discovery_texts,
+    with_indexed_text,
+)
+from .embedding_contract import configured_embedding_contract, vector_matches_contract
 from .harness_observability import aggregate_harness_metrics
 from .mcp_gateway import McpGateway, McpGatewayError
 from .model_runtime import build_model_router
@@ -121,6 +128,7 @@ from .schemas import (
     UserUpdate,
 )
 from .security import csrf_matches, new_csrf_token, new_session_token, verify_password
+from .selection_context import match_selection_to_page
 from .storage import ObjectStorage, create_storage, parse_byte_range, validate_pdf
 
 _PUBLIC_AGENT_NODES = {
@@ -182,7 +190,7 @@ class AppServices:
         )
         self.checkpointer: Optional[Any] = None
         self._agent_tasks: dict[str, asyncio.Task[Any]] = {}
-        self._agent_tasks_lock = asyncio.Lock()
+        self._agent_tasks_lock = threading.RLock()
 
     def build_agent_graph(self, checkpointer: Optional[Any] = None) -> Any:
         """生产重建 Graph 时保持与 App 相同的模型和质量策略。"""
@@ -205,16 +213,16 @@ class AppServices:
         )
 
     async def register_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
-        async with self._agent_tasks_lock:
+        with self._agent_tasks_lock:
             self._agent_tasks[run_id] = task
 
     async def unregister_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
-        async with self._agent_tasks_lock:
+        with self._agent_tasks_lock:
             if self._agent_tasks.get(run_id) is task:
                 self._agent_tasks.pop(run_id, None)
 
     async def cancel_agent_task(self, run_id: str) -> bool:
-        async with self._agent_tasks_lock:
+        with self._agent_tasks_lock:
             task = self._agent_tasks.get(run_id)
             if not task or task.done():
                 return False
@@ -345,7 +353,7 @@ def _collection_tree(records: list[Any], memberships: dict[str, list[str]]) -> l
 
 
 def _citation_dicts(
-    items: list[Any], evidence: list[Evidence] | None = None
+    items: list[Any], evidence: Optional[list[Evidence]] = None
 ) -> list[dict[str, Any]]:
     evidence_by_chunk = {item.chunk_id: item for item in evidence or []}
     result: list[dict[str, Any]] = []
@@ -367,7 +375,10 @@ def _agent_run_read(record: Any) -> AgentRunRead:
     summary = record.result_summary or {}
     error_code = getattr(record, "error_code", None)
     safe_errors = {
-        "UNVERIFIED_ANSWER": "回答未通过证据核验，请调整问题后重试",
+        "UNVERIFIED_ANSWER": "系统已自动修复一次，但回答仍未通过证据核验，请稍后重试",
+        "CONTEXT_BUDGET_EXCEEDED": (
+            "本轮上下文过长，系统压缩后仍超出模型容量，请新建会话或缩小问题范围"
+        ),
         "EVIDENCE_SCOPE_VIOLATION": "检索证据超出当前会话范围，运行已安全停止",
         "AGENT_RUN_FAILED": "问答运行失败，请稍后重试",
         "AGENT_RUN_CANCELLED": "问答运行已取消",
@@ -430,6 +441,22 @@ def _agent_run_read(record: Any) -> AgentRunRead:
     )
 
 
+async def _embed_memory_value(
+    config: Settings, model_router: Any, value: str
+) -> tuple[Optional[list[float]], Optional[str]]:
+    contract = configured_embedding_contract(config, model_router)
+    if contract is None:
+        return None, None
+    try:
+        values = await embed_discovery_texts(config, model_router, [value])
+    except Exception:
+        return None, None
+    vector = values[0] if values else None
+    if not vector or not vector_matches_contract(vector, contract):
+        return None, None
+    return vector, contract.fingerprint
+
+
 def create_app(
     config: Settings = settings,
     *,
@@ -444,6 +471,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await services.repository.ensure_admin(
             config.bootstrap_admin_email, config.bootstrap_admin_password
+        )
+        contract = configured_embedding_contract(config, services.model_router)
+        await services.repository.mark_embedding_contract_stale(
+            contract.fingerprint if contract else None
         )
         if config.is_demo:
             try:
@@ -608,6 +639,9 @@ def create_app(
         _: Annotated[None, Depends(csrf_protected)],
     ) -> MemoryRead:
         value = normalize_memory_value(payload.value)
+        embedding, embedding_fingerprint = await _embed_memory_value(
+            config, services.model_router, value
+        )
         record = MemoryItemRecord(
             id=str(uuid.uuid4()),
             user_id=user.id,
@@ -618,6 +652,8 @@ def create_app(
             source_kind="manual",
             source_excerpt="由用户在设置页手动创建",
             pinned=payload.pinned,
+            embedding=embedding,
+            embedding_fingerprint=embedding_fingerprint,
         )
         try:
             created = await services.repository.create_memory_item(record)
@@ -653,6 +689,11 @@ def create_app(
             next_type = str(memory_type or existing.type)
             next_value = str(changes.get("value", existing.value))
             changes["normalized_hash"] = memory_hash(next_type, next_value)
+            embedding, embedding_fingerprint = await _embed_memory_value(
+                config, services.model_router, next_value
+            )
+            changes["embedding"] = embedding
+            changes["embedding_fingerprint"] = embedding_fingerprint
         try:
             updated = await services.repository.update_owned_memory(
                 memory_id, user.id, **changes
@@ -859,7 +900,8 @@ def create_app(
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         run_limit = 5000
         tool_limit = 10000
-        runs, calls, memory, servers = await asyncio.gather(
+        contract = configured_embedding_contract(config, services.model_router)
+        runs, calls, memory, servers, embedding_counts = await asyncio.gather(
             services.repository.list_agent_runs_for_observability(
                 since, limit=run_limit
             ),
@@ -868,12 +910,23 @@ def create_app(
             ),
             services.repository.memory_observability_counts(),
             services.mcp_gateway.list_servers(),
+            services.repository.embedding_contract_counts(
+                contract.fingerprint if contract else None
+            ),
         )
         return aggregate_harness_metrics(
             runs,
             calls,
             memory,
             servers,
+            embedding={
+                "configured": contract is not None,
+                "provider": contract.provider if contract else None,
+                "model": contract.model if contract else None,
+                "dimensions": contract.dimensions if contract else None,
+                "revision": contract.revision if contract else None,
+                **embedding_counts,
+            },
             window_hours=hours,
             limit_reached=len(runs) >= run_limit or len(calls) >= tool_limit,
         )
@@ -1041,7 +1094,7 @@ def create_app(
     @app.get("/api/v1/papers", response_model=list[PaperRead])
     async def list_papers(
         user: Annotated[UserRecord, Depends(current_user)],
-        collection_id: str | None = None,
+        collection_id: Optional[str] = None,
         unfiled: bool = False,
     ) -> list[PaperRead]:
         if collection_id is not None and unfiled:
@@ -1962,18 +2015,27 @@ def create_app(
                 )
             normalized_selection = " ".join(selected_text.split())
             supplied_hash = str(client_context.get("selected_text_hash", "")).lower()
-            actual_hash = hashlib.sha256(normalized_selection.encode("utf-8")).hexdigest()
-            if supplied_hash and supplied_hash != actual_hash:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "选中文字校验失败")
             page_text = await services.repository.get_owned_paper_page_text(
                 context_paper.id, int(physical_page), user.id
             )
-            if page_text is None or normalized_selection not in " ".join(page_text.split()):
+            selection_match = match_selection_to_page(normalized_selection, page_text or "")
+            legacy_hash = hashlib.sha256(normalized_selection.encode("utf-8")).hexdigest()
+            if supplied_hash and supplied_hash not in {
+                legacy_hash,
+                selection_match.canonical_hash,
+            }:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "选中文字校验失败")
+            if not selection_match.accepted:
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY, "选中文字不属于当前 PDF 页"
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "无法在当前 PDF 页核对这段文字，请缩小选择范围后重试",
                 )
-            client_context["selected_text"] = normalized_selection
-            client_context["selected_text_hash"] = actual_hash
+            client_context["selected_text"] = selection_match.canonical_text
+            client_context["selected_text_hash"] = selection_match.canonical_hash
+            client_context["selection_match"] = {
+                "mode": selection_match.mode,
+                "score": selection_match.score,
+            }
         scope_snapshot = {
             "type": chat_session.type,
             "paper_id": chat_session.paper_id,

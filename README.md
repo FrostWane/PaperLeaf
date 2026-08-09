@@ -110,9 +110,13 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_OPENAI_BASE_URL` | 兼容接口根地址 |
 | `PAPERLEAF_CHAT_MODEL` | 问答与总结模型 |
 | `PAPERLEAF_EMBEDDING_ENABLED` | 当前服务是否提供 Embeddings；聊天服务不支持时必须关闭 |
+| `PAPERLEAF_EMBEDDING_PROVIDER` | 向量空间来源：`primary`、`fallback` 或 `auto` |
 | `PAPERLEAF_EMBEDDING_MODEL` | 向量模型 |
 | `PAPERLEAF_EMBEDDING_DIMENSIONS` | 向量维度，必须与模型输出一致 |
+| `PAPERLEAF_EMBEDDING_INDEX_REVISION` | 主动变更切分或向量契约时递增的索引修订号 |
 | `PAPERLEAF_EMBEDDING_BATCH_SIZE` | 文档向量化单批 Chunk 数，默认 8；本地模型不应一次提交整篇论文 |
+| `PAPERLEAF_EMBEDDING_TIMEOUT_SECONDS` | 单个向量批次超时，默认 90 秒，适配本地模型冷启动与并发抖动 |
+| `PAPERLEAF_EMBEDDING_BATCH_ATTEMPTS` | 单个向量批次的受控尝试次数，默认 2；整篇校验通过后才写入 |
 | `PAPERLEAF_VISION_MODEL` | 可选；低文本页 OCR 使用的视觉模型 |
 | `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用服务 Key；不配置则只使用主服务 |
 | `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用 OpenAI-compatible 根地址 |
@@ -120,6 +124,8 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_FALLBACK_EMBEDDING_ENABLED` | 备用服务是否提供 Embeddings |
 | `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
 | `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
+| `PAPERLEAF_AGENT_ANSWER_TIMEOUT_SECONDS` | 最终回答首次生成超时，默认 90 秒 |
+| `PAPERLEAF_AGENT_ANSWER_RETRY_TIMEOUT_SECONDS` | 仅超时时使用的同证据紧凑重试超时，默认 60 秒 |
 | `PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS` | 单页全文翻译超时，默认 90 秒 |
 | `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括首次生成超时，默认 120 秒 |
 | `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台全文概括精简证据重试超时，默认 90 秒 |
@@ -153,11 +159,13 @@ PAPERLEAF_FALLBACK_OPENAI_BASE_URL=https://your-compatible-service.example/v1
 PAPERLEAF_FALLBACK_CHAT_MODEL=
 PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
 PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
+PAPERLEAF_EMBEDDING_PROVIDER=fallback
 PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
+PAPERLEAF_EMBEDDING_INDEX_REVISION=1
 ```
 
-`PAPERLEAF_EMBEDDING_DIMENSIONS` 必须等于所选模型的真实输出维度；服务不接受
-`dimensions` 参数时可以留空。保存配置后只需重建 API 和 Worker，随后可在文献库勾选
+`PAPERLEAF_EMBEDDING_DIMENSIONS` 必须等于所选模型的真实输出维度，不能留空；
+`PAPERLEAF_EMBEDDING_PROVIDER` 应明确指向实际向量服务。保存配置后只需重建 API 和 Worker，随后可在文献库勾选
 多篇论文并执行“重新识别与索引”，也可在单篇“文献设置”中重新处理。向量可用后，管理页的“AI 能力
 状态”会显示向量检索可用，新问答的 RAG 轨迹会记录实际使用的召回通道。
 本地模型建议保留默认批次 8，避免把整篇论文作为一次长请求提交。
@@ -170,7 +178,9 @@ PAPERLEAF_FALLBACK_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
 PAPERLEAF_FALLBACK_CHAT_MODEL=
 PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
 PAPERLEAF_FALLBACK_EMBEDDING_MODEL=qwen3-embedding:0.6b
+PAPERLEAF_EMBEDDING_PROVIDER=fallback
 PAPERLEAF_EMBEDDING_DIMENSIONS=1024
+PAPERLEAF_EMBEDDING_INDEX_REVISION=1
 PAPERLEAF_EMBEDDING_BATCH_SIZE=8
 ```
 

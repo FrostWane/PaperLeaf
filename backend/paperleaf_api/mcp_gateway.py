@@ -30,6 +30,7 @@ ALLOWED_REMOTE_TOOLS = {
     "get_academic_metadata",
 }
 NORMALIZED_PREFIX = "mcp__academic__"
+MCP_SCHEMA_REVISION = 1
 
 MCP_CALLS = Counter(
     "paperleaf_mcp_tool_calls_total",
@@ -72,7 +73,9 @@ class McpToolDefinition:
 def _error_code(error: Exception) -> str:
     if isinstance(error, McpGatewayError):
         return error.code
-    if isinstance(error, TimeoutError | asyncio.TimeoutError | httpx.TimeoutException):
+    if isinstance(  # noqa: UP038
+        error, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)
+    ):
         return "MCP_TIMEOUT"
     if isinstance(error, httpx.HTTPError):
         return "MCP_TRANSPORT_ERROR"
@@ -233,10 +236,18 @@ class McpGateway:
         self.runtime_store = runtime_store
         self.config = config
         self._http_client: httpx.AsyncClient | None = None
-        self._client_lock = asyncio.Lock()
+        self._client_lock: asyncio.Lock | None = None
+        self._client_loop: asyncio.AbstractEventLoop | None = None
+
+    def _lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._client_lock is None or self._client_loop is not loop:
+            self._client_lock = asyncio.Lock()
+            self._client_loop = loop
+        return self._client_lock
 
     async def _client(self) -> httpx.AsyncClient:
-        async with self._client_lock:
+        async with self._lock():
             if self._http_client is None or self._http_client.is_closed:
                 self._http_client = httpx.AsyncClient(
                     timeout=httpx.Timeout(self.config.mcp_timeout_seconds),
@@ -246,7 +257,7 @@ class McpGateway:
             return self._http_client
 
     async def close(self) -> None:
-        async with self._client_lock:
+        async with self._lock():
             if self._http_client is not None and not self._http_client.is_closed:
                 await self._http_client.aclose()
             self._http_client = None
@@ -350,11 +361,20 @@ class McpGateway:
         remote_name = normalized_name.removeprefix(NORMALIZED_PREFIX)
         if remote_name not in ALLOWED_REMOTE_TOOLS:
             raise McpGatewayError("MCP_TOOL_NOT_ALLOWED", "MCP 工具不在白名单")
+        # 启用状态、熔断和 Endpoint 白名单必须先于缓存读取。停用的服务不能借旧缓存
+        # 继续返回结果，恢复后也使用新的配置命名空间。
+        server = await self._server(require_enabled=True)
         cache_key = json.dumps(
-            {"tool": remote_name, "arguments": arguments},
+            {
+                "tool": remote_name,
+                "arguments": arguments,
+                "config_revision": int(getattr(server, "cache_revision", 1) or 1),
+                "schema_revision": MCP_SCHEMA_REVISION,
+            },
             sort_keys=True,
             ensure_ascii=False,
             separators=(",", ":"),
+            default=str,
         )
         cached = await self.runtime_store.get_cached_json("mcp-academic", cache_key)
         if cached is not None:
