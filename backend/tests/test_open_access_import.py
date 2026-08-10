@@ -12,9 +12,7 @@ from paperleaf_api.storage import LocalObjectStorage
 
 def test_open_access_import_rejects_private_network_pdf_url() -> None:
     with pytest.raises(ValueError, match="不允许的网络"):
-        asyncio.run(
-            arxiv_import._assert_public_https_url("https://127.0.0.1/paper.pdf")
-        )
+        asyncio.run(arxiv_import._assert_public_https_url("https://127.0.0.1/paper.pdf"))
 
 
 def test_open_access_import_persists_revalidated_doi_metadata(
@@ -39,6 +37,8 @@ def test_open_access_import_persists_revalidated_doi_metadata(
                 "publication": "Open Journal",
                 "doi": "10.1000/verified.paper",
                 "abstract": "Verified metadata.",
+                "source": "OpenAlex",
+                "external_id": "W123",
                 "open_access_pdf_url": "https://publisher.example/open.pdf",
             },
             "u1",
@@ -51,5 +51,6 @@ def test_open_access_import_persists_revalidated_doi_metadata(
         assert paper.doi == "10.1000/verified.paper"
         assert paper.arxiv_id is None
         assert paper.publication == "Open Journal"
+        assert paper.academic_external_ids == {"openalex": "W123"}
 
     asyncio.run(scenario())

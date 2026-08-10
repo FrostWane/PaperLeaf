@@ -160,7 +160,14 @@ def _external_metadata_from_contexts(
             if not title:
                 continue
             doi = str(raw.get("doi") or "").strip()
-            key = doi.casefold() or _normalized_title(title)
+            external_id = str(raw.get("external_id") or "").strip()
+            arxiv_id = str(raw.get("arxiv_id") or "").strip()
+            key = (
+                doi.casefold()
+                or (f"{source.casefold()}:{external_id.casefold()}" if external_id else "")
+                or (f"arxiv:{arxiv_id.casefold()}" if arxiv_id else "")
+                or _normalized_title(title)
+            )
             if not key or key in seen:
                 continue
             seen.add(key)
@@ -172,8 +179,13 @@ def _external_metadata_from_contexts(
                     "year": year,
                     "publication": raw.get("publication") or raw.get("journal_ref"),
                     "doi": doi,
+                    "external_id": external_id,
+                    "arxiv_id": arxiv_id,
                     "url": raw.get("url") or raw.get("pdf_url"),
                     "source": source,
+                    "abstract": raw.get("abstract") or raw.get("abstract_preview"),
+                    "relevance_score": raw.get("relevance_score"),
+                    "matched_scope_title": raw.get("matched_scope_title"),
                 }
             )
 
@@ -245,18 +257,48 @@ def _requested_recommendation_count(query: str) -> int | None:
 
 
 def _requested_year_range(query: str) -> tuple[int, int] | None:
-    # 内部上下文可能包含旧年份；只从当前用户短句提取硬过滤。
+    # Context Engine 会把本轮最终继承后的年份写成“目标发表年份”，因此这里
+    # 优先读取这个结构化标签；不能扫描整段上下文，否则上一轮的旧年份会混入。
+    inherited = re.findall(
+        r"目标发表年份：\s*((?:19|20)\d{2})(?:\s*[–—-]\s*((?:19|20)\d{2}))?",
+        query,
+    )
+    if inherited:
+        start, end = inherited[-1]
+        return int(start), int(end or start)
     user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
-    years = [
-        int(value)
-        for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
-    ]
+    years = [int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)]
     return (min(years), max(years)) if years else None
 
 
 _RECOMMENDATION_STOPWORDS = {
-    "about", "analysis", "based", "for", "from", "in", "of", "on", "the",
-    "to", "towards", "using", "via", "with", "研究", "方法", "模型", "系统",
+    "and",
+    "about",
+    "analysis",
+    "based",
+    "for",
+    "from",
+    "in",
+    "learning",
+    "method",
+    "methods",
+    "model",
+    "models",
+    "new",
+    "of",
+    "on",
+    "the",
+    "prediction",
+    "study",
+    "to",
+    "towards",
+    "using",
+    "via",
+    "with",
+    "研究",
+    "方法",
+    "模型",
+    "系统",
 }
 
 
@@ -264,9 +306,7 @@ def _recommendation_terms(value: str) -> set[str]:
     normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
     return {
         token.casefold()
-        for token in re.findall(
-            r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,}", normalized
-        )
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,}", normalized)
         if token.casefold() not in _RECOMMENDATION_STOPWORDS
     }
 
@@ -286,13 +326,11 @@ def _external_recommendation_reason(
     if any(term in lowered for term in ("review", "survey", "tools")):
         focus = "可用于补充该方向的方法谱系与研究背景"
     elif any(
-        term in lowered
-        for term in ("benchmark", "evaluation", "dataset", "corpus", "database")
+        term in lowered for term in ("benchmark", "evaluation", "dataset", "corpus", "database")
     ):
         focus = "补充了数据或评测视角，适合检查当前集合结论的适用范围"
     elif any(
-        term in lowered
-        for term in ("framework", "model", "method", "learning", "prediction")
+        term in lowered for term in ("framework", "model", "method", "learning", "prediction")
     ):
         focus = "提供了可比较的方法路线，适合扩展当前集合的相关工作覆盖"
     else:
@@ -380,19 +418,13 @@ def _ensure_external_recommendation_shape(
         )
     ]
     successful_sources = list(
-        dict.fromkeys(
-            str(item["source"])
-            for item in observations
-            if item.get("available") is True
-        )
+        dict.fromkeys(str(item["source"]) for item in observations if item.get("available") is True)
     )
     if len(filtered) < requested:
         # 只要外部服务成功，就用清洗后的真实条目生成结果；不足时明确少于
         # 请求数量，不能让模型用本地参考文献、其他年份或猜测补齐。
         if not successful_sources and observations:
-            failed_sources = list(
-                dict.fromkeys(str(item["source"]) for item in observations)
-            )
+            failed_sources = list(dict.fromkeys(str(item["source"]) for item in observations))
             error_codes = {
                 str(item.get("error_code") or "").casefold()
                 for item in observations
@@ -439,8 +471,7 @@ def _ensure_external_recommendation_shape(
             lines.extend(
                 [
                     "",
-                    f"{sources} 已{constraint}完成联网检索，"
-                    "本轮没有返回符合条件且尚未入库的论文。",
+                    f"{sources} 已{constraint}完成联网检索，本轮没有返回符合条件且尚未入库的论文。",
                     "我没有用当前文献库参考文献、其他年份或模型猜测补齐数量。",
                     "",
                     "> 你可以扩大年份范围，或补充更具体的研究主题和任务关键词后再检索。",
@@ -472,8 +503,7 @@ def _ensure_external_recommendation_shape(
         year = year_value if re.fullmatch(r"\d{4}", year_value) else "未提供"
         link = _external_link(item.get("doi"), item.get("url"))
         lines.append(
-            f"| {index} | **{title}** | {year} | "
-            f"{publication} | {link} | {item['source']} |"
+            f"| {index} | **{title}** | {year} | {publication} | {link} | {item['source']} |"
         )
     lines.extend(["", "### 推荐理由", ""])
     for index, item in enumerate(selected, start=1):
@@ -782,9 +812,7 @@ def build_configured_answerer(
                 raise
             if circuit_open:
                 retry_after = float(
-                    getattr(router, "circuit_retry_after_seconds", lambda _purpose: 0.0)(
-                        "answer"
-                    )
+                    getattr(router, "circuit_retry_after_seconds", lambda _purpose: 0.0)("answer")
                 )
                 if retry_after > 0:
                     await asyncio.sleep(min(retry_after + 0.05, 30.0))
@@ -801,9 +829,7 @@ def build_configured_answerer(
                 invoke_compact,
                 timeout_seconds=config.agent_answer_retry_timeout_seconds,
             )
-        answer_text = _normalize_answer_citations(
-            str(response), active_evidence, citation_aliases
-        )
+        answer_text = _normalize_answer_citations(str(response), active_evidence, citation_aliases)
         answer_text = _ensure_external_recommendation_shape(
             answer_text,
             query,
@@ -869,7 +895,6 @@ class AgentRuntime:
                 "tool_steps": state.get("tool_steps", 0),
             }
         return {"status": "running", "error": None, "tool_steps": state.get("tool_steps", 0)}
-
     async def retrieve_library(self, state: AgentState) -> AgentState:
         if state.get("status") == "failed":
             return {}
@@ -938,9 +963,7 @@ class AgentRuntime:
         started_at = time.perf_counter()
         budget = dict(state.get("context_budget", {}))
         hard_limit = int(budget.get("hard_limit", 0) or 0)
-        protected = {
-            str(item.chunk_id) for item in state.get("selection_evidence", [])
-        }
+        protected = {str(item.chunk_id) for item in state.get("selection_evidence", [])}
         if hard_limit > 0:
             envelope = enforce_context_envelope(
                 query=state["query"],
@@ -981,10 +1004,13 @@ class AgentRuntime:
                 )
                 or parameter_count >= 3
             )
-            accepts_scope_titles = any(
-                item.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
-                for item in parameters
-            ) or parameter_count >= 4
+            accepts_scope_titles = (
+                any(
+                    item.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+                    for item in parameters
+                )
+                or parameter_count >= 4
+            )
         except (TypeError, ValueError):
             accepts_history = False
             accepts_scope_titles = False
@@ -1229,10 +1255,7 @@ class AgentRuntime:
         if not state.get("citation_validation_passed"):
             return state
         state.update(await self.grade_answer_support(state))
-        if (
-            str(state.get("evidence_quality", {}).get("answer_support_grade", ""))
-            == "unsupported"
-        ):
+        if str(state.get("evidence_quality", {}).get("answer_support_grade", "")) == "unsupported":
             state.update(await self.suppress_unsupported_answer(state))
             return state
         state.update(await self.finalize(state))
@@ -1317,10 +1340,7 @@ def build_agent_graph(
             if (
                 not state.get("retrieved_evidence")
                 and state.get("web_enabled")
-                and not (
-                    state.get("tool_mode_active")
-                    and state.get("tool_context_entries")
-                )
+                and not (state.get("tool_mode_active") and state.get("tool_context_entries"))
             )
             else "generate"
         ),
@@ -1341,9 +1361,7 @@ def build_agent_graph(
         "grade_answer_support",
         lambda state: (
             "suppress"
-            if str(
-                state.get("evidence_quality", {}).get("answer_support_grade", "")
-            )
+            if str(state.get("evidence_quality", {}).get("answer_support_grade", ""))
             == "unsupported"
             else "finalize"
         ),

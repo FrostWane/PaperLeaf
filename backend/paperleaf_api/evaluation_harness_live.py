@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import secrets
 import time
 from collections import deque
@@ -33,6 +34,10 @@ from .runtime_store import create_runtime_store
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 OPEN_ARXIV_IDS = ("1706.03762", "1810.04805", "2005.11401")
 COLLECTION_NAME = "[系统验收] Harness 真实闭环"
+_RECOMMENDATION_ROW_RE = re.compile(
+    r"^\|\s*\d+\s*\|\s*\*\*(.+?)\*\*\s*\|\s*(\d{4}|未提供)\s*\|",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,7 @@ class LiveScenario:
     require_citations: bool = True
     require_native_tools: bool = False
     expected_tools: tuple[str, ...] = ()
+    expected_attempted_tools: tuple[str, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
     group: str | None = None
 
@@ -103,6 +109,32 @@ class SubmissionLimiter:
                     self.timestamps.append(now)
                     return
                 await asyncio.sleep(max(0.05, self.window_seconds - (now - self.timestamps[0])))
+
+
+def _recommendation_rows(answer: str) -> list[tuple[str, str]]:
+    return [
+        (" ".join(title.split()).casefold(), year)
+        for title, year in _RECOMMENDATION_ROW_RE.findall(answer)
+    ]
+
+
+def _grade_recommendation_sequence(results: list[LiveRunResult]) -> None:
+    """验证连续推荐不重复，并确保明确年份约束落实到用户可见表格。"""
+
+    seen_titles: set[str] = set()
+    for item in results:
+        rows = _recommendation_rows(item.answer)
+        current_titles = {title for title, _year in rows}
+        if current_titles & seen_titles:
+            item.failures.append("recommendation_batch_repeated")
+        requested_years = {
+            value
+            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", item.question)
+        }
+        if requested_years and any(year not in requested_years for _title, year in rows):
+            item.failures.append("recommendation_year_constraint_lost")
+        item.structural_pass = not item.failures
+        seen_titles.update(current_titles)
 
 
 class LiveHarness:
@@ -414,7 +446,8 @@ class LiveHarness:
         expected_attempts = [
             call
             for call in result.tool_calls
-            if str(call.get("tool", "")) in scenario.expected_tools
+            if str(call.get("tool", ""))
+            in (scenario.expected_tools or scenario.expected_attempted_tools)
         ]
         controlled_external_failure = bool(
             expected_attempts
@@ -453,6 +486,10 @@ class LiveHarness:
             for call in result.tool_calls
             if call.get("status") == "succeeded"
         }
+        attempted_tools = {str(call.get("tool", "")) for call in result.tool_calls}
+        for expected_tool in scenario.expected_attempted_tools:
+            if expected_tool not in attempted_tools:
+                result.failures.append(f"expected_tool_not_attempted:{expected_tool}")
         for expected_tool in scenario.expected_tools:
             if expected_tool not in succeeded_tools and not controlled_external_failure:
                 result.failures.append(f"expected_tool_missing:{expected_tool}")
@@ -645,6 +682,9 @@ def build_scenarios(
         expected_tools,
         forbidden_tools,
     ) in enumerate(discovery_pairs):
+        # 默认的“联网推荐”要求 Harness 尝试 OpenAlex，但允许 Provider 超时后
+        # 自动降级至 arXiv；显式指定数据源时才要求该来源成功或受控失败。
+        required_success_tools = () if pair_index == 0 else expected_tools
         group_id = f"discovery-followup-{pair_index}"
         first = LiveScenario(
             index=index,
@@ -657,7 +697,8 @@ def build_scenarios(
             web_enabled=True,
             require_citations=False,
             require_native_tools=True,
-            expected_tools=expected_tools,
+            expected_tools=required_success_tools,
+            expected_attempted_tools=expected_tools,
             forbidden_tools=forbidden_tools,
             group=group_id,
         )
@@ -673,7 +714,8 @@ def build_scenarios(
             web_enabled=True,
             require_citations=False,
             require_native_tools=True,
-            expected_tools=expected_tools,
+            expected_tools=required_success_tools,
+            expected_attempted_tools=expected_tools,
             forbidden_tools=forbidden_tools,
             group=group_id,
         )
@@ -881,7 +923,9 @@ async def run_live(
                     item = await harness.run_scenario(scenario, session_id=session_id)
                     session_id = item.session_id
                     group_results.append(item)
-                return group_results
+            if group and group[0].category == "function_mcp":
+                _grade_recommendation_sequence(group_results)
+            return group_results
 
         for batch_start in range(0, len(normal_groups), harness.concurrency):
             batch = normal_groups[batch_start : batch_start + harness.concurrency]

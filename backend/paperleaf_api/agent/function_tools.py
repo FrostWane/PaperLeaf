@@ -13,7 +13,9 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from ..config import settings
 from ..crossref_service import CrossrefClient, crossref_client
+from ..discovery import embed_discovery_texts
 from ..mcp_gateway import McpGateway, McpGatewayError
 from ..model_runtime import ModelRouter, ModelRuntimeError
 from ..rag.citations import Evidence
@@ -22,7 +24,13 @@ from ..repository import (
     AgentToolCallRecord,
     Repository,
 )
-from .discovery_policy import academic_source_policy
+from .discovery_policy import academic_source_policy, requested_paper_count
+from .recommendation_quality import (
+    entity_keys,
+    filter_and_deduplicate_candidates,
+    passes_relevance_gate,
+    rank_academic_candidates,
+)
 from .skills import SkillDefinition
 from .tools import (
     ArxivSearch,
@@ -34,15 +42,13 @@ from .tools import (
 
 _SCALAR_TYPES = (int, float, bool)
 _TIMEOUT_ERRORS = (TimeoutError, asyncio.TimeoutError)
-_AUTO_DISCOVERY_SINGLE_USE_TOOLS = frozenset(
-    {
-        "search_library",
-        "search_arxiv",
-        "find_related_papers",
-        "mcp__academic__search_openalex",
-        "mcp__academic__search_semantic_scholar",
-    }
-)
+_DISCOVERY_SOURCE_BY_TOOL = {
+    "search_library": "library",
+    "search_arxiv": "arxiv",
+    "find_related_papers": "arxiv",
+    "mcp__academic__search_openalex": "openalex",
+    "mcp__academic__search_semantic_scholar": "semantic_scholar",
+}
 _TITLE_STOPWORDS = frozenset(
     {
         "a",
@@ -70,9 +76,7 @@ def _title_terms(value: str) -> set[str]:
     normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
     return {
         token.casefold()
-        for token in re.findall(
-            r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,}", normalized
-        )
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,}", normalized)
         if token.casefold() not in _TITLE_STOPWORDS
     }
 
@@ -95,6 +99,21 @@ def _representative_scope_query(titles: tuple[str, ...], fallback: str) -> str:
     return candidates[best]
 
 
+def _discovery_year_range(query: str, task: dict[str, Any]) -> tuple[int | None, int | None]:
+    if task.get("year_from") is not None or task.get("year_to") is not None:
+        return task.get("year_from"), task.get("year_to")
+    inherited = re.findall(
+        r"目标发表年份：\s*((?:19|20)\d{2})(?:\s*[–—-]\s*((?:19|20)\d{2}))?",
+        query,
+    )
+    if inherited:
+        start, end = inherited[-1]
+        return int(start), int(end or start)
+    user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
+    years = [int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)]
+    return (min(years), max(years)) if years else (None, None)
+
+
 def _tool_context_preview(preview: dict[str, Any]) -> dict[str, Any]:
     """为模型上下文保留全部候选的书目信息，同时限制摘要和片段体积。"""
 
@@ -115,6 +134,13 @@ def _tool_context_preview(preview: dict[str, Any]) -> dict[str, Any]:
         "url",
         "open_access_pdf_url",
         "citation_count",
+        "work_type",
+        "publication_types",
+        "relevance_score",
+        "lexical_score",
+        "semantic_score",
+        "rerank_mode",
+        "matched_scope_title",
         "physical_page",
         "source",
     )
@@ -479,7 +505,9 @@ class OpenAIFunctionPlanner:
 
         try:
             response = await self.model_router.execute(
-                "answer", invoke, timeout_seconds=min(self.model_router.timeout_seconds, 15)
+                "answer",
+                invoke,
+                timeout_seconds=min(self.model_router.timeout_seconds, 15),
             )
         except ModelRuntimeError:
             return None
@@ -534,7 +562,9 @@ class OpenAIFunctionPlanner:
 
         try:
             response = await self.model_router.execute(
-                "answer", invoke, timeout_seconds=min(self.model_router.timeout_seconds, 20)
+                "answer",
+                invoke,
+                timeout_seconds=min(self.model_router.timeout_seconds, 20),
             )
         except ModelRuntimeError as error:
             # 认证、网络与模型故障由原 Agent Graph 使用既有错误处理；工具能力本身降级。
@@ -553,9 +583,7 @@ class OpenAIFunctionPlanner:
                     call_id=str(item.get("id") or f"model-call-{index + 1}"),
                     name=str(item.get("name", "")),
                     arguments=(
-                        dict(item.get("args", {}))
-                        if isinstance(item.get("args"), dict)
-                        else {}
+                        dict(item.get("args", {})) if isinstance(item.get("args"), dict) else {}
                     ),
                 )
             )
@@ -572,6 +600,10 @@ class ToolExecutionContext:
     current_paper_id: str | None
     web_enabled: bool
     scope_paper_titles: tuple[str, ...] = ()
+    scope_paper_texts: tuple[str, ...] = ()
+    excluded_recommendation_entities: frozenset[str] = frozenset()
+    previous_recommendation_entities: frozenset[str] = frozenset()
+    discovery_task: dict[str, Any] = field(default_factory=dict)
     verified_selection_page: int | None = None
     selection_scope_locked: bool = False
 
@@ -582,6 +614,11 @@ class ToolLoopResult:
     arxiv_candidates: list[dict[str, Any]] = field(default_factory=list)
     calls: list[dict[str, Any]] = field(default_factory=list)
     context_entries: list[dict[str, Any]] = field(default_factory=list)
+    exposed_recommendation_entities: list[str] = field(default_factory=list)
+    exposed_recommendation_entity_groups: list[tuple[str, ...]] = field(default_factory=list)
+    exposed_recommendation_candidates: list[tuple[str, tuple[str, ...]]] = field(
+        default_factory=list
+    )
     pending_action: dict[str, Any] | None = None
     provider_supported: bool = True
     native_function_calling_attempted: bool = False
@@ -596,9 +633,7 @@ class ToolLoopResult:
     @property
     def tool_mode_active(self) -> bool:
         return bool(
-            self.usable_evidence
-            or self.usable_external_context
-            or self.pending_action is not None
+            self.usable_evidence or self.usable_external_context or self.pending_action is not None
         )
 
 
@@ -608,6 +643,9 @@ class _ExecutedTool:
     evidence: tuple[Evidence, ...] = ()
     pending_action: dict[str, Any] | None = None
     arxiv_candidates: tuple[dict[str, Any], ...] = ()
+    exposed_entities: tuple[str, ...] = ()
+    exposed_entity_groups: tuple[tuple[str, ...], ...] = ()
+    exposed_candidates: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 class FunctionToolHarness:
@@ -625,6 +663,7 @@ class FunctionToolHarness:
     ) -> None:
         self.repository = repository
         self.retriever = retriever
+        self.model_router = model_router
         self.planner = planner or OpenAIFunctionPlanner(model_router)
         self.arxiv_search = arxiv_search or ArxivSearch()
         self.crossref = crossref or crossref_client
@@ -684,12 +723,10 @@ class FunctionToolHarness:
                     "该 DOI 暂未找到可安全下载的开放 PDF，本次没有执行导入。",
                     "TOOL_IMPORT_PDF_UNAVAILABLE",
                 )
-            requested_doi = str(candidate.get("doi", "")).casefold().removeprefix(
-                "https://doi.org/"
+            requested_doi = (
+                str(candidate.get("doi", "")).casefold().removeprefix("https://doi.org/")
             )
-            resolved_doi = str(resolved.get("doi", "")).casefold().removeprefix(
-                "https://doi.org/"
-            )
+            resolved_doi = str(resolved.get("doi", "")).casefold().removeprefix("https://doi.org/")
             if not requested_doi or requested_doi != resolved_doi:
                 return (
                     "DOI 元数据复核不一致，本次没有执行导入。",
@@ -709,7 +746,10 @@ class FunctionToolHarness:
             return "论文导入未完成，请检查候选信息后重试。", "TOOL_IMPORT_INVALID"
         except Exception:
             return "论文下载或保存暂时失败，请稍后重试。", "TOOL_IMPORT_FAILED"
-        return f"已导入《{getattr(paper, 'title', '公开论文')}》，后台正在解析和建立索引。", None
+        return (
+            f"已导入《{getattr(paper, 'title', '公开论文')}》，后台正在解析和建立索引。",
+            None,
+        )
 
     async def select_skill(
         self,
@@ -764,6 +804,10 @@ class FunctionToolHarness:
         # 已验证上下文会携带上一轮论文发现任务的来源约束。必须解析完整的
         # resolved_query，否则“改用 Semantic Scholar”后的年份追问会退回 OpenAlex。
         source_policy = academic_source_policy(query)
+        denied_source_tools = set(source_policy.denied_tools)
+        denied_source_tools.update(
+            str(value) for value in context.discovery_task.get("denied_sources", [])
+        )
         planner_results: list[dict[str, Any]] = []
         planner_results.append(
             {
@@ -790,7 +834,7 @@ class FunctionToolHarness:
         invalid_repairs: set[str] = set()
         max_steps = min(4, context.skill.manifest.max_tool_steps)
         automatic_calls = list(self._automatic_openalex_calls(query, context, schemas))
-        tool_call_counts: dict[str, int] = {}
+        source_call_counts: dict[str, int] = {}
 
         while result.steps < max_steps:
             if automatic_calls:
@@ -828,10 +872,8 @@ class FunctionToolHarness:
                 result.explicit_source_fallback_used = True
             batch: list[ToolCallRequest] = []
             for call in decision.calls[:3]:
-                if (
-                    call.name in _AUTO_DISCOVERY_SINGLE_USE_TOOLS
-                    and tool_call_counts.get(call.name, 0) >= 1
-                ):
+                source_key = _DISCOVERY_SOURCE_BY_TOOL.get(call.name)
+                if source_key is not None and source_call_counts.get(source_key, 0) >= 1:
                     continue
                 serialized = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
                 signature = f"{call.name}:{serialized}"
@@ -839,7 +881,8 @@ class FunctionToolHarness:
                     continue
                 seen_signatures.add(signature)
                 batch.append(call)
-                tool_call_counts[call.name] = tool_call_counts.get(call.name, 0) + 1
+                if source_key is not None:
+                    source_call_counts[source_key] = source_call_counts.get(source_key, 0) + 1
                 if result.steps + len(batch) >= max_steps:
                     break
             if not batch:
@@ -849,7 +892,7 @@ class FunctionToolHarness:
             executed = await asyncio.gather(
                 *(
                     self._record_rejection(call, context, "SOURCE_EXCLUDED_BY_USER")
-                    if call.name in source_policy.denied_tools
+                    if call.name in denied_source_tools
                     else self._execute_call(call, context)
                     for call in batch
                 ),
@@ -862,16 +905,21 @@ class FunctionToolHarness:
                         "tool_call_id": call.call_id,
                         "tool": call.name,
                         "content": json.dumps(
-                            call.arguments, ensure_ascii=False, sort_keys=True, default=str
+                            call.arguments,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            default=str,
                         ),
                     }
                 )
                 if isinstance(outcome, ValidationError):
                     # Schema 修复不计入“同一检索工具只执行一次”；允许模型用同一
                     # Tool 名称修正参数一次，但已执行、失败或被策略拒绝的调用仍计数。
-                    tool_call_counts[call.name] = max(
-                        0, tool_call_counts.get(call.name, 1) - 1
-                    )
+                    source_key = _DISCOVERY_SOURCE_BY_TOOL.get(call.name)
+                    if source_key is not None:
+                        source_call_counts[source_key] = max(
+                            0, source_call_counts.get(source_key, 1) - 1
+                        )
                     await self._record_invalid_arguments(call, context)
                     invalid_preview = {
                         "tool": call.name,
@@ -926,17 +974,13 @@ class FunctionToolHarness:
                         or call.name in {"search_arxiv", "find_related_papers"}
                     )
                 ):
-                    context_preview["scope_paper_count"] = len(
-                        context.scope_paper_titles
-                    )
+                    context_preview["scope_paper_count"] = len(context.scope_paper_titles)
                 result.context_entries.append(
                     {
                         "kind": "result",
                         "tool_call_id": call.call_id,
                         "tool": call.name,
-                        "content": json.dumps(
-                            context_preview, ensure_ascii=False, default=str
-                        ),
+                        "content": json.dumps(context_preview, ensure_ascii=False, default=str),
                     }
                 )
                 for evidence in outcome.evidence:
@@ -946,6 +990,11 @@ class FunctionToolHarness:
                     result.evidence.append(evidence)
                     result.usable_evidence = True
                 result.arxiv_candidates.extend(outcome.arxiv_candidates)
+                for entity in outcome.exposed_entities:
+                    if entity not in result.exposed_recommendation_entities:
+                        result.exposed_recommendation_entities.append(entity)
+                result.exposed_recommendation_entity_groups.extend(outcome.exposed_entity_groups)
+                result.exposed_recommendation_candidates.extend(outcome.exposed_candidates)
                 if outcome.arxiv_candidates or (
                     call.name.startswith("mcp__")
                     and bool(outcome.preview.get("items"))
@@ -975,15 +1024,16 @@ class FunctionToolHarness:
     ) -> tuple[ToolCallRequest, ...]:
         """未指定数据源的联网论文发现，确定性保留一次 OpenAlex 检索。"""
 
-        if (
-            not context.web_enabled
-            or context.skill.manifest.name != "find_related_papers"
-        ):
+        if not context.web_enabled or context.skill.manifest.name != "find_related_papers":
             return ()
-        user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
         source_policy = academic_source_policy(query)
+        task = context.discovery_task
+        requested_tools = set(source_policy.requested_tools)
+        denied_tools = set(source_policy.denied_tools)
+        requested_tools.update(str(value) for value in task.get("requested_sources", []))
+        denied_tools.update(str(value) for value in task.get("denied_sources", []))
         # 正向点名交给显式来源兜底；只有“排除某来源”时才确定性选择其他可用源。
-        if source_policy.requested_tools:
+        if requested_tools:
             return ()
         available = {
             str(item.get("function", {}).get("name", ""))
@@ -995,11 +1045,7 @@ class FunctionToolHarness:
             "mcp__academic__search_semantic_scholar",
         )
         tool = next(
-            (
-                name
-                for name in candidates
-                if name in available and name not in source_policy.denied_tools
-            ),
+            (name for name in candidates if name in available and name not in denied_tools),
             None,
         )
         if tool is None:
@@ -1007,14 +1053,18 @@ class FunctionToolHarness:
         search_query = _representative_scope_query(context.scope_paper_titles, query)
         if not search_query:
             return ()
-        years = [
-            int(value)
-            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
-        ]
-        arguments: dict[str, Any] = {"query": search_query, "limit": 8}
-        if years:
-            arguments["year_from"] = min(years)
-            arguments["year_to"] = max(years)
+        requested_count = int(
+            task.get("requested_count") or requested_paper_count(query, default=5) or 5
+        )
+        arguments: dict[str, Any] = {
+            "query": search_query,
+            "limit": min(10, max(8, requested_count * 2)),
+        }
+        year_from, year_to = _discovery_year_range(query, task)
+        if year_from is not None:
+            arguments["year_from"] = int(year_from)
+        if year_to is not None:
+            arguments["year_to"] = int(year_to)
         return (
             ToolCallRequest(
                 call_id="automatic-academic-1",
@@ -1047,6 +1097,11 @@ class FunctionToolHarness:
         }
         user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
         source_policy = academic_source_policy(query)
+        task = context.discovery_task
+        requested_tools = set(source_policy.requested_tools)
+        denied_tools = set(source_policy.denied_tools)
+        requested_tools.update(str(value) for value in task.get("requested_sources", []))
+        denied_tools.update(str(value) for value in task.get("denied_sources", []))
         target = next(
             (
                 name
@@ -1055,30 +1110,31 @@ class FunctionToolHarness:
                     "mcp__academic__search_semantic_scholar",
                     "search_arxiv",
                 )
-                if name in source_policy.requested_tools
-                and name not in source_policy.denied_tools
+                if name in requested_tools and name not in denied_tools
             ),
             None,
         )
         if target not in available:
             return ()
         search_terms = [
-            title.strip()[:240]
-            for title in context.scope_paper_titles
-            if title.strip()
+            title.strip()[:240] for title in context.scope_paper_titles if title.strip()
         ]
         if not search_terms:
             search_terms = [user_query.strip()[:240]]
-        years = [
-            int(value)
-            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
-        ]
+        year_from, year_to = _discovery_year_range(query, task)
+        requested_count = int(
+            task.get("requested_count") or requested_paper_count(query, default=5) or 5
+        )
         calls: list[ToolCallRequest] = []
         for title in search_terms:
-            arguments: dict[str, Any] = {"query": title, "limit": 5}
-            if years and target.startswith("mcp__academic__search_"):
-                arguments["year_from"] = min(years)
-                arguments["year_to"] = max(years)
+            arguments: dict[str, Any] = {
+                "query": title,
+                "limit": min(10, max(5, requested_count * 2)),
+            }
+            if year_from is not None and target.startswith("mcp__academic__search_"):
+                arguments["year_from"] = int(year_from)
+            if year_to is not None and target.startswith("mcp__academic__search_"):
+                arguments["year_to"] = int(year_to)
             signature = f"{target}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
             if signature in seen_signatures:
                 continue
@@ -1205,9 +1261,7 @@ class FunctionToolHarness:
                 content=preview,
                 token_count=estimated_tokens,
             )
-            stored = await self.repository.create_agent_tool_artifact(
-                artifact, context.claim_token
-            )
+            stored = await self.repository.create_agent_tool_artifact(artifact, context.claim_token)
             preview = {
                 "tool": spec.name,
                 "status": "succeeded",
@@ -1230,6 +1284,9 @@ class FunctionToolHarness:
             executed.evidence,
             executed.pending_action,
             executed.arxiv_candidates,
+            executed.exposed_entities,
+            executed.exposed_entity_groups,
+            executed.exposed_candidates,
         )
 
     async def _record_rejection(
@@ -1268,9 +1325,7 @@ class FunctionToolHarness:
         for key, value in list(call.arguments.items())[:20]:
             safe_key = str(key)[:80]
             sanitized[safe_key] = (
-                str(value)[:1000]
-                if not isinstance(value, _SCALAR_TYPES)
-                else value
+                str(value)[:1000] if not isinstance(value, _SCALAR_TYPES) else value
             )
         record = AgentToolCallRecord(
             id=str(uuid.uuid4()),
@@ -1401,9 +1456,32 @@ class FunctionToolHarness:
             response = await self.arxiv_search(
                 ArxivSearchInput(query=request.query, limit=request.limit)
             )
+            (
+                items,
+                filter_stats,
+                exposed,
+                exposed_groups,
+            ) = await self._prepare_recommendation_items(
+                [dict(item) for item in response.data if isinstance(item, dict)],
+                context,
+                source="arXiv",
+                limit=request.limit,
+                query_text=request.query,
+            )
             return _ExecutedTool(
-                {"source": "arXiv", "count": len(response.data), "items": response.data[:5]},
-                arxiv_candidates=tuple(response.data[:5]),
+                {
+                    "source": "arXiv",
+                    "count": len(items),
+                    "items": items,
+                    "filter_stats": filter_stats,
+                },
+                arxiv_candidates=tuple(items),
+                exposed_entities=exposed,
+                exposed_entity_groups=exposed_groups,
+                exposed_candidates=tuple(
+                    (str(item.get("title") or ""), group)
+                    for item, group in zip(items, exposed_groups)
+                ),
             )
         if name.startswith("mcp__academic__"):
             if self.mcp_gateway is None:
@@ -1416,14 +1494,35 @@ class FunctionToolHarness:
                     str(result.get("error_code") or "MCP_PROVIDER_UNAVAILABLE"),
                     "外部学术数据源暂不可用",
                 )
+            raw_items = result.get("results", [])
+            request_limit = int(getattr(parsed, "limit", 10) or 10)
+            (
+                items,
+                filter_stats,
+                exposed,
+                exposed_groups,
+            ) = await self._prepare_recommendation_items(
+                [dict(item) for item in raw_items if isinstance(item, dict)],
+                context,
+                source=str(result.get("source") or "学术搜索"),
+                limit=request_limit,
+                query_text=str(getattr(parsed, "query", "") or ""),
+            )
             return _ExecutedTool(
                 {
                     "source": result.get("source", "学术搜索"),
                     "available": result.get("available", True),
                     "cached": result.get("cached", False),
                     "error_code": result.get("error_code"),
-                    "items": result.get("results", [])[:10],
-                }
+                    "items": items,
+                    "filter_stats": filter_stats,
+                },
+                exposed_entities=exposed,
+                exposed_entity_groups=exposed_groups,
+                exposed_candidates=tuple(
+                    (str(item.get("title") or ""), group)
+                    for item, group in zip(items, exposed_groups)
+                ),
             )
         if name == "get_crossref_metadata":
             request = CrossrefToolInput.model_validate(parsed.model_dump())
@@ -1448,3 +1547,70 @@ class FunctionToolHarness:
                 }
             )
         raise RuntimeError("TOOL_IMPLEMENTATION_MISSING")
+
+    async def _prepare_recommendation_items(
+        self,
+        items: list[dict[str, Any]],
+        context: ToolExecutionContext,
+        *,
+        source: str,
+        limit: int,
+        query_text: str,
+    ) -> tuple[
+        list[dict[str, Any]],
+        dict[str, int | str],
+        tuple[str, ...],
+        tuple[tuple[str, ...], ...],
+    ]:
+        """过滤非论文与已见实体，并用标题和摘要对当前作用域做混合重排。"""
+
+        normalized = [{**item, "source": item.get("source") or source} for item in items]
+        excluded = set(context.excluded_recommendation_entities)
+        excluded.update(context.previous_recommendation_entities)
+        filtered, stats = filter_and_deduplicate_candidates(
+            normalized,
+            excluded_keys=excluded,
+        )
+        scope_texts = tuple(context.scope_paper_texts or context.scope_paper_titles)
+        has_scope_context = bool(scope_texts)
+        if not scope_texts and query_text.strip():
+            scope_texts = (query_text.strip()[:1000],)
+        embeddings = None
+        if filtered and scope_texts:
+            candidate_texts = [
+                f"{item.get('title', '')} {item.get('abstract', '')}"[:4000] for item in filtered
+            ]
+            try:
+                embeddings = await embed_discovery_texts(
+                    settings,
+                    self.model_router,
+                    [*candidate_texts, *scope_texts],
+                )
+            except Exception:
+                embeddings = None
+        requested_count = int(context.discovery_task.get("requested_count") or limit)
+        ranked = rank_academic_candidates(
+            filtered,
+            scope_texts,
+            embeddings=embeddings,
+        )
+        ranked_count = len(ranked)
+        if has_scope_context:
+            ranked = [item for item in ranked if passes_relevance_gate(item)]
+        relevance_filtered = ranked_count - len(ranked)
+        ranked = ranked[: min(10, max(1, min(int(limit), requested_count)))]
+        exposed: list[str] = []
+        exposed_groups: list[tuple[str, ...]] = []
+        for item in ranked:
+            group = tuple(sorted(entity_keys(item, source=source)))
+            exposed_groups.append(group)
+            for key in group:
+                if key not in exposed:
+                    exposed.append(key)
+        audit_stats: dict[str, int | str] = {
+            **stats,
+            "relevance_filtered": relevance_filtered,
+            "output": len(ranked),
+            "rerank_mode": (str(ranked[0].get("rerank_mode")) if ranked else "not_applicable"),
+        }
+        return ranked, audit_stats, tuple(exposed), tuple(exposed_groups)

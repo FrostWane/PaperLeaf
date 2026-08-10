@@ -113,6 +113,7 @@ class PaperRecord:
     sha256: str
     page_count: int | None
     publication: str | None = None
+    academic_external_ids: dict[str, str] = field(default_factory=dict)
     embedding_provider: str | None = None
     embedding_model: str | None = None
     embedding_dimensions: int | None = None
@@ -530,7 +531,11 @@ class Repository(Protocol):
     async def find_user_by_email(self, email: str) -> UserRecord | None: ...
     async def get_user(self, user_id: str) -> UserRecord | None: ...
     async def create_user(
-        self, email: str, password: str, role: UserRole, must_change_password: bool = True
+        self,
+        email: str,
+        password: str,
+        role: UserRole,
+        must_change_password: bool = True,
     ) -> UserRecord: ...
     async def list_users(self) -> list[UserRecord]: ...
     async def update_user(self, user_id: str, **changes: object) -> UserRecord | None: ...
@@ -544,9 +549,7 @@ class Repository(Protocol):
     async def create_paper(self, paper: PaperRecord) -> PaperRecord: ...
 
     async def mark_embedding_contract_stale(self, fingerprint: str | None) -> int: ...
-    async def embedding_contract_counts(
-        self, fingerprint: str | None
-    ) -> dict[str, int]: ...
+    async def embedding_contract_counts(self, fingerprint: str | None) -> dict[str, int]: ...
     async def list_papers(
         self,
         owner_id: str,
@@ -750,7 +753,11 @@ class MemoryRepository:
         return self.users.get(user_id)
 
     async def create_user(
-        self, email: str, password: str, role: UserRole, must_change_password: bool = True
+        self,
+        email: str,
+        password: str,
+        role: UserRole,
+        must_change_password: bool = True,
     ) -> UserRecord:
         normalized = email.strip().casefold()
         if await self.find_user_by_email(normalized):
@@ -778,7 +785,13 @@ class MemoryRepository:
         user = self.users.get(user_id)
         if not user:
             return None
-        for key in ("active", "role", "must_change_password", "display_name", "preferences"):
+        for key in (
+            "active",
+            "role",
+            "must_change_password",
+            "display_name",
+            "preferences",
+        ):
             if key in changes and (changes[key] is not None or key == "display_name"):
                 setattr(user, key, changes[key])
         if changes.get("active") is False:
@@ -868,9 +881,7 @@ class MemoryRepository:
                 changed += 1
         return changed
 
-    async def embedding_contract_counts(
-        self, fingerprint: str | None
-    ) -> dict[str, int]:
+    async def embedding_contract_counts(self, fingerprint: str | None) -> dict[str, int]:
         statuses = Counter(paper.embedding_status for paper in self.papers.values())
         return {
             "total": len(self.papers),
@@ -940,9 +951,7 @@ class MemoryRepository:
             reverse=True,
         )[:limit]
         positive = [
-            f"{item.title} {item.abstract}"
-            for item in items
-            if item.feedback == "interested"
+            f"{item.title} {item.abstract}" for item in items if item.feedback == "interested"
         ]
         negative = [
             f"{item.title} {item.abstract}" for item in items if item.feedback == "not_interested"
@@ -988,14 +997,8 @@ class MemoryRepository:
         return item
 
     async def discovery_metrics(self, since: datetime) -> dict[str, int | float]:
-        items = [
-            item
-            for item in self.discovery_items.values()
-            if item.created_at >= since
-        ]
-        batches = sum(
-            item.created_at >= since for item in self.discovery_batches.values()
-        )
+        items = [item for item in self.discovery_items.values() if item.created_at >= since]
+        batches = sum(item.created_at >= since for item in self.discovery_batches.values())
         impressions = len(items)
         opened = sum(item.opened_at is not None for item in items)
         interested = sum(item.feedback == "interested" for item in items)
@@ -1855,8 +1858,7 @@ class MemoryRepository:
             (
                 item
                 for item in self.memory_items.values()
-                if item.user_id == record.user_id
-                and item.normalized_hash == record.normalized_hash
+                if item.user_id == record.user_id and item.normalized_hash == record.normalized_hash
             ),
             None,
         )
@@ -1867,8 +1869,7 @@ class MemoryRepository:
             existing.updated_at = now()
             return existing
         active_count = sum(
-            item.user_id == record.user_id and item.enabled
-            for item in self.memory_items.values()
+            item.user_id == record.user_id and item.enabled for item in self.memory_items.values()
         )
         if active_count >= 200:
             raise ValueError("长期记忆已达到 200 条上限")
@@ -2327,9 +2328,7 @@ class MemoryRepository:
             "users_with_memory": users,
             "capacity": users * 200,
             "superseded_versions": sum(
-                1
-                for item in self.memory_item_versions.values()
-                if item.status == "superseded"
+                1 for item in self.memory_item_versions.values() if item.status == "superseded"
             ),
             "types": types,
             "sources": sources,
@@ -2394,15 +2393,9 @@ class MemoryRepository:
             server.updated_at = now()
         return records
 
-    async def list_mcp_tool_snapshots(
-        self, server_id: str
-    ) -> list[McpToolSnapshotRecord]:
+    async def list_mcp_tool_snapshots(self, server_id: str) -> list[McpToolSnapshotRecord]:
         return sorted(
-            (
-                item
-                for item in self.mcp_tool_snapshots.values()
-                if item.server_id == server_id
-            ),
+            (item for item in self.mcp_tool_snapshots.values() if item.server_id == server_id),
             key=lambda item: item.normalized_name,
         )
 
@@ -2643,7 +2636,11 @@ class SQLAlchemyRepository:
             return await session.get(User, user_id)
 
     async def create_user(
-        self, email: str, password: str, role: UserRole, must_change_password: bool = True
+        self,
+        email: str,
+        password: str,
+        role: UserRole,
+        must_change_password: bool = True,
     ) -> User:
         user = User(
             email=email.strip().casefold(),
@@ -2877,14 +2874,15 @@ class SQLAlchemyRepository:
                         DiscoveryItem.user_id == user_id,
                         DiscoveryItem.feedback.in_(["interested", "not_interested"]),
                     )
-                    .order_by(DiscoveryItem.feedback_at.desc(), DiscoveryItem.created_at.desc())
+                    .order_by(
+                        DiscoveryItem.feedback_at.desc(),
+                        DiscoveryItem.created_at.desc(),
+                    )
                     .limit(limit)
                 )
             )
         positive = [
-            f"{item.title} {item.abstract}"
-            for item in items
-            if item.feedback == "interested"
+            f"{item.title} {item.abstract}" for item in items if item.feedback == "interested"
         ]
         negative = [
             f"{item.title} {item.abstract}" for item in items if item.feedback == "not_interested"
@@ -2968,9 +2966,7 @@ class SQLAlchemyRepository:
         async with get_session_factory()() as session:
             batches = int(
                 await session.scalar(
-                    select(func.count(DiscoveryBatch.id)).where(
-                        DiscoveryBatch.created_at >= since
-                    )
+                    select(func.count(DiscoveryBatch.id)).where(DiscoveryBatch.created_at >= since)
                 )
                 or 0
             )
@@ -2979,9 +2975,7 @@ class SQLAlchemyRepository:
                     select(
                         func.count(DiscoveryItem.id),
                         func.count(DiscoveryItem.id).filter(DiscoveryItem.opened_at.is_not(None)),
-                        func.count(DiscoveryItem.id).filter(
-                            DiscoveryItem.feedback == "interested"
-                        ),
+                        func.count(DiscoveryItem.id).filter(DiscoveryItem.feedback == "interested"),
                         func.count(DiscoveryItem.id).filter(
                             DiscoveryItem.feedback == "not_interested"
                         ),
@@ -3715,9 +3709,7 @@ class SQLAlchemyRepository:
             ).one()
             type_rows = (
                 await session.execute(
-                    select(MemoryItem.type, func.count(MemoryItem.id)).group_by(
-                        MemoryItem.type
-                    )
+                    select(MemoryItem.type, func.count(MemoryItem.id)).group_by(MemoryItem.type)
                 )
             ).all()
             source_rows = (
@@ -3745,9 +3737,7 @@ class SQLAlchemyRepository:
                 "sources": {str(key): int(count) for key, count in source_rows},
             }
 
-    async def ensure_mcp_server_config(
-        self, record: McpServerConfigRecord
-    ) -> McpServerConfig:
+    async def ensure_mcp_server_config(self, record: McpServerConfigRecord) -> McpServerConfig:
         async with get_session_factory()() as session:
             value = await session.get(McpServerConfig, record.id)
             if value:
@@ -3760,9 +3750,7 @@ class SQLAlchemyRepository:
 
     async def list_mcp_server_configs(self) -> list[McpServerConfig]:
         async with get_session_factory()() as session:
-            return list(
-                await session.scalars(select(McpServerConfig).order_by(McpServerConfig.id))
-            )
+            return list(await session.scalars(select(McpServerConfig).order_by(McpServerConfig.id)))
 
     async def get_mcp_server_config(self, server_id: str) -> McpServerConfig | None:
         async with get_session_factory()() as session:
@@ -5120,9 +5108,7 @@ class SQLAlchemyRepository:
             await session.commit()
             return int(result.rowcount or 0)
 
-    async def embedding_contract_counts(
-        self, fingerprint: str | None
-    ) -> dict[str, int]:
+    async def embedding_contract_counts(self, fingerprint: str | None) -> dict[str, int]:
         async with get_session_factory()() as session:
             grouped = await session.execute(
                 select(Paper.embedding_status, func.count(Paper.id)).group_by(
@@ -5150,9 +5136,7 @@ class SQLAlchemyRepository:
                 "failed": statuses.get("failed", 0),
             }
 
-    async def list_memories(
-        self, user_id: str, *, enabled_only: bool = False
-    ) -> list[MemoryItem]:
+    async def list_memories(self, user_id: str, *, enabled_only: bool = False) -> list[MemoryItem]:
         async with get_session_factory()() as session:
             query = select(MemoryItem).where(MemoryItem.user_id == user_id)
             if enabled_only:
@@ -5305,18 +5289,14 @@ class SQLAlchemyRepository:
     async def delete_owned_memory(self, memory_id: str, user_id: str) -> bool:
         async with get_session_factory()() as session:
             result = await session.execute(
-                delete(MemoryItem).where(
-                    MemoryItem.id == memory_id, MemoryItem.user_id == user_id
-                )
+                delete(MemoryItem).where(MemoryItem.id == memory_id, MemoryItem.user_id == user_id)
             )
             await session.commit()
             return bool(result.rowcount)
 
     async def clear_memories(self, user_id: str) -> int:
         async with get_session_factory()() as session:
-            result = await session.execute(
-                delete(MemoryItem).where(MemoryItem.user_id == user_id)
-            )
+            result = await session.execute(delete(MemoryItem).where(MemoryItem.user_id == user_id))
             await session.commit()
             return int(result.rowcount or 0)
 

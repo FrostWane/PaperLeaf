@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
-from paperleaf_api.agent.context import resolve_context
+from paperleaf_api.agent.context import ContextResolution, resolve_context
 from paperleaf_api.agent.function_tools import (
     FunctionToolHarness,
     PlannerDecision,
@@ -12,7 +13,12 @@ from paperleaf_api.agent.function_tools import (
     ToolExecutionContext,
 )
 from paperleaf_api.agent.skills import SkillRegistry
-from paperleaf_api.agent_execution import _selection_scope_is_locked, execute_agent_run
+from paperleaf_api.agent_execution import (
+    _displayed_recommendation_entities,
+    _next_entity_state,
+    _selection_scope_is_locked,
+    execute_agent_run,
+)
 from paperleaf_api.config import settings
 from paperleaf_api.model_runtime import ModelRuntimeError
 from paperleaf_api.rag.answer_quality import AnswerQualityPolicy
@@ -48,6 +54,21 @@ class FakeRetriever:
         ]
 
 
+def test_only_candidates_rendered_in_final_answer_enter_next_batch_exclusions() -> None:
+    candidates = [
+        ("Provider-only candidate", ("doi:10.1/provider", "title:provideronlycandidate")),
+        ("Actually displayed", ("doi:10.1/displayed", "title:actuallydisplayed")),
+    ]
+
+    entities = _displayed_recommendation_entities(
+        "| 1 | **Actually displayed** | 2026 |",
+        candidates,
+        limit=5,
+    )
+
+    assert entities == ["doi:10.1/displayed", "title:actuallydisplayed"]
+
+
 class UnusedRouter:
     pass
 
@@ -67,6 +88,51 @@ def test_selection_scope_defaults_to_same_page_and_requires_explicit_expansion()
     assert _selection_scope_is_locked("不要扩展成全文总结") is True
     assert _selection_scope_is_locked("结合全文解释这段原文") is False
     assert _selection_scope_is_locked("Explain this using the whole paper") is False
+
+
+def test_recommendation_exposures_persist_for_next_batch_and_reset_for_new_task() -> None:
+    inherited = ContextResolution(
+        original_query="换一批",
+        resolved_query="换一批",
+        references={
+            "active_task": {
+                "name": "find_related_papers",
+                "requested_count": 5,
+                "shown_entities": ["doi:10.1/old"],
+            }
+        },
+        confidence=0.9,
+        sources=("active_task",),
+    )
+    continued = _next_entity_state(
+        {},
+        inherited,
+        "换一批",
+        selected_skill="find_related_papers",
+        web_enabled=True,
+        exposed_recommendation_entities=["doi:10.1/new"],
+    )
+    assert continued["active_task"]["shown_entities"] == [
+        "doi:10.1/old",
+        "doi:10.1/new",
+    ]
+
+    fresh = ContextResolution(
+        original_query="推荐三篇图像生成论文",
+        resolved_query="推荐三篇图像生成论文",
+        references={},
+        confidence=1.0,
+        sources=("explicit_query",),
+    )
+    reset = _next_entity_state(
+        continued,
+        fresh,
+        fresh.original_query,
+        selected_skill="find_related_papers",
+        web_enabled=True,
+        exposed_recommendation_entities=["doi:10.1/image"],
+    )
+    assert reset["active_task"]["shown_entities"] == ["doi:10.1/image"]
 
 
 async def _context(repository: MemoryRepository, skill_name: str, *, web: bool = False):
@@ -105,9 +171,7 @@ def test_native_read_tool_uses_trusted_scope_and_persists_audit() -> None:
             ),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, retriever, UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, retriever, UnusedRouter(), planner=planner)
         result = await harness.run("这篇论文的方法是什么？", await _context(repository, "paper_qa"))
 
         assert result.provider_supported is True
@@ -132,9 +196,7 @@ def test_verified_selection_locks_tool_evidence_to_bound_physical_page() -> None
             ),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, retriever, UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, retriever, UnusedRouter(), planner=planner)
         context = replace(
             await _context(repository, "paper_qa"),
             verified_selection_page=1,
@@ -203,14 +265,10 @@ def test_tool_schema_rejects_injected_identity_then_allows_one_repair() -> None:
                     ),
                 )
             ),
-            PlannerDecision(
-                (ToolCallRequest("fixed-call", "search_library", {"query": "方法"}),)
-            ),
+            PlannerDecision((ToolCallRequest("fixed-call", "search_library", {"query": "方法"}),)),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, retriever, UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, retriever, UnusedRouter(), planner=planner)
         result = await harness.run("方法", await _context(repository, "paper_qa"))
 
         assert len(result.evidence) == 1
@@ -243,9 +301,7 @@ def test_page_tool_cannot_read_paper_outside_trusted_scope() -> None:
             ),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
         result = await harness.run("读取第一页", await _context(repository, "paper_qa"))
 
         assert result.evidence == []
@@ -288,9 +344,7 @@ def test_page_tool_resolves_unique_trusted_title_to_current_paper_id() -> None:
             ),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
         context = replace(
             await _context(repository, "trace_original"),
             scope_paper_titles=("DeepDTA",),
@@ -314,14 +368,11 @@ def test_unknown_tool_is_rejected_and_parallel_batch_is_capped_at_three() -> Non
         planner = SequencePlanner(
             PlannerDecision(
                 tuple(
-                    ToolCallRequest(f"call-{index}", f"unknown_{index}", {})
-                    for index in range(4)
+                    ToolCallRequest(f"call-{index}", f"unknown_{index}", {}) for index in range(4)
                 )
             )
         )
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
         result = await harness.run("测试", await _context(repository, "paper_qa"))
 
         assert len(result.calls) == 3
@@ -349,9 +400,7 @@ def test_write_tool_only_creates_interrupt_and_never_executes_import() -> None:
                 )
             )
         )
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
         result = await harness.run(
             "导入这篇论文", await _context(repository, "find_related_papers", web=True)
         )
@@ -384,14 +433,10 @@ def test_confirmed_import_executes_only_after_approval() -> None:
             "type": "confirm_arxiv_import",
             "candidates": [{"arxiv_id": "2601.00001"}],
         }
-        rejected, rejected_error = await harness.resume_confirmed_action(
-            "u1", action, "reject"
-        )
+        rejected, rejected_error = await harness.resume_confirmed_action("u1", action, "reject")
         assert "取消" in rejected and rejected_error is None and imported == []
 
-        approved, approved_error = await harness.resume_confirmed_action(
-            "u1", action, "approve"
-        )
+        approved, approved_error = await harness.resume_confirmed_action("u1", action, "approve")
         assert "确认后的论文" in approved and approved_error is None
         assert imported == [("u1", "2601.00001")]
 
@@ -407,15 +452,17 @@ def test_confirmed_doi_import_revalidates_openalex_metadata_before_write() -> No
                 "source": "openalex",
             }
             return {
-                "results": [{
-                    "external_id": "W1",
-                    "title": "Open paper",
-                    "authors": ["Author"],
-                    "year": 2026,
-                    "publication": "Open Journal",
-                    "doi": "10.1000/open.paper",
-                    "open_access_pdf_url": "https://example.org/open.pdf",
-                }]
+                "results": [
+                    {
+                        "external_id": "W1",
+                        "title": "Open paper",
+                        "authors": ["Author"],
+                        "year": 2026,
+                        "publication": "Open Journal",
+                        "doi": "10.1000/open.paper",
+                        "open_access_pdf_url": "https://example.org/open.pdf",
+                    }
+                ]
             }
 
     async def scenario() -> None:
@@ -467,9 +514,7 @@ def test_timeout_retries_once_and_stops_without_looping() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")
         planner = SequencePlanner(
-            PlannerDecision(
-                (ToolCallRequest("slow-1", "search_library", {"query": "方法"}),)
-            ),
+            PlannerDecision((ToolCallRequest("slow-1", "search_library", {"query": "方法"}),)),
             PlannerDecision(),
         )
         harness = SlowHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
@@ -506,12 +551,8 @@ def test_large_tool_result_is_externalized_to_owned_artifact() -> None:
             ),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
-        result = await harness.run(
-            "概括论文", await _context(repository, "summarize_paper")
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
+        result = await harness.run("概括论文", await _context(repository, "summarize_paper"))
 
         assert result.calls[0]["artifact_tokens"] > 8000
         assert result.calls[0]["artifact_id"] is not None
@@ -526,9 +567,7 @@ def test_provider_without_native_function_calling_falls_back_cleanly() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")
         planner = SequencePlanner(PlannerDecision(provider_supported=False))
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
         result = await harness.run("方法", await _context(repository, "paper_qa"))
 
         assert result.provider_supported is False
@@ -547,9 +586,7 @@ def test_all_failed_or_rejected_calls_do_not_activate_tool_mode() -> None:
             PlannerDecision((ToolCallRequest("bad", "unknown_tool", {}),)),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, FakeRetriever(), UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, FakeRetriever(), UnusedRouter(), planner=planner)
 
         result = await harness.run("解释方法", await _context(repository, "paper_qa"))
 
@@ -668,9 +705,7 @@ def test_unspecified_online_discovery_reserves_openalex_and_caps_repeated_search
             ),
         )
 
-        result = await harness.run(
-            "请根据当前集合的主题联网推荐相关论文。", context
-        )
+        result = await harness.run("请根据当前集合的主题联网推荐相关论文。", context)
 
         assert result.automatic_source_fallback_used is True
         assert result.native_function_calling_attempted is True
@@ -683,7 +718,7 @@ def test_unspecified_online_discovery_reserves_openalex_and_caps_repeated_search
         assert gateway.arguments == [
             {
                 "query": "DeepDTA: deep drug-target binding affinity prediction",
-                "limit": 8,
+                "limit": 10,
             }
         ]
         assert result.steps == 2
@@ -694,8 +729,7 @@ def test_unspecified_online_discovery_reserves_openalex_and_caps_repeated_search
         assert openalex_context["scope_paper_count"] == 4
         assert len(result.context_entries[1]["content"]) <= 3000
         assert all(
-            len(item["abstract_preview"]) <= 120
-            for item in openalex_context["items"]
+            len(item.get("abstract_preview", "")) <= 120 for item in openalex_context["items"]
         )
 
     asyncio.run(scenario())
@@ -757,20 +791,21 @@ def test_automatic_openalex_respects_explicit_source_and_web_setting() -> None:
         )
         schemas = harness.schemas_for(online.skill, web_enabled=True)
 
-        assert harness._automatic_openalex_calls(
-            "请只搜索 arXiv 相关论文", online, schemas
-        ) == ()
+        assert harness._automatic_openalex_calls("请只搜索 arXiv 相关论文", online, schemas) == ()
         alternative = harness._automatic_openalex_calls(
             "请联网搜索，但不要使用 OpenAlex", online, schemas
         )
         assert len(alternative) == 1
         assert alternative[0].name == "mcp__academic__search_semantic_scholar"
-        assert harness._automatic_openalex_calls(
-            "请使用 Semantic Scholar 搜索", online, schemas
-        ) == ()
-        assert harness._automatic_openalex_calls(
-            "请联网推荐相关论文", replace(online, web_enabled=False), schemas
-        ) == ()
+        assert (
+            harness._automatic_openalex_calls("请使用 Semantic Scholar 搜索", online, schemas) == ()
+        )
+        assert (
+            harness._automatic_openalex_calls(
+                "请联网推荐相关论文", replace(online, web_enabled=False), schemas
+            )
+            == ()
+        )
 
     asyncio.run(scenario())
 
@@ -800,7 +835,7 @@ def test_automatic_openalex_applies_explicit_publication_year_filter() -> None:
         assert len(calls) == 1
         assert calls[0].arguments == {
             "query": "DeepDTA: deep drug-target binding affinity prediction",
-            "limit": 8,
+            "limit": 10,
             "year_from": 2026,
             "year_to": 2026,
         }
@@ -880,7 +915,13 @@ def test_inherited_semantic_scholar_policy_and_year_reach_real_tool_arguments() 
             return {
                 "source": "Semantic Scholar",
                 "available": True,
-                "results": [{"title": "Recent cross-domain paper", "year": 2026}],
+                "results": [
+                    {
+                        "title": "A representative topic study",
+                        "abstract": "A representative topic examined in 2026",
+                        "year": 2026,
+                    }
+                ],
             }
 
     async def scenario() -> None:
@@ -891,8 +932,7 @@ def test_inherited_semantic_scholar_policy_and_year_reach_real_tool_arguments() 
                 {
                     "role": "user",
                     "content": (
-                        "联网推荐五篇尚未入库的论文，不要使用 OpenAlex，"
-                        "改用 Semantic Scholar。"
+                        "联网推荐五篇尚未入库的论文，不要使用 OpenAlex，改用 Semantic Scholar。"
                     ),
                 }
             ],
@@ -920,12 +960,163 @@ def test_inherited_semantic_scholar_policy_and_year_reach_real_tool_arguments() 
                 "mcp__academic__search_semantic_scholar",
                 {
                     "query": "A representative topic",
-                    "limit": 5,
+                    "limit": 10,
                     "year_from": 2026,
                     "year_to": 2026,
                 },
             )
         ]
+
+    asyncio.run(scenario())
+
+
+def test_discovery_limit_is_enforced_per_provider_not_tool_alias() -> None:
+    class CountingArxiv:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self, _request):
+            self.calls += 1
+            return SimpleNamespace(data=[{"title": "A related preprint", "arxiv_id": "2601.00001"}])
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        search = CountingArxiv()
+        planner = SequencePlanner(
+            PlannerDecision(
+                (
+                    ToolCallRequest("arxiv-alias-1", "search_arxiv", {"query": "DTA", "limit": 5}),
+                    ToolCallRequest(
+                        "arxiv-alias-2",
+                        "find_related_papers",
+                        {"query": "drug target affinity", "limit": 5},
+                    ),
+                )
+            ),
+            PlannerDecision(),
+        )
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=planner,
+            arxiv_search=search,
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("DeepDTA",),
+            scope_paper_texts=("DeepDTA\ndrug target binding affinity",),
+        )
+
+        result = await harness.run("只使用 arXiv 推荐相关论文", context)
+
+        assert search.calls == 1
+        assert result.steps == 1
+        assert [item["tool"] for item in result.calls] == ["search_arxiv"]
+
+    asyncio.run(scenario())
+
+
+def test_structured_discovery_task_reaches_provider_and_excludes_seen_entities() -> None:
+    class FakeMcpGateway:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def call(self, name: str, arguments: dict) -> dict:
+            self.calls.append((name, arguments))
+            return {
+                "source": "Semantic Scholar",
+                "available": True,
+                "results": [
+                    {
+                        "external_id": "old",
+                        "title": "Already shown",
+                        "doi": "10.1/old",
+                        "year": 2026,
+                        "publication_types": ["JournalArticle"],
+                    },
+                    {
+                        "external_id": "library",
+                        "title": "Already in library",
+                        "doi": "10.1/library",
+                        "year": 2026,
+                        "publication_types": ["JournalArticle"],
+                    },
+                    {
+                        "external_id": "dataset",
+                        "title": "A dataset",
+                        "year": 2026,
+                        "publication_types": ["Dataset"],
+                    },
+                    {
+                        "external_id": "unrelated",
+                        "title": "Quantum error correction for photonic systems",
+                        "abstract": "fault tolerant qubits and optical circuits",
+                        "year": 2026,
+                        "publication_types": ["JournalArticle"],
+                    },
+                    *[
+                        {
+                            "external_id": f"new-{index}",
+                            "title": f"New affinity paper {index}",
+                            "doi": f"10.1/new-{index}",
+                            "abstract": "drug target binding affinity",
+                            "year": 2026,
+                            "publication_types": ["JournalArticle"],
+                        }
+                        for index in range(4)
+                    ],
+                ],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        gateway = FakeMcpGateway()
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=SequencePlanner(PlannerDecision()),
+            mcp_gateway=gateway,
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("DeepDTA",),
+            scope_paper_texts=("DeepDTA\ndrug target binding affinity",),
+            excluded_recommendation_entities=frozenset({"doi:10.1/library"}),
+            previous_recommendation_entities=frozenset({"doi:10.1/old"}),
+            discovery_task={
+                "requested_count": 3,
+                "year_from": 2026,
+                "year_to": 2026,
+                "requested_sources": ["mcp__academic__search_semantic_scholar"],
+                "denied_sources": ["mcp__academic__search_openalex"],
+            },
+        )
+
+        result = await harness.run("换一批", context)
+
+        assert gateway.calls == [
+            (
+                "mcp__academic__search_semantic_scholar",
+                {
+                    "query": "DeepDTA",
+                    "limit": 6,
+                    "year_from": 2026,
+                    "year_to": 2026,
+                },
+            )
+        ]
+        preview = next(item for item in result.calls if item["status"] == "succeeded")
+        assert [item["title"] for item in preview["items"]] == [
+            "New affinity paper 0",
+            "New affinity paper 1",
+            "New affinity paper 2",
+        ]
+        assert preview["filter_stats"]["type_filtered"] == 1
+        assert preview["filter_stats"]["duplicate_filtered"] == 2
+        assert preview["filter_stats"]["relevance_filtered"] == 1
+        assert all("old" not in value for value in result.exposed_recommendation_entities)
 
     asyncio.run(scenario())
 
@@ -952,9 +1143,7 @@ def test_later_planner_timeout_preserves_completed_tool_audit_and_evidence() -> 
             planner=TimeoutAfterFirstCallPlanner(),
         )
 
-        result = await harness.run(
-            "这篇论文的方法是什么？", await _context(repository, "paper_qa")
-        )
+        result = await harness.run("这篇论文的方法是什么？", await _context(repository, "paper_qa"))
 
         assert result.native_function_calling_attempted is True
         assert result.tool_mode_active is True
@@ -1020,9 +1209,7 @@ def test_function_tool_evidence_is_reused_by_agent_graph_without_duplicate_retri
             ),
             PlannerDecision(),
         )
-        harness = FunctionToolHarness(
-            repository, retriever, UnusedRouter(), planner=planner
-        )
+        harness = FunctionToolHarness(repository, retriever, UnusedRouter(), planner=planner)
         graph = EvidenceGraph()
         await execute_agent_run(
             repository,

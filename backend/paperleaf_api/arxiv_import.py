@@ -91,18 +91,19 @@ async def import_open_access_paper(
     await storage.put(storage_key, content, "application/pdf")
     year_value = candidate.get("year")
     authors = candidate.get("authors")
+    source = str(candidate.get("source") or "").strip().casefold().replace(" ", "_")
+    external_id = str(candidate.get("external_id") or "").strip()
     record = PaperRecord(
         id=paper_id,
         owner_id=user_id,
         title=str(candidate.get("title") or doi),
-        authors=[str(value) for value in authors[:50]]
-        if isinstance(authors, list)
-        else [],
+        authors=[str(value) for value in authors[:50]] if isinstance(authors, list) else [],
         year=int(year_value) if str(year_value).isdigit() else None,
         abstract=str(candidate.get("abstract") or "") or None,
         doi=doi,
         publication=str(candidate.get("publication") or "") or None,
         arxiv_id=None,
+        academic_external_ids={source: external_id} if source and external_id else {},
         filename=filename,
         storage_key=storage_key,
         mime_type="application/pdf",
@@ -181,6 +182,7 @@ async def import_arxiv_paper(
         doi=None,
         publication=getattr(metadata, "journal_ref", None),
         arxiv_id=arxiv_id,
+        academic_external_ids={},
         filename=f"{arxiv_id}.pdf",
         storage_key=storage_key,
         mime_type="application/pdf",

@@ -289,7 +289,7 @@ def test_function_harness_exposes_mcp_only_when_web_enabled() -> None:
         assert gateway.calls == [
             (
                 "mcp__academic__search_openalex",
-                {"query": "查找相关论文", "limit": 8},
+                {"query": "查找相关论文", "limit": 10},
             ),
             (
                 "mcp__academic__search_semantic_scholar",

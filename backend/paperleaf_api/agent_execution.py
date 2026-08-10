@@ -12,12 +12,17 @@ from typing import Any
 from .agent.context import ContextResolution, resolve_context
 from .agent.context_budget import allocate_context_budget, compact_conversation
 from .agent.discovery_policy import academic_source_policy, requested_paper_count
-from .agent.function_tools import FunctionToolHarness, ToolExecutionContext, ToolLoopResult
+from .agent.function_tools import (
+    FunctionToolHarness,
+    ToolExecutionContext,
+    ToolLoopResult,
+)
 from .agent.memory import (
     extract_memory_candidates,
     memory_hash,
     select_relevant_memories,
 )
+from .agent.recommendation_quality import entity_keys, normalize_title
 from .agent.skills import SkillRegistry, route_verified_selection
 from .agent.tools import LibrarySearchInput
 from .config import settings
@@ -59,9 +64,7 @@ async def _save_run_memories(
         from .model_runtime import build_model_router
 
         contract = configured_embedding_contract(config, build_model_router(config))
-        if contract is None or not embedding or not vector_matches_contract(
-            embedding, contract
-        ):
+        if contract is None or not embedding or not vector_matches_contract(embedding, contract):
             embedding = None
             embedding_fingerprint = None
         else:
@@ -166,6 +169,7 @@ def _next_entity_state(
     *,
     selected_skill: str,
     web_enabled: bool,
+    exposed_recommendation_entities: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """保存可审计的讨论实体，不保存选文正文或隐藏推理。"""
 
@@ -196,8 +200,7 @@ def _next_entity_state(
         task = dict(inherited) if isinstance(inherited, dict) else {}
         requested_count = requested_paper_count(original_query)
         years = [
-            int(value)
-            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", original_query)
+            int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", original_query)
         ]
         task.update(
             {
@@ -218,12 +221,47 @@ def _next_entity_state(
         if current_sources.has_explicit_source:
             task["requested_sources"] = sorted(current_sources.requested_tools)
             task["denied_sources"] = sorted(current_sources.denied_tools)
+        prior_entities = task.get("shown_entities")
+        shown_entities = [
+            str(value)
+            for value in (prior_entities if isinstance(prior_entities, list) else [])
+            if str(value).strip()
+        ]
+        for value in exposed_recommendation_entities:
+            normalized = str(value).strip()
+            if normalized and normalized not in shown_entities:
+                shown_entities.append(normalized)
+        task["shown_entities"] = shown_entities[-400:]
         task.pop("inherited", None)
         state["active_task"] = task
     else:
         state.pop("active_task", None)
     state["last_user_query"] = original_query[:500]
     return state
+
+
+def _displayed_recommendation_entities(
+    answer: str,
+    candidates: list[tuple[str, tuple[str, ...]]],
+    *,
+    limit: int,
+) -> list[str]:
+    """只持久化最终回答实际展示的候选，避免 Provider 内部候选污染“换一批”。"""
+
+    normalized_answer = normalize_title(answer)
+    displayed: list[str] = []
+    displayed_count = 0
+    for title, group in candidates:
+        normalized_title = normalize_title(title)
+        if not normalized_title or normalized_title not in normalized_answer:
+            continue
+        displayed_count += 1
+        for key in group:
+            if key not in displayed:
+                displayed.append(key)
+        if displayed_count >= max(1, limit):
+            break
+    return displayed
 
 
 def _validate_publishable_paragraph(
@@ -561,9 +599,7 @@ async def execute_agent_run(
         "conversation_after_tokens": compaction.after_tokens,
         "compacted": compaction.compacted,
     }
-    context_snapshot["summary_version"] = int(
-        getattr(chat_session, "summary_version", 1) or 1
-    )
+    context_snapshot["summary_version"] = int(getattr(chat_session, "summary_version", 1) or 1)
     context_snapshot["memory_ids"] = [item.id for item in selected_memories]
     context_ms = round((time.perf_counter() - context_started_at) * 1000)
     intent_started_at = time.perf_counter()
@@ -598,14 +634,16 @@ async def execute_agent_run(
             route_confidence = 0.98
         elif harness_flags.get("function_tools_enabled") and function_tool_harness is not None:
             try:
-                definition, route_source, route_confidence = (
-                    await function_tool_harness.select_skill(
-                        registry,
-                        resolution.original_query,
-                        intent=intent,
-                        scope=scope,
-                        web_enabled=bool(snapshot.get("web_enabled", False)),
-                    )
+                (
+                    definition,
+                    route_source,
+                    route_confidence,
+                ) = await function_tool_harness.select_skill(
+                    registry,
+                    resolution.original_query,
+                    intent=intent,
+                    scope=scope,
+                    web_enabled=bool(snapshot.get("web_enabled", False)),
                 )
             except asyncio.CancelledError:
                 raise
@@ -682,6 +720,8 @@ async def execute_agent_run(
         "scope": scope,
         "selected_paper_ids": list(snapshot.get("paper_ids", [])),
         "scope_paper_titles": [],
+        "scope_paper_texts": [],
+        "excluded_recommendation_entities": [],
         "web_enabled": bool(snapshot.get("web_enabled", False)),
         "client_context": dict(snapshot.get("client_context", {})),
         "resolved_query": resolution.resolved_query,
@@ -706,9 +746,7 @@ async def execute_agent_run(
         "status": "pending",
     }
     if selected_skill == "find_related_papers":
-        allowed_scope_ids = {
-            str(paper_id) for paper_id in snapshot.get("paper_ids", [])
-        }
+        allowed_scope_ids = {str(paper_id) for paper_id in snapshot.get("paper_ids", [])}
         try:
             scoped_papers = await repository.list_papers(run.user_id)
         except Exception:
@@ -721,6 +759,22 @@ async def execute_agent_run(
                 and str(getattr(paper, "title", "") or "").strip()
             ),
             key=str.casefold,
+        )
+        initial["scope_paper_texts"] = [
+            "\n".join(
+                value
+                for value in (
+                    str(getattr(paper, "title", "") or "").strip(),
+                    str(getattr(paper, "abstract", "") or "").strip()[:3000],
+                )
+                if value
+            )
+            for paper in scoped_papers
+            if str(getattr(paper, "id", "")) in allowed_scope_ids
+            and str(getattr(paper, "title", "") or "").strip()
+        ]
+        initial["excluded_recommendation_entities"] = sorted(
+            {key for paper in scoped_papers for key in entity_keys(paper)}
         )
     if harness_flags.get("skills_enabled"):
         await repository.append_agent_run_event(
@@ -787,14 +841,10 @@ async def execute_agent_run(
                             selected_text=selected_text,
                             limit=3,
                         )
-                harness_trace["selection_evidence_count"] = len(
-                    initial["selection_evidence"]
-                )
+                harness_trace["selection_evidence_count"] = len(initial["selection_evidence"])
             except Exception:
                 harness_trace["selection_evidence_count"] = 0
-                harness_trace["selection_evidence_fallback_reason"] = (
-                    "selection_retrieval_failed"
-                )
+                harness_trace["selection_evidence_fallback_reason"] = "selection_retrieval_failed"
         if (
             not resolution.needs_clarification
             and harness_flags.get("function_tools_enabled")
@@ -803,6 +853,25 @@ async def execute_agent_run(
         ):
             tool_started_at = time.perf_counter()
             scope_paper_titles = list(initial.get("scope_paper_titles", []))
+            discovery_task = dict(
+                resolution.references.get("active_task")
+                if isinstance(resolution.references.get("active_task"), dict)
+                else {}
+            )
+            if selected_skill == "find_related_papers":
+                discovery_task.setdefault(
+                    "requested_count", requested_paper_count(query, default=5) or 5
+                )
+                years = [
+                    int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", query)
+                ]
+                if years:
+                    discovery_task["year_from"] = min(years)
+                    discovery_task["year_to"] = max(years)
+                source_policy = academic_source_policy(query)
+                if source_policy.has_explicit_source:
+                    discovery_task["requested_sources"] = sorted(source_policy.requested_tools)
+                    discovery_task["denied_sources"] = sorted(source_policy.denied_tools)
             # get_page_text 的模型参数必须使用服务端论文 ID；同时保留可信标题，
             # 以便对模型偶尔返回标题而非 ID 的情况做单论文、无歧义的受控解析。
             # 这份元数据也服务于外部学术检索，因此不能只在 web_enabled 时构建。
@@ -828,6 +897,16 @@ async def execute_agent_run(
                         ),
                         web_enabled=bool(snapshot.get("web_enabled", False)),
                         scope_paper_titles=tuple(scope_paper_titles),
+                        scope_paper_texts=tuple(initial.get("scope_paper_texts", [])),
+                        excluded_recommendation_entities=frozenset(
+                            initial.get("excluded_recommendation_entities", [])
+                        ),
+                        previous_recommendation_entities=frozenset(
+                            str(value)
+                            for value in discovery_task.get("shown_entities", [])
+                            if str(value).strip()
+                        ),
+                        discovery_task=discovery_task,
                         verified_selection_page=(
                             int(selection_page) if selection_page is not None else None
                         ),
@@ -1024,9 +1103,7 @@ async def execute_agent_run(
         harness_trace["context_budget"] = {
             "final_input_tokens": final_context_usage.get("final_input_tokens", 0),
             "hard_limit": final_context_usage.get("hard_limit", 0),
-            "compression_actions": list(
-                final_context_usage.get("compression_actions", [])
-            ),
+            "compression_actions": list(final_context_usage.get("compression_actions", [])),
             "dropped_messages": final_context_usage.get("dropped_messages", 0),
             "dropped_evidence": final_context_usage.get("dropped_evidence", 0),
             "dropped_tool_pairs": final_context_usage.get("dropped_tool_pairs", 0),
@@ -1049,7 +1126,11 @@ async def execute_agent_run(
         await repository.append_agent_run_event(
             run_id,
             "node_finished",
-            {"node": "resolve_context", "stage": "需要补充上下文", "duration_ms": context_ms},
+            {
+                "node": "resolve_context",
+                "stage": "需要补充上下文",
+                "duration_ms": context_ms,
+            },
             event_key="stage:context:finish",
             claim_token=claim_token,
         )
@@ -1132,11 +1213,12 @@ async def execute_agent_run(
     validated: list[tuple[str, str, list[CitationClaim]]] = []
     dropped_paragraphs = 0
     external_metadata_answer = bool(result.get("external_metadata_answer"))
-    semantic_support_suppressed = (
-        str(quality.get("answer_support_grade", "")) == "unsupported"
-        and str(quality.get("reason_code", ""))
-        not in {"citation_validation_failed", "missing_claim_citations"}
-    )
+    semantic_support_suppressed = str(
+        quality.get("answer_support_grade", "")
+    ) == "unsupported" and str(quality.get("reason_code", "")) not in {
+        "citation_validation_failed",
+        "missing_claim_citations",
+    }
     await repository.append_agent_run_event(
         run_id,
         "node_started",
@@ -1282,6 +1364,19 @@ async def execute_agent_run(
             "dropped_paragraph_count": dropped_paragraphs,
         },
     )
+    exposed_entities_for_state: list[str] = []
+    if tool_loop_result is not None:
+        active_task = resolution.references.get("active_task")
+        requested_exposure_count = int(
+            active_task.get("requested_count")
+            if isinstance(active_task, dict) and active_task.get("requested_count")
+            else requested_paper_count(query, default=5) or 5
+        )
+        exposed_entities_for_state = _displayed_recommendation_entities(
+            published_answer,
+            tool_loop_result.exposed_recommendation_candidates,
+            limit=requested_exposure_count,
+        )
     if finished_run and result_status == "completed":
         try:
             await repository.update_session_compaction(
@@ -1297,6 +1392,7 @@ async def execute_agent_run(
                     query,
                     selected_skill=selected_skill,
                     web_enabled=bool(snapshot.get("web_enabled", False)),
+                    exposed_recommendation_entities=(exposed_entities_for_state),
                 ),
             )
         except Exception:

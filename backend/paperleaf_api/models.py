@@ -71,8 +71,13 @@ paper_collections = Table(
     "paper_collections",
     Base.metadata,
     Column("paper_id", ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True),
-    Column("collection_id", ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True),
+    Column(
+        "collection_id",
+        ForeignKey("collections.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
 )
+
 
 class User(Base):
     __tablename__ = "users"
@@ -117,6 +122,7 @@ class Paper(Base):
     doi: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     publication: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     arxiv_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    academic_external_ids: Mapped[dict] = mapped_column(JSON, default=dict)
     filename: Mapped[str] = mapped_column(String(500))
     storage_key: Mapped[str] = mapped_column(String(1000))
     mime_type: Mapped[str] = mapped_column(String(100), default="application/pdf")
@@ -239,9 +245,7 @@ class DiscoveryBatch(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     batch_number: Mapped[int] = mapped_column(Integer)
     basis_paper_count: Mapped[int] = mapped_column(Integer)
     seed_paper_title: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
@@ -263,9 +267,7 @@ class DiscoveryItem(Base):
     batch_id: Mapped[str] = mapped_column(
         ForeignKey("discovery_batches.id", ondelete="CASCADE"), index=True
     )
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     arxiv_id: Mapped[str] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(1000))
     authors: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -293,12 +295,8 @@ class PaperArtifact(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    paper_id: Mapped[str] = mapped_column(
-        ForeignKey("papers.id", ondelete="CASCADE"), index=True
-    )
-    owner_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     type: Mapped[str] = mapped_column(String(32))
     source_revision: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="ready", index=True)
@@ -320,12 +318,8 @@ class PaperTranslation(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    paper_id: Mapped[str] = mapped_column(
-        ForeignKey("papers.id", ondelete="CASCADE"), index=True
-    )
-    owner_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     target_language: Mapped[str] = mapped_column(String(32))
     source_revision: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
@@ -394,9 +388,7 @@ class Job(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    claimed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     claim_token: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -407,9 +399,7 @@ class ChatSession(Base):
     __table_args__ = (Index("ix_chat_sessions_user_updated", "user_id", "updated_at"),)
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话")
     type: Mapped[str] = mapped_column(String(32), default="library")
     paper_id: Mapped[Optional[str]] = mapped_column(
@@ -420,9 +410,7 @@ class ChatSession(Base):
     )
     compact_summary: Mapped[dict] = mapped_column(JSON, default=dict)
     summary_version: Mapped[int] = mapped_column(Integer, default=1)
-    compacted_through_message_id: Mapped[Optional[str]] = mapped_column(
-        String(36), nullable=True
-    )
+    compacted_through_message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     entity_state: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -431,9 +419,7 @@ class ChatSession(Base):
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "client_message_id", name="uq_chat_message_client_id"
-        ),
+        UniqueConstraint("session_id", "client_message_id", name="uq_chat_message_client_id"),
         UniqueConstraint("session_id", "sequence", name="uq_chat_message_sequence"),
         Index("ix_chat_messages_session_created", "session_id", "created_at"),
     )
@@ -477,12 +463,8 @@ class AgentRun(Base):
             "uq_agent_runs_active_session",
             "session_id",
             unique=True,
-            postgresql_where=sql_text(
-                "status IN ('pending', 'running', 'interrupted')"
-            ),
-            sqlite_where=sql_text(
-                "status IN ('pending', 'running', 'interrupted')"
-            ),
+            postgresql_where=sql_text("status IN ('pending', 'running', 'interrupted')"),
+            sqlite_where=sql_text("status IN ('pending', 'running', 'interrupted')"),
         ),
         Index("uq_agent_runs_user_message_id", "user_message_id", unique=True),
         Index("uq_agent_runs_assistant_message_id", "assistant_message_id", unique=True),
@@ -554,9 +536,7 @@ class AgentRunEvent(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
-    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
     sequence: Mapped[int] = mapped_column(Integer)
     event_key: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     event: Mapped[str] = mapped_column(String(64))
@@ -574,9 +554,7 @@ class AgentToolCall(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     call_id: Mapped[str] = mapped_column(String(100))
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True
-    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     skill_name: Mapped[str] = mapped_column(String(64))
     tool_name: Mapped[str] = mapped_column(String(80))
@@ -655,9 +633,7 @@ class MemoryItem(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     type: Mapped[str] = mapped_column(String(32))
     value: Mapped[str] = mapped_column(Text)
     normalized_hash: Mapped[str] = mapped_column(String(64))
@@ -680,9 +656,7 @@ class MemoryItem(Base):
 
 class MemoryItemVersion(Base):
     __tablename__ = "memory_item_versions"
-    __table_args__ = (
-        UniqueConstraint("memory_item_id", "version", name="uq_memory_item_version"),
-    )
+    __table_args__ = (UniqueConstraint("memory_item_id", "version", name="uq_memory_item_version"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     memory_item_id: Mapped[str] = mapped_column(

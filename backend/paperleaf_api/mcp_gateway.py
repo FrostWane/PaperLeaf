@@ -222,6 +222,24 @@ def _sanitize_result(payload: dict[str, Any]) -> dict[str, Any]:
             "open_access_pdf_url": _public_url(raw.get("open_access_pdf_url")),
             "abstract": " ".join(str(raw.get("abstract") or "").split())[:4000],
             "citation_count": max(0, int(raw.get("citation_count") or 0)),
+            "work_type": " ".join(str(raw.get("work_type") or "").split())[:80]
+            or None,
+            "publication_types": [
+                " ".join(str(value).split())[:80]
+                for value in (
+                    raw.get("publication_types")
+                    if isinstance(raw.get("publication_types"), list)
+                    else []
+                )
+            ][:8],
+            "is_paratext": raw.get("is_paratext") is True,
+            "is_retracted": raw.get("is_retracted") is True,
+            "topics": [
+                " ".join(str(value).split())[:200]
+                for value in (
+                    raw.get("topics") if isinstance(raw.get("topics"), list) else []
+                )
+            ][:8],
             "source": source,
         }
         if item["title"]:

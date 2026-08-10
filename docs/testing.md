@@ -187,6 +187,8 @@ docker compose run --rm api python -m paperleaf_api.evaluation_harness_live \
 
 2026-08-10 已补齐多轮联网发现回归：在上一轮“推荐 5 篇尚未入库论文”后追问“有没有更近的论文，如 2026 年的”，真实 Run `8d348fcf-5b44-4b33-9635-8ff54695d92b` 通过 `context_task_inheritance` 继承 `find_related_papers`，OpenAlex 实际收到 `year_from=2026, year_to=2026`，并返回 5/5 篇 2026 年候选。本地 Chunk 引用为 0，结构性验收通过。完整报告见 `docs/reports/2026-08-10-multiturn-discovery-context.md`。
 
+2026-08-10 推荐质量与连续换批再次回归：后端 427 项收集、421 通过、6 项跳过，学术 MCP 5/5，前端 Vitest 113/113；真实 Run `e04edc39-b275-47fd-b765-c85ccaa0e041` 与 `357967f9-3dd3-452c-9717-77f60de19440` 属于同一会话，首轮和 2026 年追问均返回 5 篇，跨批标题重复 0，第二轮 5/5 年份为 2026。Context Snapshot 只保存第一轮实际展示的 5 个标题实体。该结果是 2/2 结构回归，不是人工 Precision@5；完整报告见 `docs/reports/2026-08-10-recommendation-quality-and-batching.md`。
+
 当前 Vitest 覆盖登录表单校验、登录/改密/上传、持久会话 CRUD、202 幂等提交、会话切换竞态、Agent 断线补发与暂停恢复、安全 Markdown、单篇与集合范围绑定、管理员模型状态、文献修改/重试/删除、总结与结构图映射、层级集合、PDF 缩放与布局恢复、翻译确认/取消/失败/partial 终态。Storybook 提供上传弹窗、论文工作台、文献组织工作台和组织管理弹层供人工检查。
 
 2026-08-07 后台概括回归：虚构英文 DTA 论文经真实 DeepSeek 配置完成 `Job → Worker → paper_artifacts`，任务提交 17.2 ms、生成 17.85 s，得到 5 个中文章节和 6 条合法引用；全部事实均含中文，英文降级摘录为 0。完整前端 Vitest 为 83/83，完整后端 Pytest 为 189 passed / 5 skipped（跳过项需要 PostgreSQL 容器）；生产构建成功。

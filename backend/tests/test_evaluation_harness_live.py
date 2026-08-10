@@ -5,6 +5,7 @@ from paperleaf_api.evaluation_harness_live import (
     LiveHarness,
     LiveRunResult,
     LiveScenario,
+    _grade_recommendation_sequence,
     build_scenarios,
 )
 
@@ -136,3 +137,31 @@ def test_live_grader_separates_controlled_provider_degradation_from_app_failure(
     assert result.external_provider_degradations == [
         "SEMANTIC_SCHOLAR_RATE_LIMITED"
     ]
+
+
+def test_live_sequence_detects_repeated_batch_and_lost_year_constraint() -> None:
+    first = LiveRunResult(
+        index=1,
+        category="function_mcp",
+        title="first",
+        question="推荐五篇",
+        answer="| 1 | **Paper A** | 2025 | Venue | DOI | OpenAlex |",
+        structural_pass=True,
+    )
+    followup = LiveRunResult(
+        index=2,
+        category="function_mcp",
+        title="followup",
+        question="换一批 2026 年的",
+        answer="| 1 | **Paper A** | 2025 | Venue | DOI | OpenAlex |",
+        structural_pass=True,
+    )
+
+    _grade_recommendation_sequence([first, followup])
+
+    assert first.failures == []
+    assert followup.failures == [
+        "recommendation_batch_repeated",
+        "recommendation_year_constraint_lost",
+    ]
+    assert followup.structural_pass is False

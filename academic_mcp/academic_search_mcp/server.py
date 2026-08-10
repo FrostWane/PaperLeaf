@@ -153,9 +153,7 @@ def _openalex_item(item: dict[str, Any]) -> dict[str, Any]:
         "title": _text(item.get("display_name") or item.get("title"), 1000),
         "authors": authors,
         "year": (
-            item.get("publication_year")
-            if isinstance(item.get("publication_year"), int)
-            else None
+            item.get("publication_year") if isinstance(item.get("publication_year"), int) else None
         ),
         "publication": _text(source.get("display_name"), 500) or None,
         "doi": doi,
@@ -164,6 +162,14 @@ def _openalex_item(item: dict[str, Any]) -> dict[str, Any]:
         "open_access_pdf_url": _url(primary.get("pdf_url") or open_access.get("oa_url")),
         "abstract": _abstract_from_index(item.get("abstract_inverted_index")),
         "citation_count": max(0, int(item.get("cited_by_count") or 0)),
+        "work_type": _text(item.get("type"), 80).casefold() or None,
+        "is_paratext": item.get("is_paratext") is True,
+        "is_retracted": item.get("is_retracted") is True,
+        "topics": [
+            _text(topic.get("display_name"), 200)
+            for topic in (item.get("topics") if isinstance(item.get("topics"), list) else [])[:8]
+            if isinstance(topic, dict) and topic.get("display_name")
+        ],
     }
 
 
@@ -187,6 +193,15 @@ def _semantic_item(item: dict[str, Any]) -> dict[str, Any]:
         "open_access_pdf_url": _url(open_pdf.get("url")),
         "abstract": _text(item.get("abstract"), 4000),
         "citation_count": max(0, int(item.get("citationCount") or 0)),
+        "publication_types": [
+            _text(value, 80)
+            for value in (
+                item.get("publicationTypes")
+                if isinstance(item.get("publicationTypes"), list)
+                else []
+            )[:8]
+            if _text(value, 80)
+        ],
     }
 
 
@@ -201,6 +216,7 @@ async def search_openalex(
 
     normalized = _text(query, 500)
     requested = min(max(int(limit), 1), 10)
+    provider_limit = min(100, max(20, requested * 4))
     if not normalized:
         raise ValueError("查询词不能为空")
     if year_from is not None and not 1900 <= int(year_from) <= 2100:
@@ -223,14 +239,19 @@ async def search_openalex(
     try:
         params: dict[str, Any] = {
             "search": normalized,
-            "per-page": requested,
+            "per-page": provider_limit,
             "api_key": api_key,
             "select": (
                 "id,display_name,authorships,publication_year,primary_location,ids,"
-                "open_access,abstract_inverted_index,cited_by_count,doi"
+                "open_access,abstract_inverted_index,cited_by_count,doi,type,"
+                "is_paratext,is_retracted,topics"
             ),
         }
-        filters: list[str] = []
+        filters: list[str] = [
+            "type:article|preprint|dissertation|book-chapter",
+            "is_paratext:false",
+            "is_retracted:false",
+        ]
         if effective_from:
             filters.append(f"from_publication_date:{effective_from}-01-01")
         if effective_to:
@@ -257,33 +278,62 @@ async def search_openalex(
         "query": normalized,
         "year_from": effective_from,
         "year_to": effective_to,
-        "results": [_openalex_item(item) for item in rows if isinstance(item, dict)][:requested],
+        "results": [
+            parsed
+            for item in rows
+            if isinstance(item, dict)
+            for parsed in [_openalex_item(item)]
+            if parsed.get("work_type") in {"article", "preprint", "dissertation", "book-chapter"}
+            and not parsed.get("is_paratext")
+            and not parsed.get("is_retracted")
+        ][:requested],
     }
 
 
 @mcp.tool(annotations=READ_ONLY_OPEN_WORLD, structured_output=True)
-async def search_semantic_scholar(query: str, limit: int = 5) -> dict[str, Any]:
+async def search_semantic_scholar(
+    query: str,
+    limit: int = 5,
+    year_from: int | None = None,
+    year_to: int | None = None,
+) -> dict[str, Any]:
     """按自然语言查询 Semantic Scholar 公开论文元数据。"""
 
     normalized = _text(query.replace("-", " "), 500)
     requested = min(max(int(limit), 1), 10)
+    provider_limit = min(100, max(20, requested * 4))
     if not normalized:
         raise ValueError("查询词不能为空")
+    if year_from is not None and not 1900 <= int(year_from) <= 2100:
+        raise ValueError("起始年份超出允许范围")
+    if year_to is not None and not 1900 <= int(year_to) <= 2100:
+        raise ValueError("结束年份超出允许范围")
+    effective_from = int(year_from) if year_from is not None else None
+    effective_to = int(year_to) if year_to is not None else None
+    if effective_from and effective_to and effective_from > effective_to:
+        raise ValueError("起始年份不能晚于结束年份")
     headers: dict[str, str] = {}
     api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
     if api_key:
         headers["x-api-key"] = api_key
     try:
+        params: dict[str, Any] = {
+            "query": normalized,
+            "limit": provider_limit,
+            "fields": (
+                "title,authors,year,venue,abstract,url,externalIds,"
+                "openAccessPdf,citationCount,publicationTypes"
+            ),
+        }
+        if effective_from or effective_to:
+            params["year"] = (
+                str(effective_from)
+                if effective_from and effective_from == effective_to
+                else f"{effective_from or ''}-{effective_to or ''}"
+            )
         payload = await _get_json(
             f"{SEMANTIC_SCHOLAR_API}/paper/search",
-            params={
-                "query": normalized,
-                "limit": requested,
-                "fields": (
-                    "title,authors,year,venue,abstract,url,externalIds,"
-                    "openAccessPdf,citationCount"
-                ),
-            },
+            params=params,
             headers=headers,
         )
     except (httpx.HTTPError, ValueError) as error:
@@ -299,7 +349,18 @@ async def search_semantic_scholar(query: str, limit: int = 5) -> dict[str, Any]:
         "source": "Semantic Scholar",
         "available": True,
         "query": normalized,
-        "results": [_semantic_item(item) for item in rows if isinstance(item, dict)][:requested],
+        "year_from": effective_from,
+        "year_to": effective_to,
+        "results": [
+            parsed
+            for item in rows
+            if isinstance(item, dict)
+            for parsed in [_semantic_item(item)]
+            if not (
+                {value.casefold() for value in parsed.get("publication_types", [])}
+                & {"dataset", "editorial", "lettersandcomments", "news", "book"}
+            )
+        ][:requested],
     }
 
 
@@ -355,9 +416,7 @@ async def get_academic_metadata(
             "result": None,
         }
     openalex_id = (
-        f"https://doi.org/{normalized.removeprefix('https://doi.org/')}"
-        if is_doi
-        else normalized
+        f"https://doi.org/{normalized.removeprefix('https://doi.org/')}" if is_doi else normalized
     )
     try:
         payload = await _get_json(
