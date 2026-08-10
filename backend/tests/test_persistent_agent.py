@@ -509,9 +509,10 @@ def test_discovery_run_loads_all_authorized_scope_titles_not_only_first_eight() 
 
         assert graph.initial is not None
         assert graph.initial["selected_skill"] == "find_related_papers"
-        assert graph.initial["scope_paper_titles"] == [
-            f"Scope paper {index}" for index in range(1, 11)
-        ]
+        assert graph.initial["scope_paper_titles"] == sorted(
+            (f"Scope paper {index}" for index in range(1, 11)),
+            key=str.casefold,
+        )
 
     asyncio.run(scenario())
 

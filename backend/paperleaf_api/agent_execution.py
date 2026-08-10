@@ -713,13 +713,14 @@ async def execute_agent_run(
             scoped_papers = await repository.list_papers(run.user_id)
         except Exception:
             scoped_papers = []
-        initial["scope_paper_titles"] = list(
+        initial["scope_paper_titles"] = sorted(
             dict.fromkeys(
                 str(getattr(paper, "title", "") or "").strip()
                 for paper in scoped_papers
                 if str(getattr(paper, "id", "")) in allowed_scope_ids
                 and str(getattr(paper, "title", "") or "").strip()
-            )
+            ),
+            key=str.casefold,
         )
     if harness_flags.get("skills_enabled"):
         await repository.append_agent_run_event(
