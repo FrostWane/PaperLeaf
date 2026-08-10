@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import re
 from typing import Any, Literal
@@ -29,6 +30,11 @@ _DOI_RE = re.compile(r"^10\.\d{4,9}/[-._;()/:A-Z0-9]+$", re.IGNORECASE)
 _ARXIV_RE = re.compile(r"^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?$", re.I)
 _http_client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
+
+# httpx 的 INFO 请求日志会打印完整查询字符串。OpenAlex 当前通过查询参数传递
+# api_key，因此必须在进程启动时关闭该日志，避免凭据进入 Docker/集中日志。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 mcp = FastMCP(
     "PaperLeaf Academic Search",
@@ -201,18 +207,28 @@ async def search_openalex(query: str, limit: int = 5) -> dict[str, Any]:
             "query": normalized,
             "results": [],
         }
-    payload = await _get_json(
-        f"{OPENALEX_API}/works",
-        params={
-            "search": normalized,
-            "per-page": requested,
-            "api_key": api_key,
-            "select": (
-                "id,display_name,authorships,publication_year,primary_location,ids,"
-                "open_access,abstract_inverted_index,cited_by_count,doi"
-            ),
-        },
-    )
+    try:
+        payload = await _get_json(
+            f"{OPENALEX_API}/works",
+            params={
+                "search": normalized,
+                "per-page": requested,
+                "api_key": api_key,
+                "select": (
+                    "id,display_name,authorships,publication_year,primary_location,ids,"
+                    "open_access,abstract_inverted_index,cited_by_count,doi"
+                ),
+            },
+        )
+    except (httpx.HTTPError, ValueError) as error:
+        # 不把 httpx 异常继续抛给 ASGI/MCP 日志；其异常文本可能包含带 Key 的 URL。
+        return {
+            "source": "OpenAlex",
+            "available": False,
+            "error_code": _academic_error_code(error, "OpenAlex"),
+            "query": normalized,
+            "results": [],
+        }
     rows = payload.get("results") if isinstance(payload.get("results"), list) else []
     return {
         "source": "OpenAlex",
@@ -320,10 +336,18 @@ async def get_academic_metadata(
         if is_doi
         else normalized
     )
-    payload = await _get_json(
-        f"{OPENALEX_API}/works/{quote(openalex_id, safe=':/')}",
-        params={"api_key": api_key},
-    )
+    try:
+        payload = await _get_json(
+            f"{OPENALEX_API}/works/{quote(openalex_id, safe=':/')}",
+            params={"api_key": api_key},
+        )
+    except (httpx.HTTPError, ValueError) as error:
+        return {
+            "source": "OpenAlex",
+            "available": False,
+            "error_code": _academic_error_code(error, "OpenAlex"),
+            "result": None,
+        }
     return {"source": "OpenAlex", "available": True, "result": _openalex_item(payload)}
 
 

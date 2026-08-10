@@ -263,6 +263,67 @@ def test_configured_answerer_retries_transient_failure_once_with_compact_context
     assert "[chunk:E11" not in prompt
 
 
+def test_configured_answerer_treats_openalex_results_as_metadata_not_pdf_evidence(
+    monkeypatch,
+) -> None:
+    captured_prompts: list[list[tuple[str, str]]] = []
+
+    class FakeChatOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def astream(self, prompt_messages):
+            captured_prompts.append(prompt_messages)
+            yield SimpleNamespace(content="推荐 DeepDTA（来源：OpenAlex；2018）。")
+
+    class SuccessRouter:
+        def has_provider(self, purpose):
+            return purpose == "answer"
+
+        async def execute(self, _purpose, operation, *, timeout_seconds=None):
+            provider = SimpleNamespace(
+                chat_model="deepseek-chat",
+                api_key="test-key",
+                base_url="http://model.invalid/v1",
+            )
+            return await operation(provider)
+
+    fake_langchain = ModuleType("langchain_openai")
+    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
+    config = SimpleNamespace(
+        evidence_min_confidence=0.35,
+        evidence_min_vector_score=0.35,
+        evidence_min_lexical_coverage=0.18,
+        agent_answer_timeout_seconds=90.0,
+        agent_answer_retry_timeout_seconds=60.0,
+    )
+
+    text, citations = asyncio.run(
+        build_configured_answerer(config, SuccessRouter())(
+            "请用 OpenAlex 找相关论文",
+            [],
+            [
+                {
+                    "role": "tool_context",
+                    "content": (
+                        '{"source":"OpenAlex","items":['
+                        '{"title":"DeepDTA","year":2018}]}'
+                    ),
+                }
+            ],
+        )
+    )
+
+    assert text == "推荐 DeepDTA（来源：OpenAlex；2018）。"
+    assert citations == []
+    prompt = "\n".join(content for _, content in captured_prompts[0])
+    assert "就必须直接整理这些真实结果" in prompt
+    assert "尚未导入和核验 PDF 全文" in prompt
+    assert "本地 PDF 证据质量" in prompt
+    assert '"title":"DeepDTA"' in prompt
+
+
 def test_graph_abstains_when_no_evidence_exists() -> None:
     result = _run(build_agent_graph(EmptyRetriever(), no_evidence_answerer))
 
@@ -360,6 +421,59 @@ def test_graph_applies_final_budget_and_keeps_tool_call_result_pair_in_model_con
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"].count('"tool_call_id": "call-1"') == 2
     assert result["context_usage"]["final_input_tokens"] <= 3000
+
+
+@pytest.mark.parametrize("use_langgraph", [False, True])
+def test_external_tool_context_generates_answer_without_falling_through_to_arxiv(
+    use_langgraph: bool,
+) -> None:
+    captured_messages: list[dict] = []
+
+    async def answer_from_openalex(query, evidence, messages=None):
+        assert evidence == []
+        captured_messages.extend(messages or [])
+        return "OpenAlex 返回了相关论文元数据。", []
+
+    async def unexpected_arxiv_search(_request: ArxivSearchInput) -> ToolResult:
+        raise AssertionError("已有 OpenAlex 结果时不应再次搜索 arXiv")
+
+    graph = build_agent_graph(
+        EmptyRetriever(),
+        answer_from_openalex,
+        arxiv_search=unexpected_arxiv_search,
+        use_langgraph=use_langgraph,
+    )
+    result = asyncio.run(
+        graph.ainvoke(
+            {
+                "user_id": "u1",
+                "query": "请用 OpenAlex 查找相关论文",
+                "selected_paper_ids": [],
+                "web_enabled": True,
+                "tool_mode_active": True,
+                "tool_context_entries": [
+                    {
+                        "kind": "call",
+                        "tool_call_id": "openalex-1",
+                        "tool": "mcp__academic__search_openalex",
+                        "content": '{"query":"DeepDTA"}',
+                    },
+                    {
+                        "kind": "result",
+                        "tool_call_id": "openalex-1",
+                        "tool": "mcp__academic__search_openalex",
+                        "content": '{"source":"OpenAlex","items":[{"title":"DeepDTA"}]}',
+                    },
+                ],
+                "context_budget": {"hard_limit": 3000},
+            },
+            {"recursion_limit": 8},
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["answer"] == "OpenAlex 返回了相关论文元数据。"
+    assert any(item.get("role") == "tool_context" for item in captured_messages)
 
 
 def test_secondary_support_grader_cannot_replace_a_valid_cited_answer() -> None:

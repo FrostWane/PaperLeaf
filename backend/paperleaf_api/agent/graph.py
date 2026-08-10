@@ -268,7 +268,14 @@ def build_configured_answerer(
                     "一行写 `> 证据说明：当前检索片段与问题的匹配度有限，结论仅供初步参考。`；"
                     "如果完全没有片段，不得假装读过论文，应以自然、完整的语言说明现在能判断"
                     "什么、不能判断什么，以及用户可如何补充问题；若用户问的是通用概念，可以"
-                    "提供一般知识，但必须明确它并非来自当前文献，最后说明当前文献证据不足。",
+                    "提供一般知识，但必须明确它并非来自当前文献，最后说明当前文献证据不足。\n"
+                    "上述全文证据限制不等于禁止使用学术检索元数据：如果用户正在找论文、"
+                    "查书目信息或请求相关工作，并且 Tool Result 已返回 OpenAlex、Semantic "
+                    "Scholar 或 arXiv 条目，就必须直接整理这些真实结果，优先列出题目、年份、"
+                    "出版物、DOI/链接及其与查询的相关性，不得声称‘没有返回结果’或再次要求"
+                    "用户提供已经存在于 Tool Result 中的信息。每项明确标注元数据来源；可以"
+                    "依据摘要简述相关性，但必须说明尚未导入和核验 PDF 全文，且不要使用"
+                    "`[chunk:...]` 引用。",
                 ),
             ]
             if cached_context:
@@ -326,7 +333,7 @@ def build_configured_answerer(
             prompt_messages.append(
                 (
                     "human",
-                    f"当前问题：{query}\n\n检索质量：{quality.summary}"
+                    f"当前问题：{query}\n\n本地 PDF 证据质量：{quality.summary}"
                     f"（置信度 {quality.confidence:.2f}）\n\n待引用证据：\n{context}",
                 )
             )
@@ -741,7 +748,14 @@ class AgentRuntime:
             state.update(await node(state))
             if state.get("status") in {"failed", "completed"}:
                 return state
-        if not state.get("retrieved_evidence") and state.get("web_enabled"):
+        usable_external_context = bool(
+            state.get("tool_mode_active") and state.get("tool_context_entries")
+        )
+        if (
+            not state.get("retrieved_evidence")
+            and state.get("web_enabled")
+            and not usable_external_context
+        ):
             try:
                 state.update(await self.search_arxiv(state))
                 state.update(await self.propose_import(state))
@@ -830,7 +844,14 @@ def build_agent_graph(
         "grade_evidence",
         lambda state: (
             "search_arxiv"
-            if not state.get("retrieved_evidence") and state.get("web_enabled")
+            if (
+                not state.get("retrieved_evidence")
+                and state.get("web_enabled")
+                and not (
+                    state.get("tool_mode_active")
+                    and state.get("tool_context_entries")
+                )
+            )
             else "generate"
         ),
         {

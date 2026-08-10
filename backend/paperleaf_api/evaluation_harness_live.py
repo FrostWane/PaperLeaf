@@ -673,8 +673,16 @@ async def _probe_mcp_cache_disable() -> dict[str, Any]:
         original_enabled = bool(server.enabled)
         if not original_enabled:
             return {"executed": False, "passed": None, "reason": "MCP_SERVER_DISABLED"}
+        # 缓存键需要每次不同，但查询本身必须命中真实论文。MCP 服务会规范化连续
+        # 空白，因此这里用随机空白生成唯一缓存键，同时始终查询稳定的 DeepDTA 主题。
         arguments = {
-            "query": f"PaperLeaf cache disable probe {secrets.token_hex(6)}",
+            "query": (
+                "DeepDTA"
+                + " " * (1 + secrets.randbelow(24))
+                + "drug target"
+                + " " * (1 + secrets.randbelow(24))
+                + "binding affinity"
+            ),
             "limit": 1,
         }
         first = await gateway.call("mcp__academic__search_openalex", arguments)
