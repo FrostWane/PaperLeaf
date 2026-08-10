@@ -30,7 +30,7 @@ ALLOWED_REMOTE_TOOLS = {
     "get_academic_metadata",
 }
 NORMALIZED_PREFIX = "mcp__academic__"
-MCP_SCHEMA_REVISION = 1
+MCP_SCHEMA_REVISION = 2
 
 MCP_CALLS = Counter(
     "paperleaf_mcp_tool_calls_total",
@@ -191,9 +191,13 @@ def _sanitize_result(payload: dict[str, Any]) -> dict[str, Any]:
         "source": source,
         "available": payload.get("available") is not False,
     }
-    for key in ("query", "error_code"):
+    for key in ("query", "error_code", "year_from", "year_to"):
         if payload.get(key) is not None:
-            sanitized[key] = " ".join(str(payload[key]).split())[:500]
+            sanitized[key] = (
+                int(payload[key])
+                if key in {"year_from", "year_to"}
+                else " ".join(str(payload[key]).split())[:500]
+            )
     raw_results = payload.get("results")
     if raw_results is None and isinstance(payload.get("result"), dict):
         raw_results = [payload["result"]]

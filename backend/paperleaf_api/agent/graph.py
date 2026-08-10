@@ -181,6 +181,70 @@ def _external_metadata_from_contexts(
     return candidates, search_queries
 
 
+def _external_search_observations(contexts: list[str]) -> list[dict[str, Any]]:
+    """提取外部检索的可审计状态，使“结果为空”也能与“没有调用”区分。"""
+
+    observations: list[dict[str, Any]] = []
+
+    def parse(value: Any, *, tool: str = "") -> None:
+        if isinstance(value, str):
+            try:
+                parse(json.loads(value), tool=tool)
+            except (json.JSONDecodeError, TypeError):
+                return
+            return
+        if isinstance(value, list):
+            for item in value:
+                parse(item, tool=tool)
+            return
+        if not isinstance(value, dict):
+            return
+        current_tool = str(value.get("tool") or tool)
+        if value.get("kind") == "call":
+            return
+        if value.get("kind") == "result" and "content" in value:
+            parse(value.get("content"), tool=current_tool)
+            return
+        if not current_tool.startswith("mcp__academic__"):
+            return
+        items = value.get("items")
+        observations.append(
+            {
+                "tool": current_tool,
+                "source": str(value.get("source") or "外部学术数据源"),
+                "available": value.get("available", True) is not False
+                and str(value.get("status") or "succeeded")
+                not in {"failed", "rejected", "invalid_arguments"}
+                and not bool(value.get("error_code")),
+                "error_code": value.get("error_code"),
+                "item_count": len(items) if isinstance(items, list) else 0,
+            }
+        )
+
+    for context in contexts:
+        parse(context)
+    return observations
+
+
+def _requested_recommendation_count(query: str) -> int | None:
+    match = re.search(
+        r"(?:推荐(?:数量)?|列出|查找|寻找|继续联网推荐)?\s*"
+        r"(\d{1,2})\s*篇",
+        query,
+    )
+    return min(10, max(1, int(match.group(1)))) if match else None
+
+
+def _requested_year_range(query: str) -> tuple[int, int] | None:
+    # 内部上下文可能包含旧年份；只从当前用户短句提取硬过滤。
+    user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
+    years = [
+        int(value)
+        for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
+    ]
+    return (min(years), max(years)) if years else None
+
+
 def _external_recommendation_reason(title: str, source: str) -> str:
     lowered = title.casefold()
     if any(term in lowered for term in ("review", "survey", "tools")):
@@ -246,11 +310,12 @@ def _ensure_external_recommendation_shape(
 ) -> str:
     """模型漏项时用已验证外部元数据生成确定性、完整的推荐清单。"""
 
-    count_match = re.search(r"(?:推荐|列出|查找|寻找)?\s*(\d{1,2})\s*篇", query)
-    if not count_match:
+    requested = _requested_recommendation_count(query)
+    if requested is None:
         return answer
-    requested = min(10, max(1, int(count_match.group(1))))
     candidates, search_queries = _external_metadata_from_contexts(contexts)
+    observations = _external_search_observations(contexts)
+    year_range = _requested_year_range(query)
     existing_titles = {
         _normalized_title(item.paper_title) for item in evidence if item.paper_title.strip()
     }
@@ -259,16 +324,64 @@ def _ensure_external_recommendation_shape(
         item
         for item in candidates
         if not _matches_existing_title(str(item["title"]), existing_titles)
+        and (
+            year_range is None
+            or (
+                str(item.get("year") or "").isdigit()
+                and year_range[0] <= int(item["year"]) <= year_range[1]
+            )
+        )
     ]
     if len(filtered) < requested:
-        return answer
-    selected = filtered[:requested]
+        successful_sources = list(
+            dict.fromkeys(
+                str(item["source"])
+                for item in observations
+                if item.get("available") is True
+            )
+        )
+        # 精确年份续问中，外部服务已成功查询但数量不足时，不得用
+        # 本地 PDF 参考文献或其他年份偷偷补齐。
+        if year_range is None or not successful_sources:
+            return answer
+        selected = filtered[:requested]
+    else:
+        selected = filtered[:requested]
     lines = [
         "### 联网推荐",
-        "",
-        "| # | 论文 | 年份 | 出版物 | DOI / 链接 | 来源 |",
-        "|---:|---|---:|---|---|---|",
     ]
+    if year_range and len(selected) < requested:
+        label = (
+            str(year_range[0])
+            if year_range[0] == year_range[1]
+            else f"{year_range[0]}–{year_range[1]}"
+        )
+        if not selected:
+            sources = "、".join(successful_sources)
+            lines.extend(
+                [
+                    "",
+                    f"{sources} 已按 {label} 年过滤联网检索，"
+                    "本轮没有返回符合条件且尚未入库的论文。",
+                    "我没有用当前文献库的参考文献或更早年份的论文补齐数量。",
+                    "",
+                    "> 你可以改为“2025–2026 年”，或指定更具体的 DTA / DTI 研究方向后再检索。",
+                ]
+            )
+            return "\n".join(lines)
+        lines.extend(
+            [
+                "",
+                f"按 {label} 年过滤后只找到 {len(selected)} 篇符合条件的候选，未用其他年份补齐。",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| # | 论文 | 年份 | 出版物 | DOI / 链接 | 来源 |",
+            "|---:|---|---:|---|---|---|",
+        ]
+    )
     for index, item in enumerate(selected, start=1):
         title = _escape_markdown_table(item["title"])
         publication = _escape_markdown_table(item.get("publication") or "未提供")

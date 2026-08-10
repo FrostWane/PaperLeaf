@@ -66,3 +66,26 @@ def test_openalex_metadata_converts_auth_error_without_leaking_url(
         "result": None,
     }
     assert secret not in str(result)
+
+
+def test_openalex_search_passes_server_side_year_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def succeed(_url: str, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"results": []}
+
+    monkeypatch.setenv("OPENALEX_API_KEY", "configured")
+    monkeypatch.setattr(server, "_get_json", succeed)
+
+    result = asyncio.run(server.search_openalex("drug target affinity", 5, 2026, 2026))
+
+    assert result["available"] is True
+    assert result["year_from"] == result["year_to"] == 2026
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["filter"] == (
+        "from_publication_date:2026-01-01,to_publication_date:2026-12-31"
+    )

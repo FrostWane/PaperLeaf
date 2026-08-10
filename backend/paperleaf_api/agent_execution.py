@@ -162,6 +162,9 @@ def _next_entity_state(
     existing: dict[str, Any],
     resolution: ContextResolution,
     original_query: str,
+    *,
+    selected_skill: str,
+    web_enabled: bool,
 ) -> dict[str, Any]:
     """保存可审计的讨论实体，不保存选文正文或隐藏推理。"""
 
@@ -172,6 +175,11 @@ def _next_entity_state(
         state = {}
     if paper_id:
         state["paper_id"] = paper_id
+    collection_id = str(references.get("collection_id", "")).strip()
+    if collection_id and state.get("collection_id") not in {None, "", collection_id}:
+        state = {}
+    if collection_id:
+        state["collection_id"] = collection_id
     if references.get("paper_title"):
         state["paper_title"] = str(references["paper_title"])
     if references.get("physical_page") is not None:
@@ -182,6 +190,33 @@ def _next_entity_state(
         state["discussion_entity"] = str(references["summary_entity"])
     if references.get("selected_text"):
         state["selection_consumed"] = True
+    if selected_skill == "find_related_papers" and web_enabled:
+        inherited = references.get("active_task")
+        task = dict(inherited) if isinstance(inherited, dict) else {}
+        count_match = re.search(r"(\d{1,2})\s*篇", original_query)
+        years = [
+            int(value)
+            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", original_query)
+        ]
+        task.update(
+            {
+                "name": "find_related_papers",
+                "web_required": True,
+                "requested_count": min(10, max(1, int(count_match.group(1))))
+                if count_match
+                else int(task.get("requested_count") or 5),
+                "exclude_library": bool(task.get("exclude_library"))
+                or bool(re.search(r"尚未.{0,8}文献库|未入库|不在.{0,8}文献库", original_query)),
+                "source_policy": "academic_external",
+            }
+        )
+        if years:
+            task["year_from"] = min(years)
+            task["year_to"] = max(years)
+        task.pop("inherited", None)
+        state["active_task"] = task
+    else:
+        state.pop("active_task", None)
     state["last_user_query"] = original_query[:500]
     return state
 
@@ -543,10 +578,19 @@ async def execute_agent_run(
     if harness_flags.get("skills_enabled"):
         registry = skill_registry or SkillRegistry.default()
         selected_text = str(resolution.references.get("selected_text", "")).strip()
+        active_task = resolution.references.get("active_task")
         if selected_text:
             definition = route_verified_selection(registry, resolution.original_query)
             route_source = "verified_selection_override"
             route_confidence = 1.0
+        elif (
+            isinstance(active_task, dict)
+            and active_task.get("name") == "find_related_papers"
+            and bool(snapshot.get("web_enabled", False))
+        ):
+            definition = registry.get("find_related_papers")
+            route_source = "context_task_inheritance"
+            route_confidence = 0.98
         elif harness_flags.get("function_tools_enabled") and function_tool_harness is not None:
             try:
                 definition, route_source, route_confidence = (
@@ -1221,6 +1265,8 @@ async def execute_agent_run(
                     dict(getattr(chat_session, "entity_state", {}) or {}),
                     resolution,
                     query,
+                    selected_skill=selected_skill,
+                    web_enabled=bool(snapshot.get("web_enabled", False)),
                 ),
             )
         except Exception:

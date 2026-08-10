@@ -721,6 +721,39 @@ def test_automatic_openalex_respects_explicit_source_and_web_setting() -> None:
     asyncio.run(scenario())
 
 
+def test_automatic_openalex_applies_explicit_publication_year_filter() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=SequencePlanner(),
+            mcp_gateway=object(),
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("DeepDTA: deep drug-target binding affinity prediction",),
+        )
+        schemas = harness.schemas_for(context.skill, web_enabled=True)
+
+        calls = harness._automatic_openalex_calls(
+            "有没有更近的论文，如 2026 年的\n\n[已验证阅读上下文]\n上一轮包含 2019 年",
+            context,
+            schemas,
+        )
+
+        assert len(calls) == 1
+        assert calls[0].arguments == {
+            "query": "DeepDTA: deep drug-target binding affinity prediction",
+            "limit": 8,
+            "year_from": 2026,
+            "year_to": 2026,
+        }
+
+    asyncio.run(scenario())
+
+
 def test_later_planner_timeout_preserves_completed_tool_audit_and_evidence() -> None:
     class TimeoutAfterFirstCallPlanner:
         def __init__(self) -> None:

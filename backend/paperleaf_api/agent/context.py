@@ -44,6 +44,23 @@ _NEEDS_SUBJECT_MARKERS = (
 )
 _PAIR_MARKERS = ("前者", "后者")
 _FOLLOWUP_ENTITY = re.compile(r"^那\s*([^？?呢]{1,40})\s*呢?[？?]?$")
+_DISCOVERY_CONTINUATION_RE = re.compile(
+    r"更近|更新|最新|近期|近年|今年|换一批|再(?:找|搜|推荐)|还有|"
+    r"(?:19|20)\d{2}\s*年?",
+    re.IGNORECASE,
+)
+_DISCOVERY_REQUEST_RE = re.compile(
+    r"(?:联网|搜索|检索|查找|推荐).{0,40}(?:论文|文献|研究)|"
+    r"(?:相关论文|相关文献|openalex|semantic\s+scholar|arxiv)",
+    re.IGNORECASE,
+)
+_COUNT_RE = re.compile(r"(\d{1,2})\s*篇")
+_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+_TASK_SWITCH_RE = re.compile(
+    r"解释|总结|概括|翻译|原文|方法|实验|结果|局限|结构图|脑图|"
+    r"对比|比较",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +99,18 @@ def _previous_user_text(messages: list[dict[str, Any]], query: str) -> str:
     return ""
 
 
+def _previous_discovery_text(messages: list[dict[str, Any]], query: str) -> str:
+    """找最近一次明确的论文发现任务，用于从旧版失败续问中恢复。"""
+
+    for item in reversed(messages):
+        if str(item.get("role", "")) != "user":
+            continue
+        content = str(item.get("content", "")).strip()
+        if content and content != query and _DISCOVERY_REQUEST_RE.search(content):
+            return content[:1000]
+    return ""
+
+
 def _has_pair(text: str) -> bool:
     return bool(re.search(r"(?:和|与|、|versus|\bvs\.?\b)", text, re.IGNORECASE))
 
@@ -97,6 +126,51 @@ def _cached_context(messages: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(value, dict):
             return value
     return {}
+
+
+def _discovery_task_context(
+    query: str,
+    previous: str,
+    cached: dict[str, Any],
+) -> dict[str, Any] | None:
+    """识别“再新一点 / 2026 年的呢”这类对上一轮论文发现任务的续问。
+
+    只继承任务名、数量、年份和“排除已入库”等可审计约束，不保存或推测
+    隐藏推理。没有明确的上一轮发现任务时绝不猜测。
+    """
+
+    if not _DISCOVERY_CONTINUATION_RE.search(query):
+        return None
+    if _TASK_SWITCH_RE.search(query) and not _DISCOVERY_REQUEST_RE.search(query):
+        return None
+    entity_state = cached.get("entity_state")
+    if not isinstance(entity_state, dict):
+        entity_state = {}
+    stored = entity_state.get("active_task")
+    if isinstance(stored, dict) and stored.get("name") == "find_related_papers":
+        task = dict(stored)
+    elif previous and _DISCOVERY_REQUEST_RE.search(previous):
+        count_match = _COUNT_RE.search(previous)
+        task = {
+            "name": "find_related_papers",
+            "web_required": True,
+            "requested_count": int(count_match.group(1)) if count_match else 5,
+            "exclude_library": bool(
+                re.search(r"尚未.{0,8}文献库|未入库|不在.{0,8}文献库|排除.{0,8}已入库", previous)
+            ),
+            "source_policy": "academic_external",
+        }
+    else:
+        return None
+    current_count = _COUNT_RE.search(query)
+    if current_count:
+        task["requested_count"] = min(10, max(1, int(current_count.group(1))))
+    years = [int(value) for value in _YEAR_RE.findall(query)]
+    if years:
+        task["year_from"] = min(years)
+        task["year_to"] = max(years)
+    task["inherited"] = True
+    return task
 
 
 def _summary_anchor(payload: dict[str, Any], query: str) -> tuple[str, Any] | None:
@@ -160,10 +234,14 @@ def resolve_context(
     selected = str(context.get("selected_text", "")).strip()
     cached = _cached_context(messages)
     followup_entity = _FOLLOWUP_ENTITY.match(original)
+    previous = _previous_user_text(messages, original)
+    discovery_anchor = _previous_discovery_text(messages, original)
+    active_task = _discovery_task_context(original, discovery_anchor, cached)
     has_cached_anchor = bool(cached.get("conversation_summary") or cached.get("entity_state"))
     if (
         not selected
         and not has_cached_anchor
+        and not active_task
         and not followup_entity
         and not any(marker in original for marker in _REFERENCE_MARKERS)
     ):
@@ -174,7 +252,6 @@ def resolve_context(
     collection_id = str(context.get("collection_id", "")).strip()
     collection_title = str(context.get("collection_title", "")).strip()
     page = context.get("physical_page")
-    previous = _previous_user_text(messages, original)
     summary_anchor = _summary_anchor(cached, original)
     references: dict[str, Any] = {}
     sources: list[str] = []
@@ -203,6 +280,9 @@ def resolve_context(
         key, value = summary_anchor
         references[key] = value
         sources.append("conversation_summary")
+    if active_task:
+        references["active_task"] = active_task
+        sources.append("active_task")
 
     requires_selection = any(marker in original for marker in _SELECTION_MARKERS)
     requires_subject = any(marker in original for marker in _NEEDS_SUBJECT_MARKERS)
@@ -254,6 +334,20 @@ def resolve_context(
         qualifiers.append(f"本轮追问对象：{followup_entity.group(1).strip()}")
     if summary_anchor:
         qualifiers.append(f"会话摘要锚点：{summary_anchor[1]}")
+    if active_task:
+        count = int(active_task.get("requested_count") or 5)
+        constraints = [f"继续联网推荐 {count} 篇相关论文"]
+        if active_task.get("exclude_library"):
+            constraints.append("排除已在当前文献库中的论文")
+        year_from = active_task.get("year_from")
+        year_to = active_task.get("year_to")
+        if year_from and year_to:
+            constraints.append(
+                f"目标发表年份：{year_from}"
+                if year_from == year_to
+                else f"目标发表年份：{year_from}–{year_to}"
+            )
+        qualifiers.append("延续上一轮任务：" + "；".join(constraints))
     resolved = original + ("\n\n[已验证阅读上下文]\n" + "\n".join(qualifiers) if qualifiers else "")
     confidence = (
         0.97

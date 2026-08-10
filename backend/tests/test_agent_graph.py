@@ -7,6 +7,7 @@ import pytest
 
 from paperleaf_api.agent.graph import (
     _build_citation_aliases,
+    _ensure_external_recommendation_shape,
     _evidence_for_support_check,
     _normalize_answer_citations,
     build_agent_graph,
@@ -62,6 +63,108 @@ class MultiSentenceEvidenceRetriever:
 class EmptyRetriever:
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
         return []
+
+
+def test_exact_year_external_results_never_fall_back_to_older_local_references() -> None:
+    contexts = [
+        json.dumps(
+            [
+                {
+                    "kind": "result",
+                    "tool": "mcp__academic__search_openalex",
+                    "content": json.dumps(
+                        {
+                            "source": "OpenAlex",
+                            "available": True,
+                            "items": [
+                                {
+                                    "title": "Recent DTA Method",
+                                    "year": 2025,
+                                    "doi": "10.1000/recent-dta",
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ]
+        )
+    ]
+    answer = _ensure_external_recommendation_shape(
+        "模型从本地 PDF 参考文献拼出了 2024–2025 年候选。",
+        "有没有更近的论文，如2026年的\n\n[已验证阅读上下文]\n继续联网推荐 5 篇相关论文",
+        contexts,
+        [Evidence("local", "p1", "DeepDTA", 8, "2024 年参考文献")],
+    )
+
+    assert answer.startswith("### 联网推荐")
+    assert "没有返回符合条件" in answer
+    assert "没有用当前文献库的参考文献" in answer
+    assert "Recent DTA Method" not in answer
+    assert "2024 年参考文献" not in answer
+
+
+def test_exact_year_external_recommendation_keeps_only_requested_year() -> None:
+    items = [
+        {
+            "title": f"DTA 2026 paper {index}",
+            "year": 2026,
+            "publication": "Test Journal",
+            "doi": f"10.1000/dta.{index}",
+        }
+        for index in range(1, 6)
+    ] + [{"title": "Older DTA", "year": 2025}]
+    contexts = [
+        json.dumps(
+            {
+                "kind": "result",
+                "tool": "mcp__academic__search_openalex",
+                "content": json.dumps(
+                    {"source": "OpenAlex", "available": True, "items": items}
+                ),
+            }
+        )
+    ]
+
+    answer = _ensure_external_recommendation_shape(
+        "",
+        "再推荐 5 篇 2026 年论文",
+        contexts,
+        [],
+    )
+
+    assert answer.count("| **DTA 2026 paper") == 5
+    assert "Older DTA" not in answer
+
+
+def test_failed_external_search_does_not_claim_zero_verified_results() -> None:
+    contexts = [
+        json.dumps(
+            [
+                {
+                    "kind": "call",
+                    "tool": "mcp__academic__search_openalex",
+                    "content": '{"query":"DeepDTA","year_from":2026}',
+                },
+                {
+                    "kind": "result",
+                    "tool": "mcp__academic__search_openalex",
+                    "content": (
+                        '{"tool":"mcp__academic__search_openalex","status":"failed",'
+                        '"error_code":"OPENALEX_TIMEOUT"}'
+                    ),
+                },
+            ]
+        )
+    ]
+
+    answer = _ensure_external_recommendation_shape(
+        "OpenAlex 超时，无法完成联网检索。",
+        "再推荐 5 篇 2026 年论文",
+        contexts,
+        [],
+    )
+
+    assert answer == "OpenAlex 超时，无法完成联网检索。"
 
 
 def test_support_check_uses_cited_evidence_instead_of_first_retrieval_items() -> None:

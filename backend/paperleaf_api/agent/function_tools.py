@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ..crossref_service import CrossrefClient, crossref_client
 from ..mcp_gateway import McpGateway, McpGatewayError
@@ -189,6 +189,14 @@ class AcademicSearchToolInput(BaseModel):
 
     query: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=5, ge=1, le=10)
+    year_from: int | None = Field(default=None, ge=1900, le=2100)
+    year_to: int | None = Field(default=None, ge=1900, le=2100)
+
+    @model_validator(mode="after")
+    def validate_year_range(self) -> AcademicSearchToolInput:
+        if self.year_from and self.year_to and self.year_from > self.year_to:
+            raise ValueError("起始年份不能晚于结束年份")
+        return self
 
 
 class AcademicMetadataToolInput(BaseModel):
@@ -308,7 +316,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "mcp__academic__search_openalex",
-        1,
+        2,
         "通过受控 MCP 查询 OpenAlex 公开学术元数据；结果不能替代论文原文证据。",
         AcademicSearchToolInput,
         "read",
@@ -915,11 +923,20 @@ class FunctionToolHarness:
         search_query = _representative_scope_query(context.scope_paper_titles, query)
         if not search_query:
             return ()
+        user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
+        years = [
+            int(value)
+            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
+        ]
+        arguments: dict[str, Any] = {"query": search_query, "limit": 8}
+        if years:
+            arguments["year_from"] = min(years)
+            arguments["year_to"] = max(years)
         return (
             ToolCallRequest(
                 call_id="automatic-openalex-1",
                 name=tool,
-                arguments={"query": search_query, "limit": 8},
+                arguments=arguments,
             ),
         )
 
@@ -1294,7 +1311,9 @@ class FunctionToolHarness:
         if name.startswith("mcp__academic__"):
             if self.mcp_gateway is None:
                 raise RuntimeError("MCP_GATEWAY_UNAVAILABLE")
-            result = await self.mcp_gateway.call(name, parsed.model_dump(mode="json"))
+            result = await self.mcp_gateway.call(
+                name, parsed.model_dump(mode="json", exclude_none=True)
+            )
             if result.get("available") is False:
                 raise McpGatewayError(
                     str(result.get("error_code") or "MCP_PROVIDER_UNAVAILABLE"),

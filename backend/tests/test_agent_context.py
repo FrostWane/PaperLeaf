@@ -103,3 +103,83 @@ def test_collection_pronoun_uses_server_verified_collection_scope() -> None:
     assert result.needs_clarification is False
     assert result.references["collection_id"] == "collection-1"
     assert "当前集合" in result.resolved_query
+
+
+def test_recent_year_followup_inherits_external_discovery_constraints() -> None:
+    previous = (
+        "请根据当前集合的研究主题，联网推荐 5 篇尚未在文献库中的相关论文，"
+        "列出题目、年份、出版物、DOI，并说明推荐理由。"
+    )
+    result = resolve_context(
+        "有没有更近的论文，如2026年的",
+        {"collection_id": "collection-1", "collection_title": "DTA"},
+        [
+            {"role": "user", "content": previous},
+            {"role": "assistant", "content": "已返回 5 篇 OpenAlex 候选。"},
+        ],
+        session_type="collection",
+    )
+
+    assert result.needs_clarification is False
+    task = result.references["active_task"]
+    assert task == {
+        "name": "find_related_papers",
+        "web_required": True,
+        "requested_count": 5,
+        "exclude_library": True,
+        "source_policy": "academic_external",
+        "year_from": 2026,
+        "year_to": 2026,
+        "inherited": True,
+    }
+    assert "继续联网推荐 5 篇" in result.resolved_query
+    assert "目标发表年份：2026" in result.resolved_query
+
+
+def test_unrelated_year_question_does_not_inherit_discovery_task() -> None:
+    result = resolve_context(
+        "2026 年这个数字代表什么？",
+        {"paper_id": "paper-1", "paper_title": "DeepDTA"},
+        [{"role": "user", "content": "解释这篇论文的实验表格"}],
+        session_type="paper",
+    )
+
+    assert "active_task" not in result.references
+
+
+def test_explicit_task_switch_does_not_reuse_stored_discovery_task() -> None:
+    result = resolve_context(
+        "解释这篇 2026 年论文的方法",
+        {"paper_id": "paper-2", "paper_title": "New DTA"},
+        [
+            {
+                "role": "context",
+                "content": (
+                    '{"entity_state":{"active_task":{"name":"find_related_papers",'
+                    '"requested_count":5,"web_required":true}}}'
+                ),
+            },
+            {"role": "user", "content": "再推荐 5 篇近期论文"},
+        ],
+        session_type="paper",
+    )
+
+    assert "active_task" not in result.references
+
+
+def test_discovery_context_recovers_after_a_previous_failed_followup() -> None:
+    result = resolve_context(
+        "那就继续找 2026 年的",
+        {"collection_id": "collection-1"},
+        [
+            {"role": "user", "content": "联网推荐 5 篇尚未入库的相关论文"},
+            {"role": "assistant", "content": "已返回 OpenAlex 结果"},
+            {"role": "user", "content": "有没有更近的论文，如2026年的"},
+            {"role": "assistant", "content": "旧版错误地使用了本地参考文献"},
+        ],
+        session_type="collection",
+    )
+
+    assert result.references["active_task"]["name"] == "find_related_papers"
+    assert result.references["active_task"]["requested_count"] == 5
+    assert result.references["active_task"]["year_from"] == 2026

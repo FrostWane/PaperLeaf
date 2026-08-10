@@ -204,6 +204,7 @@ sequenceDiagram
 - `paperleaf_api/skills/*.md` 保存版本化 YAML Manifest 与任务指令。服务启动时会校验名称、版本、允许工具、最大步骤、联网与审批策略；未知字段、未知工具或重复名称会直接阻止启动。
 - 常驻上下文只暴露 Skill 名称、版本和一句描述。每轮选出一个主 Skill 后才加载其完整指令，避免把所有工作流一次性塞进模型上下文。
 - 当前提供 `paper_qa`、`trace_original`、`compare_papers`、`find_related_papers`、`verify_claim`、`summarize_paper` 与 `build_research_map`。Run 会保存最终选择、版本、路由来源和置信度，但不保存隐藏推理。
+- 多轮论文发现会在会话 `entity_state.active_task` 中保存可审计的任务名、数量、年份和排除已入库约束。“更近、换一批、2026 年”等续问会在 Skill 路由前恢复该状态；明确切换到解释、总结、实验或脑图时停止继承。
 - Skill 关闭时仍走 `legacy_agent`；开启后先使用可复现的确定性保底路由。模型驱动路由与强类型工具循环由 Function Calling 里程碑接管，仍受同一 Manifest 权限约束。
 
 ### 受控 Function Calling

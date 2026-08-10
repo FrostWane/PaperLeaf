@@ -55,6 +55,16 @@ class TimedOutGraph:
         raise ModelRuntimeError("MODEL_TIMEOUT", [])
 
 
+class CapturingResultGraph(ResultGraph):
+    def __init__(self, result: dict | None = None) -> None:
+        super().__init__(result)
+        self.initial: dict | None = None
+
+    async def ainvoke(self, initial: dict, _config: dict) -> dict:
+        self.initial = initial
+        return self.result
+
+
 async def _submitted_run(repository: MemoryRepository, user_id: str = "u1"):
     chat_session = await repository.create_chat_session(user_id, "新会话", "library", None, None)
     submission = await repository.submit_chat_message(
@@ -260,6 +270,94 @@ def test_model_timeout_is_reported_instead_of_publishing_raw_extract() -> None:
         assert messages is not None
         assistant = next(item for item in messages if item.role == "assistant")
         assert assistant.content == ""
+
+    asyncio.run(scenario())
+
+
+def test_completed_discovery_task_is_inherited_by_recent_year_followup() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "多轮联网发现", "library", None, None
+        )
+        config = replace(
+            settings,
+            context_engine_enabled=True,
+            skills_enabled=True,
+            function_tools_enabled=False,
+            memory_enabled=False,
+        )
+        first = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "联网推荐 5 篇尚未在文献库中的相关论文",
+            "discovery-message-1",
+            "discovery-hash-1",
+            {
+                "type": "library",
+                "paper_ids": ["p1"],
+                "web_enabled": True,
+                "harness": {
+                    "context_engine_enabled": True,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                },
+            },
+        )
+        assert first is not None
+        first_token = await repository.claim_agent_run_job(first.run.id)
+        assert first_token
+        await execute_agent_run(
+            repository,
+            ResultGraph(),
+            first.run.id,
+            first_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=config,
+        )
+        updated_session = await repository.get_owned_chat_session(session.id, "u1")
+        assert updated_session is not None
+        assert updated_session.entity_state["active_task"]["name"] == "find_related_papers"
+        assert updated_session.entity_state["active_task"]["requested_count"] == 5
+
+        followup = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "有没有更近的论文，如2026年的",
+            "discovery-message-2",
+            "discovery-hash-2",
+            {
+                "type": "library",
+                "paper_ids": ["p1"],
+                "web_enabled": True,
+                "harness": {
+                    "context_engine_enabled": True,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                },
+            },
+        )
+        assert followup is not None
+        followup_token = await repository.claim_agent_run_job(followup.run.id)
+        assert followup_token
+        graph = CapturingResultGraph()
+        await execute_agent_run(
+            repository,
+            graph,
+            followup.run.id,
+            followup_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=config,
+        )
+
+        run = await repository.get_agent_run(followup.run.id)
+        assert run is not None
+        assert run.selected_skill == "find_related_papers"
+        assert run.harness_trace["skill_route_source"] == "context_task_inheritance"
+        assert run.context_snapshot["resolved_references"]["active_task"]["year_from"] == 2026
+        assert graph.initial is not None
+        assert graph.initial["intent"] == "literature_discovery"
+        assert "继续联网推荐 5 篇" in graph.initial["query"]
 
     asyncio.run(scenario())
 

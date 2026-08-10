@@ -191,13 +191,26 @@ def _semantic_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_OPEN_WORLD, structured_output=True)
-async def search_openalex(query: str, limit: int = 5) -> dict[str, Any]:
+async def search_openalex(
+    query: str,
+    limit: int = 5,
+    year_from: int | None = None,
+    year_to: int | None = None,
+) -> dict[str, Any]:
     """按自然语言查询 OpenAlex 公开论文元数据。"""
 
     normalized = _text(query, 500)
     requested = min(max(int(limit), 1), 10)
     if not normalized:
         raise ValueError("查询词不能为空")
+    if year_from is not None and not 1900 <= int(year_from) <= 2100:
+        raise ValueError("起始年份超出允许范围")
+    if year_to is not None and not 1900 <= int(year_to) <= 2100:
+        raise ValueError("结束年份超出允许范围")
+    effective_from = int(year_from) if year_from is not None else None
+    effective_to = int(year_to) if year_to is not None else None
+    if effective_from and effective_to and effective_from > effective_to:
+        raise ValueError("起始年份不能晚于结束年份")
     api_key = os.getenv("OPENALEX_API_KEY", "").strip()
     if not api_key:
         return {
@@ -208,17 +221,25 @@ async def search_openalex(query: str, limit: int = 5) -> dict[str, Any]:
             "results": [],
         }
     try:
+        params: dict[str, Any] = {
+            "search": normalized,
+            "per-page": requested,
+            "api_key": api_key,
+            "select": (
+                "id,display_name,authorships,publication_year,primary_location,ids,"
+                "open_access,abstract_inverted_index,cited_by_count,doi"
+            ),
+        }
+        filters: list[str] = []
+        if effective_from:
+            filters.append(f"from_publication_date:{effective_from}-01-01")
+        if effective_to:
+            filters.append(f"to_publication_date:{effective_to}-12-31")
+        if filters:
+            params["filter"] = ",".join(filters)
         payload = await _get_json(
             f"{OPENALEX_API}/works",
-            params={
-                "search": normalized,
-                "per-page": requested,
-                "api_key": api_key,
-                "select": (
-                    "id,display_name,authorships,publication_year,primary_location,ids,"
-                    "open_access,abstract_inverted_index,cited_by_count,doi"
-                ),
-            },
+            params=params,
         )
     except (httpx.HTTPError, ValueError) as error:
         # 不把 httpx 异常继续抛给 ASGI/MCP 日志；其异常文本可能包含带 Key 的 URL。
@@ -234,6 +255,8 @@ async def search_openalex(query: str, limit: int = 5) -> dict[str, Any]:
         "source": "OpenAlex",
         "available": True,
         "query": normalized,
+        "year_from": effective_from,
+        "year_to": effective_to,
         "results": [_openalex_item(item) for item in rows if isinstance(item, dict)][:requested],
     }
 
