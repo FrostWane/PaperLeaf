@@ -23,7 +23,7 @@ def test_default_skill_registry_is_versioned_and_loads_only_catalog_on_start() -
         "paper_qa": 1,
         "trace_original": 1,
         "compare_papers": 1,
-        "find_related_papers": 2,
+        "find_related_papers": 3,
         "verify_claim": 1,
         "summarize_paper": 1,
         "build_research_map": 1,
@@ -66,7 +66,7 @@ def test_skill_routing_is_deterministic(
     registry = SkillRegistry.default()
     first = registry.route(query, intent=intent, scope=scope, web_enabled=web_enabled)
     second = registry.route(query, intent=intent, scope=scope, web_enabled=web_enabled)
-    expected_version = 2 if expected == "find_related_papers" else 1
+    expected_version = 3 if expected == "find_related_papers" else 1
     assert first.identity == second.identity == f"{expected}@{expected_version}"
 
 

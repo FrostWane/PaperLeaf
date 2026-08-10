@@ -5,6 +5,11 @@ from dataclasses import replace
 
 import pytest
 
+from paperleaf_api.agent.function_tools import (
+    FunctionToolHarness,
+    PlannerDecision,
+    ToolCallRequest,
+)
 from paperleaf_api.agent_execution import execute_agent_run
 from paperleaf_api.config import settings
 from paperleaf_api.model_runtime import ModelRuntimeError
@@ -15,6 +20,7 @@ from paperleaf_api.repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
     MemoryRepository,
+    PaperRecord,
     UserRecord,
 )
 
@@ -63,6 +69,22 @@ class CapturingResultGraph(ResultGraph):
     async def ainvoke(self, initial: dict, _config: dict) -> dict:
         self.initial = initial
         return self.result
+
+
+class RejectingToolPlanner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def decide(self, **_kwargs) -> PlannerDecision:
+        self.calls += 1
+        if self.calls == 1:
+            return PlannerDecision((ToolCallRequest("rejected-1", "unknown_tool", {}),))
+        return PlannerDecision()
+
+
+class EmptyToolRetriever:
+    async def __call__(self, _payload):
+        return []
 
 
 async def _submitted_run(repository: MemoryRepository, user_id: str = "u1"):
@@ -117,6 +139,69 @@ def test_chat_submission_is_idempotent_and_user_isolated() -> None:
                 "hash-3",
                 {"type": "library", "paper_ids": ["p1"]},
             )
+
+    asyncio.run(scenario())
+
+
+def test_rejected_function_tool_is_visible_then_legacy_retrieval_runs() -> None:
+    """确定性集成测试：不使用真实模型，只验证 Harness→SSE→legacy 降级。"""
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        chat_session = await repository.create_chat_session(
+            "u1", "工具降级", "library", None, None
+        )
+        submission = await repository.submit_chat_message(
+            chat_session.id,
+            "u1",
+            "解释论文的方法",
+            "tool-fallback-client",
+            "tool-fallback-hash",
+            {
+                "type": "library",
+                "paper_ids": ["p1"],
+                "web_enabled": False,
+                "harness": {
+                    "context_engine_enabled": True,
+                    "memory_enabled": False,
+                    "skills_enabled": True,
+                    "function_tools_enabled": True,
+                    "mcp_enabled": False,
+                },
+            },
+        )
+        assert submission is not None
+        claim_token = await repository.claim_agent_run_job(submission.run.id)
+        assert claim_token is not None
+        harness = FunctionToolHarness(
+            repository,
+            EmptyToolRetriever(),
+            object(),
+            planner=RejectingToolPlanner(),
+        )
+
+        await execute_agent_run(
+            repository,
+            ResultGraph(),
+            submission.run.id,
+            claim_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            function_tool_harness=harness,
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert run.harness_trace["tool_mode_active"] is False
+        assert run.harness_trace["function_fallback_reason"] == "tool_outputs_not_usable"
+        assert run.harness_trace["tool_calls"] == [
+            {"tool": "unknown_tool", "status": "rejected"}
+        ]
+        events = await repository.list_owned_agent_run_events(run.id, "u1")
+        assert events is not None
+        event_pairs = [(item.event, item.data.get("tool")) for item in events]
+        assert ("tool_finished", "unknown_tool") in event_pairs
+        assert ("tool_started", "search_library") in event_pairs
+        assert ("tool_finished", "search_library") in event_pairs
 
     asyncio.run(scenario())
 
@@ -358,6 +443,75 @@ def test_completed_discovery_task_is_inherited_by_recent_year_followup() -> None
         assert graph.initial is not None
         assert graph.initial["intent"] == "literature_discovery"
         assert "继续联网推荐 5 篇" in graph.initial["query"]
+
+    asyncio.run(scenario())
+
+
+def test_discovery_run_loads_all_authorized_scope_titles_not_only_first_eight() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        paper_ids = [f"p{index}" for index in range(1, 11)]
+        for index, paper_id in enumerate(paper_ids, start=1):
+            repository.papers[paper_id] = PaperRecord(
+                id=paper_id,
+                owner_id="u1",
+                title=f"Scope paper {index}",
+                authors=[],
+                year=2020 + index % 5,
+                abstract=None,
+                doi=f"10.1000/scope.{index}",
+                arxiv_id=None,
+                filename=f"{paper_id}.pdf",
+                storage_key=f"u1/{paper_id}.pdf",
+                mime_type="application/pdf",
+                size_bytes=100,
+                sha256=f"scope-{index}",
+                page_count=1,
+            )
+        session = await repository.create_chat_session(
+            "u1", "完整集合去重", "library", None, None
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "联网推荐五篇尚未入库的相关论文",
+            "full-scope-message",
+            "full-scope-hash",
+            {
+                "type": "library",
+                "paper_ids": paper_ids,
+                "web_enabled": True,
+                "harness": {
+                    "context_engine_enabled": True,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token
+        graph = CapturingResultGraph()
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=replace(
+                settings,
+                context_engine_enabled=True,
+                skills_enabled=True,
+                function_tools_enabled=False,
+                memory_enabled=False,
+            ),
+        )
+
+        assert graph.initial is not None
+        assert graph.initial["selected_skill"] == "find_related_papers"
+        assert graph.initial["scope_paper_titles"] == [
+            f"Scope paper {index}" for index in range(1, 11)
+        ]
 
     asyncio.run(scenario())
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import replace
 
+from paperleaf_api.agent.context import resolve_context
 from paperleaf_api.agent.function_tools import (
     FunctionToolHarness,
     PlannerDecision,
@@ -397,6 +398,63 @@ def test_confirmed_import_executes_only_after_approval() -> None:
     asyncio.run(scenario())
 
 
+def test_confirmed_doi_import_revalidates_openalex_metadata_before_write() -> None:
+    class FakeMcpGateway:
+        async def call(self, name: str, arguments: dict) -> dict:
+            assert name == "mcp__academic__get_academic_metadata"
+            assert arguments == {
+                "identifier": "10.1000/open.paper",
+                "source": "openalex",
+            }
+            return {
+                "results": [{
+                    "external_id": "W1",
+                    "title": "Open paper",
+                    "authors": ["Author"],
+                    "year": 2026,
+                    "publication": "Open Journal",
+                    "doi": "10.1000/open.paper",
+                    "open_access_pdf_url": "https://example.org/open.pdf",
+                }]
+            }
+
+    async def scenario() -> None:
+        imported: list[dict] = []
+
+        async def importer(_user_id: str, candidate: dict):
+            imported.append(candidate)
+            return type("Paper", (), {"title": candidate["title"]})()
+
+        harness = FunctionToolHarness(
+            MemoryRepository("secret"),
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=SequencePlanner(),
+            mcp_gateway=FakeMcpGateway(),
+            confirmed_importer=importer,
+        )
+        answer, error = await harness.resume_confirmed_action(
+            "u1",
+            {
+                "type": "confirm_arxiv_import",
+                "candidates": [
+                    {
+                        "doi": "10.1000/open.paper",
+                        "title": "模型提供的标题不会被直接信任",
+                    }
+                ],
+            },
+            "approve",
+        )
+
+        assert error is None
+        assert "Open paper" in answer
+        assert imported[0]["open_access_pdf_url"] == "https://example.org/open.pdf"
+        assert imported[0]["title"] == "Open paper"
+
+    asyncio.run(scenario())
+
+
 def test_timeout_retries_once_and_stops_without_looping() -> None:
     class SlowHarness(FunctionToolHarness):
         attempts = 0
@@ -546,10 +604,9 @@ def test_explicit_openalex_request_uses_scoped_titles_when_model_omits_tool_call
         assert result.tool_mode_active is True
         assert [item["tool"] for item in result.calls] == [
             "mcp__academic__search_openalex",
-            "mcp__academic__search_openalex",
         ]
         assert all(item["status"] == "succeeded" for item in result.calls)
-        assert len(repository.agent_tool_calls) == 2
+        assert len(repository.agent_tool_calls) == 1
 
     asyncio.run(scenario())
 
@@ -634,12 +691,7 @@ def test_unspecified_online_discovery_reserves_openalex_and_caps_repeated_search
         openalex_context = json.loads(result.context_entries[1]["content"])
         assert len(openalex_context["items"]) == 8
         assert openalex_context["items"][-1]["title"].endswith("7")
-        assert openalex_context["existing_scope_titles"] == [
-            "AR-RAG: Autoregressive Retrieval Augmentation for Image Generation",
-            "AttentionDTA",
-            "DeepDTA: deep drug-target binding affinity prediction",
-            "SyntheticDTA",
-        ]
+        assert openalex_context["scope_paper_count"] == 4
         assert len(result.context_entries[1]["content"]) <= 3000
         assert all(
             len(item["abstract_preview"]) <= 120
@@ -708,9 +760,11 @@ def test_automatic_openalex_respects_explicit_source_and_web_setting() -> None:
         assert harness._automatic_openalex_calls(
             "请只搜索 arXiv 相关论文", online, schemas
         ) == ()
-        assert harness._automatic_openalex_calls(
+        alternative = harness._automatic_openalex_calls(
             "请联网搜索，但不要使用 OpenAlex", online, schemas
-        ) == ()
+        )
+        assert len(alternative) == 1
+        assert alternative[0].name == "mcp__academic__search_semantic_scholar"
         assert harness._automatic_openalex_calls(
             "请使用 Semantic Scholar 搜索", online, schemas
         ) == ()
@@ -750,6 +804,128 @@ def test_automatic_openalex_applies_explicit_publication_year_filter() -> None:
             "year_from": 2026,
             "year_to": 2026,
         }
+
+    asyncio.run(scenario())
+
+
+def test_negated_openalex_model_call_is_rejected_and_semantic_scholar_is_used() -> None:
+    class FakeMcpGateway:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def call(self, name: str, _arguments: dict) -> dict:
+            self.calls.append(name)
+            return {
+                "source": "Semantic Scholar",
+                "available": True,
+                "results": [{"title": "Cross-domain method", "year": 2026}],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        gateway = FakeMcpGateway()
+        planner = SequencePlanner(
+            PlannerDecision(
+                (
+                    ToolCallRequest(
+                        "wrong-source",
+                        "mcp__academic__search_openalex",
+                        {"query": "topic", "limit": 5},
+                    ),
+                )
+            ),
+            PlannerDecision(),
+        )
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=planner,
+            mcp_gateway=gateway,
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("General topic",),
+        )
+
+        result = await harness.run(
+            "不要 OpenAlex，请使用 Semantic Scholar 推荐五篇论文",
+            context,
+        )
+
+        assert "mcp__academic__search_openalex" not in gateway.calls
+        assert gateway.calls == ["mcp__academic__search_semantic_scholar"]
+        assert any(
+            item.get("tool") == "mcp__academic__search_openalex"
+            and item.get("status") == "rejected"
+            for item in result.calls
+        )
+        rejected = [
+            item
+            for item in repository.agent_tool_calls.values()
+            if item.tool_name == "mcp__academic__search_openalex"
+        ]
+        assert rejected and rejected[0].error_code == "SOURCE_EXCLUDED_BY_USER"
+
+    asyncio.run(scenario())
+
+
+def test_inherited_semantic_scholar_policy_and_year_reach_real_tool_arguments() -> None:
+    class FakeMcpGateway:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def call(self, name: str, arguments: dict) -> dict:
+            self.calls.append((name, arguments))
+            return {
+                "source": "Semantic Scholar",
+                "available": True,
+                "results": [{"title": "Recent cross-domain paper", "year": 2026}],
+            }
+
+    async def scenario() -> None:
+        resolution = resolve_context(
+            "有没有 2026 年的",
+            {"collection_id": "collection-1"},
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "联网推荐五篇尚未入库的论文，不要使用 OpenAlex，"
+                        "改用 Semantic Scholar。"
+                    ),
+                }
+            ],
+            session_type="collection",
+        )
+        repository = MemoryRepository("secret")
+        gateway = FakeMcpGateway()
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=SequencePlanner(PlannerDecision()),
+            mcp_gateway=gateway,
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("A representative topic",),
+        )
+
+        result = await harness.run(resolution.resolved_query, context)
+
+        assert result.usable_external_context is True
+        assert gateway.calls == [
+            (
+                "mcp__academic__search_semantic_scholar",
+                {
+                    "query": "A representative topic",
+                    "limit": 5,
+                    "year_from": 2026,
+                    "year_to": 2026,
+                },
+            )
+        ]
 
     asyncio.run(scenario())
 

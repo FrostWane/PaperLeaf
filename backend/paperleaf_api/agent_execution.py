@@ -11,6 +11,7 @@ from typing import Any
 
 from .agent.context import ContextResolution, resolve_context
 from .agent.context_budget import allocate_context_budget, compact_conversation
+from .agent.discovery_policy import academic_source_policy, requested_paper_count
 from .agent.function_tools import FunctionToolHarness, ToolExecutionContext, ToolLoopResult
 from .agent.memory import (
     extract_memory_candidates,
@@ -193,7 +194,7 @@ def _next_entity_state(
     if selected_skill == "find_related_papers" and web_enabled:
         inherited = references.get("active_task")
         task = dict(inherited) if isinstance(inherited, dict) else {}
-        count_match = re.search(r"(\d{1,2})\s*篇", original_query)
+        requested_count = requested_paper_count(original_query)
         years = [
             int(value)
             for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", original_query)
@@ -202,8 +203,8 @@ def _next_entity_state(
             {
                 "name": "find_related_papers",
                 "web_required": True,
-                "requested_count": min(10, max(1, int(count_match.group(1))))
-                if count_match
+                "requested_count": requested_count
+                if requested_count is not None
                 else int(task.get("requested_count") or 5),
                 "exclude_library": bool(task.get("exclude_library"))
                 or bool(re.search(r"尚未.{0,8}文献库|未入库|不在.{0,8}文献库", original_query)),
@@ -213,6 +214,10 @@ def _next_entity_state(
         if years:
             task["year_from"] = min(years)
             task["year_to"] = max(years)
+        current_sources = academic_source_policy(original_query)
+        if current_sources.has_explicit_source:
+            task["requested_sources"] = sorted(current_sources.requested_tools)
+            task["denied_sources"] = sorted(current_sources.denied_tools)
         task.pop("inherited", None)
         state["active_task"] = task
     else:
@@ -676,6 +681,7 @@ async def execute_agent_run(
         "intent": intent,
         "scope": scope,
         "selected_paper_ids": list(snapshot.get("paper_ids", [])),
+        "scope_paper_titles": [],
         "web_enabled": bool(snapshot.get("web_enabled", False)),
         "client_context": dict(snapshot.get("client_context", {})),
         "resolved_query": resolution.resolved_query,
@@ -699,6 +705,22 @@ async def execute_agent_run(
         "stage_timings_ms": {"context": context_ms, "intent": intent_ms},
         "status": "pending",
     }
+    if selected_skill == "find_related_papers":
+        allowed_scope_ids = {
+            str(paper_id) for paper_id in snapshot.get("paper_ids", [])
+        }
+        try:
+            scoped_papers = await repository.list_papers(run.user_id)
+        except Exception:
+            scoped_papers = []
+        initial["scope_paper_titles"] = list(
+            dict.fromkeys(
+                str(getattr(paper, "title", "") or "").strip()
+                for paper in scoped_papers
+                if str(getattr(paper, "id", "")) in allowed_scope_ids
+                and str(getattr(paper, "title", "") or "").strip()
+            )
+        )
     if harness_flags.get("skills_enabled"):
         await repository.append_agent_run_event(
             run_id,
@@ -779,20 +801,10 @@ async def execute_agent_run(
             and function_tool_harness is not None
         ):
             tool_started_at = time.perf_counter()
-            scope_paper_titles: list[str] = []
+            scope_paper_titles = list(initial.get("scope_paper_titles", []))
             # get_page_text 的模型参数必须使用服务端论文 ID；同时保留可信标题，
             # 以便对模型偶尔返回标题而非 ID 的情况做单论文、无歧义的受控解析。
             # 这份元数据也服务于外部学术检索，因此不能只在 web_enabled 时构建。
-            for paper_id in list(snapshot.get("paper_ids", []))[:8]:
-                try:
-                    scoped_paper = await repository.get_owned_paper(
-                        str(paper_id), run.user_id
-                    )
-                except Exception:
-                    scoped_paper = None
-                title = str(getattr(scoped_paper, "title", "") or "").strip()
-                if title and title not in scope_paper_titles:
-                    scope_paper_titles.append(title)
             try:
                 tool_loop_result = await _invoke_tools_with_cancel(
                     repository,
@@ -845,6 +857,13 @@ async def execute_agent_run(
             # 让回答能准确说明“OpenAlex 缺少 Key”等降级原因；旧检索仍照常执行。
             initial["tool_context_entries"] = list(tool_loop_result.context_entries)
             initial["tool_steps"] = tool_loop_result.steps
+            harness_trace["tool_calls"] = [
+                {
+                    "tool": str(item.get("tool", "unknown")),
+                    "status": str(item.get("status", "unknown")),
+                }
+                for item in tool_loop_result.calls
+            ]
             if tool_mode_active:
                 initial["tool_mode_active"] = True
                 initial["pre_retrieved_evidence"] = list(tool_loop_result.evidence)
@@ -853,13 +872,6 @@ async def execute_agent_run(
                 initial["stage_timings_ms"]["retrieval"] = round(
                     (time.perf_counter() - tool_started_at) * 1000
                 )
-                harness_trace["tool_calls"] = [
-                    {
-                        "tool": str(item.get("tool", "unknown")),
-                        "status": str(item.get("status", "unknown")),
-                    }
-                    for item in tool_loop_result.calls
-                ]
                 harness_trace["function_calling"] = (
                     "native"
                     if tool_loop_result.native_function_calling_attempted
@@ -899,12 +911,15 @@ async def execute_agent_run(
                 event_key="stage:retrieve:start",
                 claim_token=claim_token,
             )
-            if tool_mode_active and tool_loop_result is not None:
+            if tool_loop_result is not None:
                 for index, item in enumerate(tool_loop_result.calls):
                     await repository.append_agent_run_event(
                         run_id,
                         "tool_started",
-                        {"tool": item.get("tool", "unknown")},
+                        {
+                            "tool": item.get("tool", "unknown"),
+                            "call_index": index,
+                        },
                         event_key=f"stage:function_tool:{index}:start",
                         claim_token=claim_token,
                     )
@@ -913,13 +928,14 @@ async def execute_agent_run(
                         "tool_finished",
                         {
                             "tool": item.get("tool", "unknown"),
+                            "call_index": index,
                             "status": item.get("status", "unknown"),
                             "evidence_count": item.get("evidence_count", 0),
                         },
                         event_key=f"stage:function_tool:{index}:finish",
                         claim_token=claim_token,
                     )
-            else:
+            if not tool_mode_active:
                 await repository.append_agent_run_event(
                     run_id,
                     "tool_started",
@@ -1012,6 +1028,7 @@ async def execute_agent_run(
             ),
             "dropped_messages": final_context_usage.get("dropped_messages", 0),
             "dropped_evidence": final_context_usage.get("dropped_evidence", 0),
+            "dropped_tool_pairs": final_context_usage.get("dropped_tool_pairs", 0),
         }
         await repository.update_agent_context(
             run.id,
@@ -1114,6 +1131,11 @@ async def execute_agent_run(
     validated: list[tuple[str, str, list[CitationClaim]]] = []
     dropped_paragraphs = 0
     external_metadata_answer = bool(result.get("external_metadata_answer"))
+    semantic_support_suppressed = (
+        str(quality.get("answer_support_grade", "")) == "unsupported"
+        and str(quality.get("reason_code", ""))
+        not in {"citation_validation_failed", "missing_claim_citations"}
+    )
     await repository.append_agent_run_event(
         run_id,
         "node_started",
@@ -1142,6 +1164,8 @@ async def execute_agent_run(
     citation_validation_started_at = time.perf_counter()
     if external_metadata_answer:
         validated.append((answer, "external_metadata", []))
+    elif semantic_support_suppressed:
+        validated.append((answer, "controlled_notice", []))
     else:
         for paragraph in paragraphs:
             valid, classification, paragraph_citations = _validate_publishable_paragraph(
@@ -1161,7 +1185,12 @@ async def execute_agent_run(
         (time.perf_counter() - citation_validation_started_at) * 1000
     )
     has_cited_answer = any(classification == "cited_answer" for _, classification, _ in validated)
-    if evidence and not has_cited_answer and not external_metadata_answer:
+    if (
+        evidence
+        and not has_cited_answer
+        and not external_metadata_answer
+        and not semantic_support_suppressed
+    ):
         await _finish_observed_run(
             repository,
             run_id,

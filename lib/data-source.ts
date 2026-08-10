@@ -386,7 +386,7 @@ function mapAgentRun(item: Record<string, unknown>): AgentRunSnapshot {
       allowedDecisions: Array.isArray(pendingAction.allowed_decisions) ? pendingAction.allowed_decisions.map(String) : [],
       candidates: Array.isArray(pendingAction.candidates) ? pendingAction.candidates.filter((candidate) => candidate && typeof candidate === "object").map((candidate) => {
         const raw = candidate as Record<string, unknown>;
-        return { arxivId: raw.arxiv_id ? String(raw.arxiv_id) : undefined, title: raw.title ? String(raw.title) : undefined, authors: Array.isArray(raw.authors) ? raw.authors.map(String) : raw.authors ? String(raw.authors) : undefined, abstract: raw.abstract ? String(raw.abstract) : undefined, published: raw.published ? String(raw.published) : undefined, pdfUrl: raw.pdf_url ? String(raw.pdf_url) : undefined, journalRef: raw.journal_ref ? String(raw.journal_ref) : undefined };
+        return { arxivId: raw.arxiv_id ? String(raw.arxiv_id) : undefined, doi: raw.doi ? String(raw.doi) : undefined, externalId: raw.external_id ? String(raw.external_id) : undefined, title: raw.title ? String(raw.title) : undefined, authors: Array.isArray(raw.authors) ? raw.authors.map(String) : raw.authors ? String(raw.authors) : undefined, abstract: raw.abstract ? String(raw.abstract) : undefined, published: raw.published ? String(raw.published) : undefined, year: raw.year === undefined ? undefined : Number(raw.year), publication: raw.publication ? String(raw.publication) : undefined, pdfUrl: raw.pdf_url ? String(raw.pdf_url) : undefined, journalRef: raw.journal_ref ? String(raw.journal_ref) : undefined };
       }) : [],
     } : undefined,
     answer: visibleAgentAnswer(String(item.answer ?? "")),
@@ -424,6 +424,12 @@ function dispatchAgentEvent(event: AgentEvent, handlers: AgentEventSubscriptionH
   handlers.onEvent?.(event);
   if (event.type === "node_started" || event.type === "node_finished") {
     const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : ((event.data as Record<string, unknown>)?.status === "failed" ? "failed" : "completed"));
+    if (activity) handlers.onActivity?.(activity);
+  }
+  if (event.type === "tool_started" || event.type === "tool_finished") {
+    const data = event.data as Record<string, unknown> | null;
+    const failed = data?.status === "failed" || data?.status === "rejected";
+    const activity = mapToolActivity(event.data, event.type === "tool_started" ? "running" : failed ? "failed" : "completed");
     if (activity) handlers.onActivity?.(activity);
   }
   if (event.type === "message_delta" && event.data && typeof event.data === "object" && "delta" in event.data) {
@@ -587,6 +593,38 @@ function mapAgentActivity(data: unknown, status: AgentActivity["status"]): Agent
     node,
     label: nodeLabels[node] ?? "处理研究任务",
     step,
+    status,
+    durationMs: item.duration_ms === undefined ? undefined : Number(item.duration_ms),
+  };
+}
+
+const toolLabels: Record<string, string> = {
+  search_current_paper: "检索当前论文",
+  search_library: "检索文献库",
+  get_page_text: "读取论文原文页",
+  search_arxiv: "搜索 arXiv",
+  find_related_papers: "搜索相关论文",
+  mcp__academic__search_openalex: "查询 OpenAlex",
+  mcp__academic__search_semantic_scholar: "查询 Semantic Scholar",
+  mcp__academic__get_academic_metadata: "核对学术元数据",
+  get_crossref_metadata: "核对 DOI 元数据",
+  request_import: "准备论文导入",
+  summarize_paper: "读取论文概括",
+  build_structure_graph: "读取研究脑图",
+  validate_answer: "核验回答证据",
+};
+
+function mapToolActivity(data: unknown, status: AgentActivity["status"]): AgentActivity | null {
+  if (!data || typeof data !== "object") return null;
+  const item = data as Record<string, unknown>;
+  const tool = String(item.tool ?? "");
+  if (!tool) return null;
+  const callIndex = Number(item.call_index ?? 0);
+  return {
+    key: `tool:${callIndex}:${tool}`,
+    node: tool,
+    label: toolLabels[tool] ?? "调用科研工具",
+    step: 100 + callIndex,
     status,
     durationMs: item.duration_ms === undefined ? undefined : Number(item.duration_ms),
   };
@@ -1356,6 +1394,12 @@ export const realDataSource: PaperLeafDataSource = {
       for await (const event of readAgentStream(r)) {
         if (event.type === "node_started" || event.type === "node_finished") {
           const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : ((event.data as Record<string, unknown>)?.status === "failed" ? "failed" : "completed"));
+          if (activity) { activities = upsertActivity(activities, activity); handlers?.onActivity?.(activity); }
+        }
+        if (event.type === "tool_started" || event.type === "tool_finished") {
+          const data = event.data as Record<string, unknown> | null;
+          const failed = data?.status === "failed" || data?.status === "rejected";
+          const activity = mapToolActivity(event.data, event.type === "tool_started" ? "running" : failed ? "failed" : "completed");
           if (activity) { activities = upsertActivity(activities, activity); handlers?.onActivity?.(activity); }
         }
         if (event.type === "message_delta" && typeof event.data === "object" && event.data && "delta" in event.data) {

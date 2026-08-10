@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -77,7 +78,8 @@ def test_tool_result_compaction_never_breaks_call_result_pair() -> None:
         assert compacted[index + 1]["kind"] == "result"
         assert compacted[index]["tool_call_id"] == compacted[index + 1]["tool_call_id"]
     assert compacted[1]["compacted"] is True
-    assert "compacted" not in compacted[-1]
+    assert compacted[-1]["compacted"] is True
+    assert estimate_tokens(compacted[-1]["content"]) <= 2400
 
 
 def test_final_context_envelope_enforces_hard_limit_and_preserves_selection() -> None:
@@ -134,6 +136,48 @@ def test_context_envelope_refuses_request_when_protected_input_alone_is_too_larg
 
     assert envelope.exceeded is True
     assert envelope.usage["final_input_tokens"] > envelope.usage["hard_limit"]
+
+
+def test_extreme_structured_tool_result_stays_valid_and_drops_as_whole_pair() -> None:
+    entries = [
+        {
+            "kind": "call",
+            "tool_call_id": "huge-1",
+            "tool": "mcp__academic__search_openalex",
+            "content": json.dumps({"query": "主题" * 5000}, ensure_ascii=False),
+        },
+        {
+            "kind": "result",
+            "tool_call_id": "huge-1",
+            "tool": "mcp__academic__search_openalex",
+            "content": json.dumps(
+                {
+                    "status": "succeeded",
+                    "items": [
+                        {"title": f"论文 {index}", "abstract": "摘要" * 2000}
+                        for index in range(100)
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+
+    compacted = compress_tool_results(entries, keep_complete=3, preview_tokens=100)
+    assert all(json.loads(item["content"]) for item in compacted)
+
+    envelope = enforce_context_envelope(
+        query="推荐论文",
+        messages=[],
+        evidence=[],
+        tool_entries=entries,
+        hard_limit=110,
+        system_reserve=100,
+    )
+    assert envelope.exceeded is False
+    assert envelope.tool_entries == []
+    assert envelope.usage["dropped_tool_pairs"] == 1
+    assert envelope.usage["final_input_tokens"] <= 110
 
 
 def test_memory_extraction_only_accepts_user_statements_and_selection_has_fallback() -> None:

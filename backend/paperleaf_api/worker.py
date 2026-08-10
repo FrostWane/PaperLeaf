@@ -33,7 +33,7 @@ from .artifacts import (
     load_paper_evidence,
     load_paper_source_revision,
 )
-from .arxiv_import import import_arxiv_paper
+from .arxiv_import import import_public_paper
 from .config import settings
 from .crossref_service import crossref_client
 from .db import get_session_factory
@@ -80,8 +80,8 @@ agent_storage = create_storage(settings)
 
 
 async def confirmed_agent_import(user_id: str, candidate: dict) -> object:
-    return await import_arxiv_paper(
-        str(candidate.get("arxiv_id", "")),
+    return await import_public_paper(
+        candidate,
         user_id,
         config=settings,
         repository=SQLAlchemyRepository(settings.session_secret),

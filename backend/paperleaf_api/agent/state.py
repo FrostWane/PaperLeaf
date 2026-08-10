@@ -19,6 +19,7 @@ class AgentState(TypedDict, total=False):
     stage_timings_ms: dict[str, int]
     scope: Literal["paper", "selection", "collection", "library"]
     selected_paper_ids: list[str]
+    scope_paper_titles: list[str]
     web_enabled: bool
     client_context: dict[str, Any]
     resolved_query: str

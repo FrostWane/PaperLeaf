@@ -28,6 +28,7 @@ from ..rag.retrieval_quality import (
     assess_evidence,
 )
 from .context_budget import enforce_context_envelope
+from .discovery_policy import requested_paper_count
 from .state import AgentState
 from .tools import (
     ArxivSearch,
@@ -205,13 +206,26 @@ def _external_search_observations(contexts: list[str]) -> list[dict[str, Any]]:
         if value.get("kind") == "result" and "content" in value:
             parse(value.get("content"), tool=current_tool)
             return
-        if not current_tool.startswith("mcp__academic__"):
+        if not (
+            current_tool.startswith("mcp__academic__")
+            or current_tool in {"search_arxiv", "find_related_papers"}
+        ):
             return
         items = value.get("items")
+        source = str(value.get("source") or "").strip()
+        if not source:
+            if "openalex" in current_tool:
+                source = "OpenAlex"
+            elif "semantic_scholar" in current_tool:
+                source = "Semantic Scholar"
+            elif "arxiv" in current_tool or current_tool == "find_related_papers":
+                source = "arXiv"
+            else:
+                source = "外部学术数据源"
         observations.append(
             {
                 "tool": current_tool,
-                "source": str(value.get("source") or "外部学术数据源"),
+                "source": source,
                 "available": value.get("available", True) is not False
                 and str(value.get("status") or "succeeded")
                 not in {"failed", "rejected", "invalid_arguments"}
@@ -227,12 +241,7 @@ def _external_search_observations(contexts: list[str]) -> list[dict[str, Any]]:
 
 
 def _requested_recommendation_count(query: str) -> int | None:
-    match = re.search(
-        r"(?:推荐(?:数量)?|列出|查找|寻找|继续联网推荐)?\s*"
-        r"(\d{1,2})\s*篇",
-        query,
-    )
-    return min(10, max(1, int(match.group(1)))) if match else None
+    return requested_paper_count(query)
 
 
 def _requested_year_range(query: str) -> tuple[int, int] | None:
@@ -245,19 +254,50 @@ def _requested_year_range(query: str) -> tuple[int, int] | None:
     return (min(years), max(years)) if years else None
 
 
-def _external_recommendation_reason(title: str, source: str) -> str:
+_RECOMMENDATION_STOPWORDS = {
+    "about", "analysis", "based", "for", "from", "in", "of", "on", "the",
+    "to", "towards", "using", "via", "with", "研究", "方法", "模型", "系统",
+}
+
+
+def _recommendation_terms(value: str) -> set[str]:
+    normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
+    return {
+        token.casefold()
+        for token in re.findall(
+            r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,}", normalized
+        )
+        if token.casefold() not in _RECOMMENDATION_STOPWORDS
+    }
+
+
+def _external_recommendation_reason(
+    title: str,
+    source: str,
+    scope_terms: set[str] | None = None,
+) -> str:
     lowered = title.casefold()
+    overlap = sorted(_recommendation_terms(title) & set(scope_terms or set()))[:3]
+    relation = (
+        "题目与当前集合共同包含“" + "、".join(overlap) + "”等主题词"
+        if overlap
+        else "其公开元数据与本轮集合主题检索相匹配"
+    )
     if any(term in lowered for term in ("review", "survey", "tools")):
         focus = "可用于补充该方向的方法谱系与研究背景"
-    elif "affinity" in lowered:
-        focus = "直接聚焦结合亲和力预测，适合与当前 DTA 方法横向比较"
-    elif any(term in lowered for term in ("interaction", "dti", "drug-target")):
-        focus = "聚焦药物—靶点相互作用建模，可扩展当前集合的任务视角"
-    elif "ligand" in lowered:
-        focus = "覆盖蛋白—配体建模，可补充序列式 DTA 方法之外的研究路线"
+    elif any(
+        term in lowered
+        for term in ("benchmark", "evaluation", "dataset", "corpus", "database")
+    ):
+        focus = "补充了数据或评测视角，适合检查当前集合结论的适用范围"
+    elif any(
+        term in lowered
+        for term in ("framework", "model", "method", "learning", "prediction")
+    ):
+        focus = "提供了可比较的方法路线，适合扩展当前集合的相关工作覆盖"
     else:
-        focus = "与本轮学术检索主题相关，适合作为后续扩展阅读候选"
-    return f"{source} 将其列入本轮相关结果；{focus}。"
+        focus = "与当前集合的代表性主题共同命中检索，适合作为后续扩展阅读候选"
+    return f"{source} 将其列入本轮相关结果；{relation}，{focus}。"
 
 
 def _escape_markdown_table(value: Any) -> str:
@@ -307,6 +347,7 @@ def _ensure_external_recommendation_shape(
     query: str,
     contexts: list[str],
     evidence: list[Evidence],
+    existing_scope_titles: list[str] | tuple[str, ...] = (),
 ) -> str:
     """模型漏项时用已验证外部元数据生成确定性、完整的推荐清单。"""
 
@@ -319,7 +360,13 @@ def _ensure_external_recommendation_shape(
     existing_titles = {
         _normalized_title(item.paper_title) for item in evidence if item.paper_title.strip()
     }
+    existing_titles.update(
+        _normalized_title(title) for title in existing_scope_titles if title.strip()
+    )
     existing_titles.update(search_queries)
+    scope_terms: set[str] = set()
+    for scope_title in existing_scope_titles:
+        scope_terms.update(_recommendation_terms(scope_title))
     filtered = [
         item
         for item in candidates
@@ -332,17 +379,45 @@ def _ensure_external_recommendation_shape(
             )
         )
     ]
-    if len(filtered) < requested:
-        successful_sources = list(
-            dict.fromkeys(
-                str(item["source"])
-                for item in observations
-                if item.get("available") is True
-            )
+    successful_sources = list(
+        dict.fromkeys(
+            str(item["source"])
+            for item in observations
+            if item.get("available") is True
         )
-        # 精确年份续问中，外部服务已成功查询但数量不足时，不得用
-        # 本地 PDF 参考文献或其他年份偷偷补齐。
-        if year_range is None or not successful_sources:
+    )
+    if len(filtered) < requested:
+        # 只要外部服务成功，就用清洗后的真实条目生成结果；不足时明确少于
+        # 请求数量，不能让模型用本地参考文献、其他年份或猜测补齐。
+        if not successful_sources and observations:
+            failed_sources = list(
+                dict.fromkeys(str(item["source"]) for item in observations)
+            )
+            error_codes = {
+                str(item.get("error_code") or "").casefold()
+                for item in observations
+                if item.get("error_code")
+            }
+            if any("rate_limit" in code for code in error_codes):
+                reason = "请求频率受限"
+            elif any("timeout" in code for code in error_codes):
+                reason = "响应超时"
+            elif any("key_required" in code for code in error_codes):
+                reason = "尚未配置访问凭证"
+            elif any("disabled" in code for code in error_codes):
+                reason = "当前已停用"
+            else:
+                reason = "暂时不可用"
+            return "\n".join(
+                [
+                    "### 联网推荐",
+                    "",
+                    f"{'、'.join(failed_sources)} 本轮{reason}，没有返回可核验的候选论文。",
+                    "我没有用本地文献库片段或模型猜测冒充联网推荐结果。",
+                    "你可以稍后重试，或明确允许改用其他学术数据源。",
+                ]
+            )
+        if not successful_sources:
             return answer
         selected = filtered[:requested]
     else:
@@ -350,29 +425,37 @@ def _ensure_external_recommendation_shape(
     lines = [
         "### 联网推荐",
     ]
-    if year_range and len(selected) < requested:
+    if len(selected) < requested:
         label = (
             str(year_range[0])
-            if year_range[0] == year_range[1]
+            if year_range and year_range[0] == year_range[1]
             else f"{year_range[0]}–{year_range[1]}"
+            if year_range
+            else None
         )
         if not selected:
             sources = "、".join(successful_sources)
+            constraint = f"按 {label} 年过滤" if label else "按当前主题"
             lines.extend(
                 [
                     "",
-                    f"{sources} 已按 {label} 年过滤联网检索，"
+                    f"{sources} 已{constraint}完成联网检索，"
                     "本轮没有返回符合条件且尚未入库的论文。",
-                    "我没有用当前文献库的参考文献或更早年份的论文补齐数量。",
+                    "我没有用当前文献库参考文献、其他年份或模型猜测补齐数量。",
                     "",
-                    "> 你可以改为“2025–2026 年”，或指定更具体的 DTA / DTI 研究方向后再检索。",
+                    "> 你可以扩大年份范围，或补充更具体的研究主题和任务关键词后再检索。",
                 ]
             )
             return "\n".join(lines)
         lines.extend(
             [
                 "",
-                f"按 {label} 年过滤后只找到 {len(selected)} 篇符合条件的候选，未用其他年份补齐。",
+                (
+                    f"按 {label} 年过滤后只找到 {len(selected)} 篇符合条件的候选，"
+                    "未用其他年份补齐。"
+                    if label
+                    else f"本轮只找到 {len(selected)} 篇符合条件的候选，未让模型补齐。"
+                ),
             ]
         )
     lines.extend(
@@ -397,7 +480,7 @@ def _ensure_external_recommendation_shape(
         title = _escape_markdown_table(item["title"])
         lines.append(
             f"{index}. **{title}**："
-            f"{_external_recommendation_reason(title, str(item['source']))}"
+            f"{_external_recommendation_reason(title, str(item['source']), scope_terms)}"
         )
     lines.extend(
         [
@@ -501,6 +584,7 @@ def build_configured_answerer(
         query: str,
         evidence: list[Evidence],
         messages: list[dict[str, Any]] | None = None,
+        existing_scope_titles: list[str] | tuple[str, ...] = (),
     ) -> tuple[str, list[CitationClaim]]:
         if not router.has_provider("answer"):
             raise ModelRuntimeError("MODEL_NOT_CONFIGURED", [])
@@ -565,6 +649,7 @@ def build_configured_answerer(
             query,
             external_tool_contexts,
             active_evidence,
+            existing_scope_titles,
         )
         if external_answer:
             return external_answer, []
@@ -724,6 +809,7 @@ def build_configured_answerer(
             query,
             external_tool_contexts,
             active_evidence,
+            existing_scope_titles,
         )
         citation_ids = list(dict.fromkeys(re.findall(r"\[chunk:([^\]]+)\]", answer_text)))
         citations = [
@@ -887,24 +973,36 @@ class AgentRuntime:
             context_usage = {}
         try:
             parameters = inspect.signature(self.answerer).parameters.values()
+            parameter_count = len(list(parameters))
             accepts_history = (
                 any(
                     item.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
                     for item in parameters
                 )
-                or len(list(parameters)) >= 3
+                or parameter_count >= 3
             )
+            accepts_scope_titles = any(
+                item.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+                for item in parameters
+            ) or parameter_count >= 4
         except (TypeError, ValueError):
             accepts_history = False
-        result = (
-            self.answerer(
+            accepts_scope_titles = False
+        if accepts_scope_titles:
+            result = self.answerer(
+                state["query"],
+                answer_evidence,
+                answer_messages,
+                state.get("scope_paper_titles", []),
+            )
+        elif accepts_history:
+            result = self.answerer(
                 state["query"],
                 answer_evidence,
                 answer_messages,
             )
-            if accepts_history
-            else self.answerer(state["query"], answer_evidence)
-        )
+        else:
+            result = self.answerer(state["query"], answer_evidence)
         answer, citations = await result if inspect.isawaitable(result) else result
         timings = dict(state.get("stage_timings_ms", {}))
         timings["generation"] = round((time.perf_counter() - started_at) * 1000)
@@ -926,6 +1024,7 @@ class AgentRuntime:
                         )
                     ],
                     answer_evidence,
+                    state.get("scope_paper_titles", []),
                 )
             ),
             "context_usage": context_usage,
@@ -934,6 +1033,10 @@ class AgentRuntime:
 
     async def grade_answer_support(self, state: AgentState) -> AgentState:
         started_at = time.perf_counter()
+        if state.get("external_metadata_answer"):
+            timings = dict(state.get("stage_timings_ms", {}))
+            timings["answer_support"] = 0
+            return {"stage_timings_ms": timings}
         evidence = state.get("retrieved_evidence", [])
         if not evidence:
             # 没有文献片段时，生成节点只允许输出不声称读过论文的帮助性说明；
@@ -969,7 +1072,7 @@ class AgentRuntime:
         total = int(quality.get("claim_count", 0))
         return {
             "answer": (
-                "检索到了相关原文，但最终回答没有通过逐条证据核验，"
+                "> 证据说明：检索到了相关原文，但最终回答没有通过逐条语义支持核验，"
                 f"已覆盖 {cited}/{total} 条主张，因此本次不返回结论。"
             ),
             "citations": [],
@@ -1028,6 +1131,13 @@ class AgentRuntime:
         return {"pending_action": None, "status": "completed", "answer": "已取消导入。"}
 
     async def validate_answer_citations(self, state: AgentState) -> AgentState:
+        if state.get("external_metadata_answer"):
+            return {
+                "citation_validation_passed": True,
+                "answer_repair_attempted": False,
+                "answer_repair_succeeded": False,
+                "error": None,
+            }
         valid, errors = validate_citations(
             state.get("citations", []), state.get("retrieved_evidence", [])
         )
@@ -1118,6 +1228,13 @@ class AgentRuntime:
         state.update(await self.validate_answer_citations(state))
         if not state.get("citation_validation_passed"):
             return state
+        state.update(await self.grade_answer_support(state))
+        if (
+            str(state.get("evidence_quality", {}).get("answer_support_grade", ""))
+            == "unsupported"
+        ):
+            state.update(await self.suppress_unsupported_answer(state))
+            return state
         state.update(await self.finalize(state))
         return state
 
@@ -1184,6 +1301,8 @@ def build_agent_graph(
     graph.add_node("search_arxiv", runtime.search_arxiv)
     graph.add_node("propose_import", runtime.propose_import)
     graph.add_node("validate_citations", runtime.validate_answer_citations)
+    graph.add_node("grade_answer_support", runtime.grade_answer_support)
+    graph.add_node("suppress_unsupported_answer", runtime.suppress_unsupported_answer)
     graph.add_edge(START, "validate_request")
     graph.add_conditional_edges(
         "validate_request",
@@ -1215,9 +1334,25 @@ def build_agent_graph(
     graph.add_edge("generate_answer", "validate_citations")
     graph.add_conditional_edges(
         "validate_citations",
-        lambda state: "finalize" if state.get("citation_validation_passed") else "end",
-        {"finalize": "finalize", "end": END},
+        lambda state: "grade_support" if state.get("citation_validation_passed") else "end",
+        {"grade_support": "grade_answer_support", "end": END},
     )
+    graph.add_conditional_edges(
+        "grade_answer_support",
+        lambda state: (
+            "suppress"
+            if str(
+                state.get("evidence_quality", {}).get("answer_support_grade", "")
+            )
+            == "unsupported"
+            else "finalize"
+        ),
+        {
+            "suppress": "suppress_unsupported_answer",
+            "finalize": "finalize",
+        },
+    )
+    graph.add_edge("suppress_unsupported_answer", END)
     graph.add_edge("finalize", END)
     graph.add_edge("abstain", END)
     return graph.compile(checkpointer=checkpointer)

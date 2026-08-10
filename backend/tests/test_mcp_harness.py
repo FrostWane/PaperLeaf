@@ -191,6 +191,48 @@ def test_mcp_disabled_after_cache_never_returns_stale_result() -> None:
     asyncio.run(scenario())
 
 
+def test_metadata_gateway_preserves_sanitized_single_result_for_import_approval() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        gateway = McpGateway(
+            repository,
+            MemoryRuntimeStore(),
+            replace(
+                settings,
+                mcp_enabled=True,
+                academic_mcp_allowed_hosts="academic-search-mcp",
+            ),
+        )
+
+        async def fake_session(_operation, *, require_enabled=True):
+            assert require_enabled is True
+            return SimpleNamespace(
+                isError=False,
+                structuredContent={
+                    "source": "OpenAlex",
+                    "available": True,
+                    "result": {
+                        "external_id": "W1",
+                        "title": "Verified open paper",
+                        "doi": "10.1000/open.paper",
+                        "open_access_pdf_url": "https://publisher.example/paper.pdf",
+                    },
+                },
+            )
+
+        gateway._with_session = fake_session  # type: ignore[method-assign]
+        result = await gateway.call(
+            "mcp__academic__get_academic_metadata",
+            {"identifier": "10.1000/open.paper", "source": "openalex"},
+        )
+
+        assert result["result"] == result["results"][0]
+        assert result["result"]["doi"] == "10.1000/open.paper"
+        assert result["result"]["open_access_pdf_url"].startswith("https://")
+
+    asyncio.run(scenario())
+
+
 def test_function_harness_exposes_mcp_only_when_web_enabled() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")

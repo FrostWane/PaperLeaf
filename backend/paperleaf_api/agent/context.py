@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .discovery_policy import academic_source_policy, requested_paper_count
+
 CONTEXT_VERSION = 1
 
 _REFERENCE_MARKERS = (
@@ -54,7 +56,6 @@ _DISCOVERY_REQUEST_RE = re.compile(
     r"(?:相关论文|相关文献|openalex|semantic\s+scholar|arxiv)",
     re.IGNORECASE,
 )
-_COUNT_RE = re.compile(r"(\d{1,2})\s*篇")
 _YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 _TASK_SWITCH_RE = re.compile(
     r"解释|总结|概括|翻译|原文|方法|实验|结果|局限|结构图|脑图|"
@@ -150,25 +151,32 @@ def _discovery_task_context(
     if isinstance(stored, dict) and stored.get("name") == "find_related_papers":
         task = dict(stored)
     elif previous and _DISCOVERY_REQUEST_RE.search(previous):
-        count_match = _COUNT_RE.search(previous)
+        previous_sources = academic_source_policy(previous)
         task = {
             "name": "find_related_papers",
             "web_required": True,
-            "requested_count": int(count_match.group(1)) if count_match else 5,
+            "requested_count": requested_paper_count(previous, default=5),
             "exclude_library": bool(
                 re.search(r"尚未.{0,8}文献库|未入库|不在.{0,8}文献库|排除.{0,8}已入库", previous)
             ),
             "source_policy": "academic_external",
         }
+        if previous_sources.has_explicit_source:
+            task["requested_sources"] = sorted(previous_sources.requested_tools)
+            task["denied_sources"] = sorted(previous_sources.denied_tools)
     else:
         return None
-    current_count = _COUNT_RE.search(query)
-    if current_count:
-        task["requested_count"] = min(10, max(1, int(current_count.group(1))))
+    current_count = requested_paper_count(query)
+    if current_count is not None:
+        task["requested_count"] = current_count
     years = [int(value) for value in _YEAR_RE.findall(query)]
     if years:
         task["year_from"] = min(years)
         task["year_to"] = max(years)
+    current_sources = academic_source_policy(query)
+    if current_sources.has_explicit_source:
+        task["requested_sources"] = sorted(current_sources.requested_tools)
+        task["denied_sources"] = sorted(current_sources.denied_tools)
     task["inherited"] = True
     return task
 
@@ -347,6 +355,25 @@ def resolve_context(
                 if year_from == year_to
                 else f"目标发表年份：{year_from}–{year_to}"
             )
+        source_names = {
+            "mcp__academic__search_openalex": "OpenAlex",
+            "mcp__academic__search_semantic_scholar": "Semantic Scholar",
+            "search_arxiv": "arXiv",
+        }
+        requested_sources = [
+            source_names[value]
+            for value in active_task.get("requested_sources", [])
+            if value in source_names
+        ]
+        denied_sources = [
+            source_names[value]
+            for value in active_task.get("denied_sources", [])
+            if value in source_names
+        ]
+        if requested_sources:
+            constraints.append("要求使用数据源：" + "、".join(requested_sources))
+        if denied_sources:
+            constraints.append("排除数据源：" + "、".join(denied_sources))
         qualifiers.append("延续上一轮任务：" + "；".join(constraints))
     resolved = original + ("\n\n[已验证阅读上下文]\n" + "\n".join(qualifiers) if qualifiers else "")
     confidence = (

@@ -198,8 +198,9 @@ def _sanitize_result(payload: dict[str, Any]) -> dict[str, Any]:
                 if key in {"year_from", "year_to"}
                 else " ".join(str(payload[key]).split())[:500]
             )
+    single_result = isinstance(payload.get("result"), dict)
     raw_results = payload.get("results")
-    if raw_results is None and isinstance(payload.get("result"), dict):
+    if raw_results is None and single_result:
         raw_results = [payload["result"]]
     results: list[dict[str, Any]] = []
     for raw in raw_results if isinstance(raw_results, list) else []:
@@ -226,6 +227,10 @@ def _sanitize_result(payload: dict[str, Any]) -> dict[str, Any]:
         if item["title"]:
             results.append(item)
     sanitized["results"] = results[:10]
+    # 元数据查询是单项契约。保留经过同一白名单和 URL 清洗的 ``result``，
+    # 让写操作确认阶段能够明确区分“单篇复核”与“搜索候选列表”。
+    if single_result:
+        sanitized["result"] = results[0] if results else None
     return sanitized
 
 

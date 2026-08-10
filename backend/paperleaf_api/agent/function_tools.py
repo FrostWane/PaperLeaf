@@ -22,6 +22,7 @@ from ..repository import (
     AgentToolCallRecord,
     Repository,
 )
+from .discovery_policy import academic_source_policy
 from .skills import SkillDefinition
 from .tools import (
     ArxivSearch,
@@ -33,7 +34,6 @@ from .tools import (
 
 _SCALAR_TYPES = (int, float, bool)
 _TIMEOUT_ERRORS = (TimeoutError, asyncio.TimeoutError)
-_ACADEMIC_SOURCE_NAMES = ("openalex", "semantic scholar", "semanticscholar", "arxiv")
 _AUTO_DISCOVERY_SINGLE_USE_TOOLS = frozenset(
     {
         "search_library",
@@ -215,9 +215,17 @@ class PaperArtifactToolInput(BaseModel):
 class ImportToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    arxiv_id: str = Field(min_length=3, max_length=80)
+    arxiv_id: str | None = Field(default=None, min_length=3, max_length=80)
+    doi: str | None = Field(default=None, min_length=3, max_length=300)
+    external_id: str | None = Field(default=None, max_length=300)
     title: str = Field(min_length=1, max_length=500)
-    pdf_url: str = Field(min_length=8, max_length=1000)
+    pdf_url: str | None = Field(default=None, min_length=8, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_identifier(self) -> ImportToolInput:
+        if not self.arxiv_id and not self.doi:
+            raise ValueError("导入候选必须包含 arXiv ID 或 DOI")
+        return self
 
 
 ToolAccess = Literal["read", "write"]
@@ -349,7 +357,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "request_import",
-        1,
+        2,
         "提出导入公开论文 PDF 的请求；必须暂停等待用户确认。",
         ImportToolInput,
         "write",
@@ -636,10 +644,63 @@ class FunctionToolHarness:
             return "已取消论文导入，没有下载或保存任何文件。", None
         candidates = action.get("candidates")
         candidate = candidates[0] if isinstance(candidates, list) and candidates else None
-        if not isinstance(candidate, dict) or not candidate.get("arxiv_id"):
+        if not isinstance(candidate, dict) or not (
+            candidate.get("arxiv_id") or candidate.get("doi")
+        ):
             return "导入信息不完整，本次没有下载或保存任何文件。", "TOOL_ACTION_INVALID"
         if self.confirmed_importer is None:
             return "导入服务暂不可用，请稍后在发现页重试。", "TOOL_IMPORT_UNAVAILABLE"
+        if not candidate.get("arxiv_id"):
+            if self.mcp_gateway is None:
+                return (
+                    "当前无法重新核对 DOI 的开放 PDF 地址，本次没有执行导入。",
+                    "TOOL_IMPORT_UNAVAILABLE",
+                )
+            try:
+                metadata_response = await self.mcp_gateway.call(
+                    "mcp__academic__get_academic_metadata",
+                    {
+                        "identifier": str(candidate.get("doi", "")),
+                        "source": "openalex",
+                    },
+                )
+            except Exception:
+                return (
+                    "暂时无法重新核对 DOI 元数据，本次没有执行导入。",
+                    "TOOL_IMPORT_METADATA_FAILED",
+                )
+            resolved = metadata_response.get("result")
+            if not isinstance(resolved, dict):
+                metadata_results = metadata_response.get("results")
+                resolved = (
+                    metadata_results[0]
+                    if isinstance(metadata_results, list)
+                    and metadata_results
+                    and isinstance(metadata_results[0], dict)
+                    else None
+                )
+            if not isinstance(resolved, dict):
+                return (
+                    "该 DOI 暂未找到可安全下载的开放 PDF，本次没有执行导入。",
+                    "TOOL_IMPORT_PDF_UNAVAILABLE",
+                )
+            requested_doi = str(candidate.get("doi", "")).casefold().removeprefix(
+                "https://doi.org/"
+            )
+            resolved_doi = str(resolved.get("doi", "")).casefold().removeprefix(
+                "https://doi.org/"
+            )
+            if not requested_doi or requested_doi != resolved_doi:
+                return (
+                    "DOI 元数据复核不一致，本次没有执行导入。",
+                    "TOOL_IMPORT_METADATA_MISMATCH",
+                )
+            if not resolved.get("open_access_pdf_url"):
+                return (
+                    "该 DOI 没有可验证的开放 PDF，本次没有执行导入。",
+                    "TOOL_IMPORT_PDF_UNAVAILABLE",
+                )
+            candidate = {**resolved, "doi": resolved_doi}
         try:
             paper = await self.confirmed_importer(user_id, candidate)
         except ValueError as error:
@@ -700,6 +761,9 @@ class FunctionToolHarness:
         if not schemas:
             return ToolLoopResult(fallback_reason="skill_has_no_available_tools")
         result = ToolLoopResult()
+        # 已验证上下文会携带上一轮论文发现任务的来源约束。必须解析完整的
+        # resolved_query，否则“改用 Semantic Scholar”后的年份追问会退回 OpenAlex。
+        source_policy = academic_source_policy(query)
         planner_results: list[dict[str, Any]] = []
         planner_results.append(
             {
@@ -726,7 +790,6 @@ class FunctionToolHarness:
         invalid_repairs: set[str] = set()
         max_steps = min(4, context.skill.manifest.max_tool_steps)
         automatic_calls = list(self._automatic_openalex_calls(query, context, schemas))
-        automatic_policy_active = bool(automatic_calls)
         tool_call_counts: dict[str, int] = {}
 
         while result.steps < max_steps:
@@ -766,8 +829,7 @@ class FunctionToolHarness:
             batch: list[ToolCallRequest] = []
             for call in decision.calls[:3]:
                 if (
-                    automatic_policy_active
-                    and call.name in _AUTO_DISCOVERY_SINGLE_USE_TOOLS
+                    call.name in _AUTO_DISCOVERY_SINGLE_USE_TOOLS
                     and tool_call_counts.get(call.name, 0) >= 1
                 ):
                     continue
@@ -785,7 +847,12 @@ class FunctionToolHarness:
                 break
             result.steps += len(batch)
             executed = await asyncio.gather(
-                *(self._execute_call(call, context) for call in batch),
+                *(
+                    self._record_rejection(call, context, "SOURCE_EXCLUDED_BY_USER")
+                    if call.name in source_policy.denied_tools
+                    else self._execute_call(call, context)
+                    for call in batch
+                ),
                 return_exceptions=True,
             )
             for call, outcome in zip(batch, executed):
@@ -800,6 +867,11 @@ class FunctionToolHarness:
                     }
                 )
                 if isinstance(outcome, ValidationError):
+                    # Schema 修复不计入“同一检索工具只执行一次”；允许模型用同一
+                    # Tool 名称修正参数一次，但已执行、失败或被策略拒绝的调用仍计数。
+                    tool_call_counts[call.name] = max(
+                        0, tool_call_counts.get(call.name, 1) - 1
+                    )
                     await self._record_invalid_arguments(call, context)
                     invalid_preview = {
                         "tool": call.name,
@@ -854,8 +926,8 @@ class FunctionToolHarness:
                         or call.name in {"search_arxiv", "find_related_papers"}
                     )
                 ):
-                    context_preview["existing_scope_titles"] = list(
-                        context.scope_paper_titles[:8]
+                    context_preview["scope_paper_count"] = len(
+                        context.scope_paper_titles
                     )
                 result.context_entries.append(
                     {
@@ -908,22 +980,33 @@ class FunctionToolHarness:
             or context.skill.manifest.name != "find_related_papers"
         ):
             return ()
-        normalized = query.casefold()
-        # 用户明确指定或排除任何数据源时尊重其选择，交给显式来源策略处理。
-        if any(source in normalized for source in _ACADEMIC_SOURCE_NAMES):
+        user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
+        source_policy = academic_source_policy(query)
+        # 正向点名交给显式来源兜底；只有“排除某来源”时才确定性选择其他可用源。
+        if source_policy.requested_tools:
             return ()
         available = {
             str(item.get("function", {}).get("name", ""))
             for item in schemas
             if isinstance(item, dict)
         }
-        tool = "mcp__academic__search_openalex"
-        if tool not in available:
+        candidates = (
+            "mcp__academic__search_openalex",
+            "mcp__academic__search_semantic_scholar",
+        )
+        tool = next(
+            (
+                name
+                for name in candidates
+                if name in available and name not in source_policy.denied_tools
+            ),
+            None,
+        )
+        if tool is None:
             return ()
         search_query = _representative_scope_query(context.scope_paper_titles, query)
         if not search_query:
             return ()
-        user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
         years = [
             int(value)
             for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
@@ -934,7 +1017,7 @@ class FunctionToolHarness:
             arguments["year_to"] = max(years)
         return (
             ToolCallRequest(
-                call_id="automatic-openalex-1",
+                call_id="automatic-academic-1",
                 name=tool,
                 arguments=arguments,
             ),
@@ -962,14 +1045,21 @@ class FunctionToolHarness:
             for item in schemas
             if isinstance(item, dict)
         }
-        normalized = query.casefold()
-        target: str | None = None
-        if "openalex" in normalized:
-            target = "mcp__academic__search_openalex"
-        elif "semantic scholar" in normalized or "semanticscholar" in normalized:
-            target = "mcp__academic__search_semantic_scholar"
-        elif "arxiv" in normalized:
-            target = "search_arxiv"
+        user_query = query.split("\n\n[已验证阅读上下文]", 1)[0]
+        source_policy = academic_source_policy(query)
+        target = next(
+            (
+                name
+                for name in (
+                    "mcp__academic__search_openalex",
+                    "mcp__academic__search_semantic_scholar",
+                    "search_arxiv",
+                )
+                if name in source_policy.requested_tools
+                and name not in source_policy.denied_tools
+            ),
+            None,
+        )
         if target not in available:
             return ()
         search_terms = [
@@ -978,10 +1068,17 @@ class FunctionToolHarness:
             if title.strip()
         ]
         if not search_terms:
-            search_terms = [query.strip()[:240]]
+            search_terms = [user_query.strip()[:240]]
+        years = [
+            int(value)
+            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", user_query)
+        ]
         calls: list[ToolCallRequest] = []
         for title in search_terms:
-            arguments = {"query": title, "limit": 5}
+            arguments: dict[str, Any] = {"query": title, "limit": 5}
+            if years and target.startswith("mcp__academic__search_"):
+                arguments["year_from"] = min(years)
+                arguments["year_to"] = max(years)
             signature = f"{target}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
             if signature in seen_signatures:
                 continue
@@ -1035,7 +1132,7 @@ class FunctionToolHarness:
                 "action_id": str(uuid.uuid4()),
                 "type": "confirm_arxiv_import",
                 "tool_call_record_id": started_record.id,
-                "risk_message": "导入会下载并解析所选公开 PDF，需要你的明确确认。",
+                "risk_message": "导入会重新核对公开元数据、下载 PDF 并建立索引，需要你的明确确认。",
                 "allowed_decisions": ["approve", "reject"],
                 "candidates": [parsed.model_dump(mode="json")],
             }

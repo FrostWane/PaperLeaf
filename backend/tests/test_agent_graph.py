@@ -98,7 +98,7 @@ def test_exact_year_external_results_never_fall_back_to_older_local_references()
 
     assert answer.startswith("### 联网推荐")
     assert "没有返回符合条件" in answer
-    assert "没有用当前文献库的参考文献" in answer
+    assert "没有用当前文献库参考文献" in answer
     assert "Recent DTA Method" not in answer
     assert "2024 年参考文献" not in answer
 
@@ -136,6 +136,80 @@ def test_exact_year_external_recommendation_keeps_only_requested_year() -> None:
     assert "Older DTA" not in answer
 
 
+def test_full_scope_titles_are_used_for_dedup_beyond_first_eight() -> None:
+    items = [
+        {
+            "title": f"Cross-domain candidate {index}",
+            "year": 2026,
+            "publication": "General Research",
+            "doi": f"10.1000/general.{index}",
+        }
+        for index in range(1, 8)
+    ]
+    contexts = [
+        json.dumps(
+            {
+                "kind": "result",
+                "tool": "mcp__academic__search_openalex",
+                "content": json.dumps(
+                    {"source": "OpenAlex", "available": True, "items": items}
+                ),
+            }
+        )
+    ]
+    existing = [f"Library paper {index}" for index in range(1, 9)]
+    existing.append("Cross-domain candidate 1")
+
+    answer = _ensure_external_recommendation_shape(
+        "",
+        "请推荐五篇相关论文",
+        contexts,
+        [],
+        existing,
+    )
+
+    assert "Cross-domain candidate 1" not in answer
+    assert answer.count("| **Cross-domain candidate") == 5
+    assert "DTA" not in answer
+    assert "药物" not in answer
+
+
+def test_external_shortfall_uses_only_real_metadata_instead_of_model_fill() -> None:
+    contexts = [
+        json.dumps(
+            {
+                "kind": "result",
+                "tool": "mcp__academic__search_openalex",
+                "content": json.dumps(
+                    {
+                        "source": "OpenAlex",
+                        "available": True,
+                        "items": [
+                            {
+                                "title": "Only verified candidate",
+                                "year": 2026,
+                                "doi": "10.1000/verified",
+                            }
+                        ],
+                    }
+                ),
+            }
+        )
+    ]
+
+    answer = _ensure_external_recommendation_shape(
+        "模型虚构候选 A、B、C、D、E",
+        "recommend five papers",
+        contexts,
+        [],
+    )
+
+    assert answer.startswith("### 联网推荐")
+    assert "Only verified candidate" in answer
+    assert "模型虚构" not in answer
+    assert "本轮只找到 1 篇" in answer
+
+
 def test_failed_external_search_does_not_claim_zero_verified_results() -> None:
     contexts = [
         json.dumps(
@@ -164,7 +238,40 @@ def test_failed_external_search_does_not_claim_zero_verified_results() -> None:
         [],
     )
 
-    assert answer == "OpenAlex 超时，无法完成联网检索。"
+    assert answer.startswith("### 联网推荐")
+    assert "OpenAlex 本轮响应超时" in answer
+    assert "没有返回可核验的候选论文" in answer
+    assert "模型猜测" in answer
+
+
+def test_rate_limited_source_returns_controlled_notice_not_local_recommendations() -> None:
+    contexts = [
+        json.dumps(
+            [
+                {
+                    "kind": "result",
+                    "tool": "mcp__academic__search_semantic_scholar",
+                    "content": json.dumps(
+                        {
+                            "tool": "mcp__academic__search_semantic_scholar",
+                            "status": "failed",
+                            "error_code": "SEMANTIC_SCHOLAR_RATE_LIMITED",
+                        }
+                    ),
+                }
+            ]
+        )
+    ]
+
+    answer = _ensure_external_recommendation_shape(
+        "模型根据本地论文给出了一批候选。",
+        "请只使用 Semantic Scholar 推荐 five papers",
+        contexts,
+        [Evidence("local", "p1", "本地论文", 1, "本地 PDF 片段")],
+    )
+
+    assert "Semantic Scholar 本轮请求频率受限" in answer
+    assert "本地论文给出" not in answer
 
 
 def test_support_check_uses_cited_evidence_instead_of_first_retrieval_items() -> None:
@@ -262,7 +369,7 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     assert result["answer"].startswith("论文结论")
     assert result["citations"][0].physical_page == 4
     assert result["evidence_quality"]["grade"] == "sufficient"
-    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
+    assert result["evidence_quality"]["answer_support_grade"] == "supported"
 
 
 def test_selection_lock_discards_legacy_evidence_from_other_pages() -> None:
@@ -537,7 +644,7 @@ def test_graph_abstains_when_retrieval_is_nonempty_but_irrelevant() -> None:
     assert result["status"] == "completed"
     assert result["citations"][0].chunk_id == "c2"
     assert result["evidence_quality"]["retrieval_grade"] == "insufficient"
-    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
+    assert result["evidence_quality"]["answer_support_grade"] == "supported"
     assert "附录列出了实验硬件" in result["answer"]
 
 
@@ -675,7 +782,66 @@ def test_external_tool_context_generates_answer_without_falling_through_to_arxiv
     assert any(item.get("role") == "tool_context" for item in captured_messages)
 
 
-def test_secondary_support_grader_cannot_replace_a_valid_cited_answer() -> None:
+@pytest.mark.parametrize("use_langgraph", [False, True])
+def test_external_metadata_answer_bypasses_pdf_citation_and_semantic_gates(
+    use_langgraph: bool,
+) -> None:
+    async def external_answerer(query, evidence, messages=None, scope_titles=()):
+        return "### 联网推荐\n\n服务端将使用真实元数据重建清单。", []
+
+    local_evidence = Evidence("local-c1", "p1", "库内论文", 1, "本地证据")
+    graph = build_agent_graph(
+        EmptyRetriever(),
+        external_answerer,
+        use_langgraph=use_langgraph,
+        support_grader=unsupported_grader,
+    )
+    result = asyncio.run(
+        graph.ainvoke(
+            {
+                "user_id": "u1",
+                "query": "推荐五篇相关论文",
+                "selected_paper_ids": ["p1"],
+                "selected_skill": "find_related_papers",
+                "tool_mode_active": True,
+                "pre_retrieved_evidence": [local_evidence],
+                "tool_context_entries": [
+                    {
+                        "kind": "call",
+                        "tool_call_id": "openalex-1",
+                        "tool": "mcp__academic__search_openalex",
+                        "content": '{"query":"topic"}',
+                    },
+                    {
+                        "kind": "result",
+                        "tool_call_id": "openalex-1",
+                        "tool": "mcp__academic__search_openalex",
+                        "content": json.dumps(
+                            {
+                                "source": "OpenAlex",
+                                "available": True,
+                                "items": [
+                                    {"title": "Verified candidate", "year": 2026}
+                                ],
+                            }
+                        ),
+                    },
+                ],
+                "context_budget": {"hard_limit": 3000},
+            },
+            {"recursion_limit": 8},
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["external_metadata_answer"] is True
+    assert result["citation_validation_passed"] is True
+    assert result["citations"] == []
+    assert result["answer"].startswith("### 联网推荐")
+    assert "语义支持核验" not in result["answer"]
+
+
+def test_secondary_support_grader_blocks_semantically_unsupported_answer() -> None:
     result = _run(
         build_agent_graph(
             EvidenceRetriever(),
@@ -685,17 +851,18 @@ def test_secondary_support_grader_cannot_replace_a_valid_cited_answer() -> None:
     )
 
     assert result["status"] == "completed"
-    assert result["citations"][0].chunk_id == "c1"
+    assert result["citations"] == []
+    assert "没有通过逐条语义支持核验" in result["answer"]
     assert result["evidence_quality"]["retrieval_grade"] == "sufficient"
-    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
+    assert result["evidence_quality"]["answer_support_grade"] == "unsupported"
 
 
-def test_graph_keeps_natural_paragraph_after_citation_ids_are_validated() -> None:
+def test_graph_blocks_partially_uncited_natural_paragraph() -> None:
     result = _run(build_agent_graph(EvidenceRetriever(), partially_cited_answerer))
 
     assert result["status"] == "completed"
-    assert result["citations"][0].chunk_id == "c1"
-    assert "另一个结论" in result["answer"]
+    assert result["citations"] == []
+    assert "没有通过逐条语义支持核验" in result["answer"]
 
 
 def test_graph_interrupts_before_arxiv_import() -> None:

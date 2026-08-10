@@ -136,10 +136,41 @@ describe("真实 API 契约", () => {
     expect(answer.answer).toBe("有依据"); expect(answer.citations[0]).toMatchObject({ paperId: "p1", page: 2, chunkId: "c1" });
     expect(answer.citations[0].quote).toBe("原文");
     expect(answer.evidenceQuality).toMatchObject({ grade: "sufficient", confidence: 0.91, pageCount: 1, channels: ["keyword", "vector"], claimCount: 1, citedClaimCount: 1, supportedClaimCount: 1, claimCitationCoverage: 1, claimSupportCoverage: 1 });
-    expect(progress).toEqual(["检索文献证据:running", "检索文献证据:completed"]);
+    expect(progress).toEqual(["检索文献证据:running", "检索文献证据:completed", "检索文献库:completed", "核验回答证据:completed"]);
     expect(answerUpdates).toEqual(["有依", "有依据"]);
     expect(citationUpdates).toEqual([1]);
-    expect(answer.activities).toEqual([expect.objectContaining({ node: "retrieve_library", status: "completed", durationMs: 18 })]);
+    expect(answer.activities).toEqual([
+      expect.objectContaining({ node: "retrieve_library", status: "completed", durationMs: 18 }),
+      expect.objectContaining({ node: "search_library", label: "检索文献库", status: "completed" }),
+      expect.objectContaining({ node: "validate_answer", label: "核验回答证据", status: "completed" }),
+    ]);
+  });
+
+  it("Chat 将真实 Function Tool 名称映射为用户可见活动", async () => {
+    document.cookie = "paperleaf_csrf=tool-activity-token; path=/";
+    server.use(http.post(`${API_BASE_URL}/chat/sessions/default/messages`, () => new HttpResponse(
+      'event: tool_started\ndata: {"event":"tool_started","run_id":"r-tool","data":{"tool":"mcp__academic__search_openalex","call_index":0}}\n\n'
+      + 'event: tool_finished\ndata: {"event":"tool_finished","run_id":"r-tool","data":{"tool":"mcp__academic__search_openalex","call_index":0,"status":"succeeded"}}\n\n'
+      + 'event: message_delta\ndata: {"event":"message_delta","run_id":"r-tool","data":{"delta":"找到候选论文"}}\n\n'
+      + 'event: run_finished\ndata: {"event":"run_finished","run_id":"r-tool","data":{"status":"completed"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )));
+    const progress: string[] = [];
+
+    const answer = await realDataSource.ask("联网推荐五篇论文", [], {
+      onActivity: (activity) => progress.push(`${activity.label}:${activity.status}`),
+    });
+
+    expect(progress).toEqual(["查询 OpenAlex:running", "查询 OpenAlex:completed"]);
+    expect(answer.answer).toBe("找到候选论文");
+    expect(answer.activities).toEqual([
+      expect.objectContaining({
+        key: "tool:0:mcp__academic__search_openalex",
+        node: "mcp__academic__search_openalex",
+        label: "查询 OpenAlex",
+        status: "completed",
+      }),
+    ]);
   });
 
   it("管理员模型状态映射运行策略与熔断字段", async () => {

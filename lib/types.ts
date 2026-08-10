@@ -539,7 +539,7 @@ export interface AgentRunSnapshot {
     type: string;
     riskMessage: string;
     allowedDecisions: string[];
-    candidates: Array<{ arxivId?: string; title?: string; authors?: string[] | string; abstract?: string; published?: string; pdfUrl?: string; journalRef?: string }>;
+    candidates: Array<{ arxivId?: string; doi?: string; externalId?: string; title?: string; authors?: string[] | string; abstract?: string; published?: string; year?: number; publication?: string; pdfUrl?: string; journalRef?: string }>;
   };
   answer: string;
   citations: Citation[];

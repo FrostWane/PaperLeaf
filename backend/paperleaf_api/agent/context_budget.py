@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -245,15 +246,95 @@ def compress_tool_results(
         elif entry.get("kind") == "result" and call_id in pending:
             pairs.append([pending.pop(call_id), dict(entry)])
     pairs.extend([[call]] for call in pending.values())
-    for pair in pairs[:-keep_complete] if keep_complete else pairs:
+    def compact_content(content: str, token_limit: int) -> str:
+        if estimate_tokens(content) <= token_limit:
+            return content
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            limit = max(60, token_limit - 1)
+            return content[:limit] + "…"
+        if not isinstance(payload, dict):
+            limit = max(120, token_limit * 2)
+            return json.dumps(
+                {"compacted": True, "preview": str(payload)[:limit]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        compact = {
+            key: value
+            for key, value in payload.items()
+            if key
+            not in {
+                "items",
+                "results",
+                "abstract",
+                "excerpt",
+                "raw",
+                "content",
+            }
+        }
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list):
+            raw_items = payload.get("results")
+        if isinstance(raw_items, list):
+            compact["item_count"] = len(raw_items)
+            compact["items"] = [
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key
+                    in {
+                        "external_id",
+                        "arxiv_id",
+                        "title",
+                        "paper_title",
+                        "year",
+                        "publication",
+                        "doi",
+                        "source",
+                        "physical_page",
+                    }
+                }
+                for item in raw_items[:3]
+                if isinstance(item, dict)
+            ]
+        compact["compacted"] = True
+        rendered = json.dumps(compact, ensure_ascii=False, separators=(",", ":"), default=str)
+        while estimate_tokens(rendered) > token_limit and compact.get("items"):
+            compact["items"].pop()
+            rendered = json.dumps(
+                compact, ensure_ascii=False, separators=(",", ":"), default=str
+            )
+        if estimate_tokens(rendered) > token_limit:
+            rendered = json.dumps(
+                {
+                    "compacted": True,
+                    "tool": compact.get("tool"),
+                    "status": compact.get("status"),
+                    "error_code": compact.get("error_code"),
+                    "item_count": compact.get("item_count"),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        return rendered
+
+    complete_from = max(0, len(pairs) - keep_complete) if keep_complete else len(pairs)
+    for index, pair in enumerate(pairs):
         if len(pair) != 2:
             continue
+        call = pair[0]
+        call_content = str(call.get("content", ""))
+        if estimate_tokens(call_content) > 600:
+            call["content"] = compact_content(call_content, 600)
+            call["compacted"] = True
         result = pair[1]
         content = str(result.get("content", ""))
-        if estimate_tokens(content) <= preview_tokens:
+        token_limit = 2400 if index >= complete_from else preview_tokens
+        if estimate_tokens(content) <= token_limit:
             continue
-        limit = max(200, preview_tokens * 2)
-        result["content"] = content[:limit] + "…"
+        result["content"] = compact_content(content, token_limit)
         result["compacted"] = True
     return [entry for pair in pairs for entry in pair]
 
@@ -298,6 +379,7 @@ def enforce_context_envelope(
     actions: list[str] = []
     dropped_messages = 0
     dropped_evidence = 0
+    dropped_tool_pairs = 0
     original_tool_tokens = sum(
         estimate_tokens(str(item.get("content", ""))) for item in tool_entries
     )
@@ -375,6 +457,22 @@ def enforce_context_envelope(
             actions.append("emergency_compaction")
         current = usage()
 
+    # 仍超限时只能整对移除最旧 Tool Call/Result，绝不留下孤立半对。
+    while sum(current.values()) > hard_limit and len(kept_tools) >= 2:
+        oldest_call_id = str(kept_tools[0].get("tool_call_id", ""))
+        before = len(kept_tools)
+        kept_tools = [
+            item
+            for item in kept_tools
+            if str(item.get("tool_call_id", "")) != oldest_call_id
+        ]
+        if len(kept_tools) == before:
+            break
+        dropped_tool_pairs += 1
+        current = usage()
+    if dropped_tool_pairs:
+        actions.append("drop_old_tool_pairs")
+
     total = sum(current.values())
     return ContextEnvelope(
         messages=kept_messages,
@@ -386,6 +484,7 @@ def enforce_context_envelope(
             "hard_limit": hard_limit,
             "dropped_messages": dropped_messages,
             "dropped_evidence": dropped_evidence,
+            "dropped_tool_pairs": dropped_tool_pairs,
             "compression_actions": actions,
         },
         exceeded=total > hard_limit,

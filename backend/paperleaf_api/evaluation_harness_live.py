@@ -51,6 +51,7 @@ class LiveScenario:
     require_citations: bool = True
     require_native_tools: bool = False
     expected_tools: tuple[str, ...] = ()
+    forbidden_tools: tuple[str, ...] = ()
     group: str | None = None
 
 
@@ -76,6 +77,7 @@ class LiveRunResult:
     citation_count: int = 0
     citation_pages: list[int] = field(default_factory=list)
     vector_fallback_reasons: list[str] = field(default_factory=list)
+    external_provider_degradations: list[str] = field(default_factory=list)
     answer: str = ""
     duration_ms: int | None = None
     structural_pass: bool = False
@@ -409,8 +411,41 @@ class LiveHarness:
             result.failures.append("native_function_calling")
         if scenario.require_native_tools and not result.tool_calls:
             result.failures.append("external_tool_call_missing")
-        if scenario.require_native_tools and not any(
-            call.get("status") == "succeeded" for call in result.tool_calls
+        expected_attempts = [
+            call
+            for call in result.tool_calls
+            if str(call.get("tool", "")) in scenario.expected_tools
+        ]
+        controlled_external_failure = bool(
+            expected_attempts
+            and not any(call.get("status") == "succeeded" for call in expected_attempts)
+            and any(
+                any(
+                    marker in str(call.get("error_code") or "").casefold()
+                    for marker in (
+                        "rate_limit",
+                        "timeout",
+                        "key_required",
+                        "disabled",
+                        "circuit_open",
+                    )
+                )
+                for call in expected_attempts
+            )
+            and "没有返回可核验的候选论文" in result.answer
+        )
+        if controlled_external_failure:
+            result.external_provider_degradations = sorted(
+                {
+                    str(call.get("error_code"))
+                    for call in expected_attempts
+                    if call.get("error_code")
+                }
+            )
+        if (
+            scenario.require_native_tools
+            and not any(call.get("status") == "succeeded" for call in result.tool_calls)
+            and not controlled_external_failure
         ):
             result.failures.append("external_tool_call_not_succeeded")
         succeeded_tools = {
@@ -419,9 +454,16 @@ class LiveHarness:
             if call.get("status") == "succeeded"
         }
         for expected_tool in scenario.expected_tools:
-            if expected_tool not in succeeded_tools:
+            if expected_tool not in succeeded_tools and not controlled_external_failure:
                 result.failures.append(f"expected_tool_missing:{expected_tool}")
-        if scenario.require_native_tools and not result.tool_mode_active:
+        for forbidden_tool in scenario.forbidden_tools:
+            if forbidden_tool in succeeded_tools:
+                result.failures.append(f"forbidden_tool_used:{forbidden_tool}")
+        if (
+            scenario.require_native_tools
+            and not result.tool_mode_active
+            and not controlled_external_failure
+        ):
             result.failures.append("usable_external_output_missing")
         if result.tool_mode_active and not result.tool_calls:
             result.failures.append("active_tool_output_not_persisted")
@@ -562,41 +604,81 @@ def build_scenarios(
         )
         index += 1
 
-    for offset in range(10):
-        source_mode = offset % 3
-        if source_mode == 0:
-            question = (
-                "请只调用 OpenAlex 学术检索查找与集合论文相关的近期公开论文，"
-                "不要使用本地文献库或 arXiv，并标明元数据来源。"
-            )
-            expected_tools = ("mcp__academic__search_openalex",)
-        elif source_mode == 1:
-            question = "请联网查找与当前集合研究主题相关的 arXiv 论文，并说明为什么相关。"
-            expected_tools = ("search_arxiv",)
-        else:
-            question = (
-                "请根据当前集合的研究主题联网推荐 5 篇尚未导入的相关论文，"
-                "列出题目、年份、出版物和 DOI，并说明推荐理由。"
-            )
-            expected_tools = ("mcp__academic__search_openalex",)
-        groups.append(
-            [
-                LiveScenario(
-                    index=index,
-                    category="function_mcp",
-                    title=f"[实测][工具] {index:03d}",
-                    session_type="collection",
-                    collection_id=collection_id,
-                    question=question,
-                    expected_skills=("find_related_papers",),
-                    web_enabled=True,
-                    require_citations=False,
-                    require_native_tools=True,
-                    expected_tools=expected_tools,
-                )
-            ]
+    discovery_pairs = (
+        (
+            "请根据当前集合主题联网推荐 5 篇尚未入库的相关论文。",
+            "有没有更近的论文，如 2026 年的？",
+            ("mcp__academic__search_openalex",),
+            (),
+        ),
+        (
+            "请只使用 OpenAlex 推荐五篇尚未入库的相关论文。",
+            "换一批 three papers，限定 2025 年。",
+            ("mcp__academic__search_openalex",),
+            ("mcp__academic__search_semantic_scholar", "search_arxiv"),
+        ),
+        (
+            "请只使用 Semantic Scholar 推荐 five papers。",
+            "有没有 2026 年的？",
+            ("mcp__academic__search_semantic_scholar",),
+            ("mcp__academic__search_openalex", "search_arxiv"),
+        ),
+        (
+            "不要使用 OpenAlex，请用 Semantic Scholar 推荐五篇相关论文。",
+            "换一批 3 篇，限定 2025 年。",
+            ("mcp__academic__search_semantic_scholar",),
+            ("mcp__academic__search_openalex",),
+        ),
+        (
+            "请只使用 arXiv 推荐 5 篇相关论文。",
+            "再推荐三篇 2026 年的。",
+            ("search_arxiv",),
+            (
+                "mcp__academic__search_openalex",
+                "mcp__academic__search_semantic_scholar",
+            ),
+        ),
+    )
+    for pair_index, (
+        first_question,
+        followup_question,
+        expected_tools,
+        forbidden_tools,
+    ) in enumerate(discovery_pairs):
+        group_id = f"discovery-followup-{pair_index}"
+        first = LiveScenario(
+            index=index,
+            category="function_mcp",
+            title=f"[实测][工具上下文] {index:03d}",
+            session_type="collection",
+            collection_id=collection_id,
+            question=first_question,
+            expected_skills=("find_related_papers",),
+            web_enabled=True,
+            require_citations=False,
+            require_native_tools=True,
+            expected_tools=expected_tools,
+            forbidden_tools=forbidden_tools,
+            group=group_id,
         )
         index += 1
+        followup = LiveScenario(
+            index=index,
+            category="function_mcp",
+            title=first.title,
+            session_type="collection",
+            collection_id=collection_id,
+            question=followup_question,
+            expected_skills=("find_related_papers",),
+            web_enabled=True,
+            require_citations=False,
+            require_native_tools=True,
+            expected_tools=expected_tools,
+            forbidden_tools=forbidden_tools,
+            group=group_id,
+        )
+        index += 1
+        groups.append([first, followup])
 
     for _offset in range(5):
         groups.append(

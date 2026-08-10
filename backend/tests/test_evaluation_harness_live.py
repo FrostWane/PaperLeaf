@@ -1,6 +1,12 @@
 from collections import Counter
+from types import SimpleNamespace
 
-from paperleaf_api.evaluation_harness_live import build_scenarios
+from paperleaf_api.evaluation_harness_live import (
+    LiveHarness,
+    LiveRunResult,
+    LiveScenario,
+    build_scenarios,
+)
 
 
 def test_live_harness_matrix_contains_exactly_one_hundred_real_run_slots() -> None:
@@ -28,7 +34,10 @@ def test_live_harness_matrix_contains_exactly_one_hundred_real_run_slots() -> No
         "memory_long_context": 5,
         "degradation": 5,
     }
-    assert sum(len(group) == 2 for group in groups) == 10
+    assert sum(len(group) == 2 for group in groups) == 15
+    assert sum(
+        len(group) == 2 and group[0].category == "function_mcp" for group in groups
+    ) == 5
     assert all(
         group[0].group == group[1].group
         for group in groups
@@ -77,3 +86,53 @@ def test_method_summary_is_a_valid_single_paper_skill() -> None:
 
     assert scenarios
     assert all("summarize_paper" in item.expected_skills for item in scenarios)
+
+
+def test_live_grader_separates_controlled_provider_degradation_from_app_failure() -> None:
+    scenario = LiveScenario(
+        index=1,
+        category="function_mcp",
+        title="Semantic Scholar 限流",
+        session_type="collection",
+        question="只使用 Semantic Scholar 推荐五篇论文",
+        expected_skills=("find_related_papers",),
+        require_citations=False,
+        require_native_tools=True,
+        expected_tools=("mcp__academic__search_semantic_scholar",),
+    )
+    result = LiveRunResult(
+        index=1,
+        category="function_mcp",
+        title=scenario.title,
+        question=scenario.question,
+        status="completed",
+        selected_skill="find_related_papers",
+        native_function_calling_attempted=True,
+        tool_mode_active=False,
+        tool_calls=[
+            {
+                "tool": "mcp__academic__search_semantic_scholar",
+                "status": "failed",
+                "error_code": "SEMANTIC_SCHOLAR_RATE_LIMITED",
+            }
+        ],
+        final_input_tokens=1000,
+        hard_limit=2000,
+        answer=(
+            "### 联网推荐\n\nSemantic Scholar 本轮请求频率受限，"
+            "没有返回可核验的候选论文。"
+        ),
+    )
+    run = SimpleNamespace(
+        status="completed",
+        error_code=None,
+        selected_skill="find_related_papers",
+        scope_snapshot={"paper_ids": []},
+    )
+
+    LiveHarness._grade(object.__new__(LiveHarness), scenario, run, [], result)
+
+    assert result.failures == []
+    assert result.external_provider_degradations == [
+        "SEMANTIC_SCHOLAR_RATE_LIMITED"
+    ]

@@ -45,7 +45,7 @@ from .artifacts import (
     validate_structure_payload,
     validate_summary_payload,
 )
-from .arxiv_import import import_arxiv_paper
+from .arxiv_import import import_arxiv_paper, import_public_paper
 from .arxiv_service import (
     search_arxiv,
     search_related_arxiv,
@@ -173,8 +173,8 @@ class AppServices:
         self.mcp_gateway = McpGateway(self.repository, self.runtime_store, config)
 
         async def confirmed_importer(user_id: str, candidate: dict[str, Any]) -> Any:
-            return await import_arxiv_paper(
-                str(candidate.get("arxiv_id", "")),
+            return await import_public_paper(
+                candidate,
                 user_id,
                 config=self.config,
                 repository=self.repository,
