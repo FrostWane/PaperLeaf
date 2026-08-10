@@ -12,6 +12,7 @@
   关键词检索并记录原因。
 - 增加 100 例确定性 Harness evaluator 与显式真实模型 evaluator；后者不进入普通 CI，
   并保留 `[实测]` 会话供本地界面复核。
+- 相关论文发现未指定来源时，由 Harness 确定性保留一次 OpenAlex 查询；同一检索源每轮最多调用一次，避免模型重复消耗全部 Tool Step。OpenAlex 候选会以结构化书目信息压缩后进入模型，保证后排标题不因旧结果字符截断而丢失；限流或不可用响应按失败记录并回退，不再伪装成成功空结果。
 
 - 新增 Compose 私网 `academic-search-mcp`，以 Streamable HTTP 暴露 OpenAlex、Semantic Scholar 查询和学术元数据读取三个只读工具。
 - Gateway 增加工具发现、Schema/只读标注校验、名称隔离、连接池、Redis 缓存、健康状态、超时与连续失败熔断；外部结果不能转换成页级引用证据。

@@ -299,7 +299,7 @@ export function SettingsView() {
               <option value="ko">韩语</option>
             </select>
           </div>
-          <div className="setting-row"><span><strong>允许联网发现与 Agent 搜索 arXiv</strong><small>发现页会发送由文献提取的少量主题词；不会上传 PDF，下载导入前仍需确认。</small></span><PreferenceSwitch checked={settings.arxivSearchEnabled} onChange={(value) => updateSetting("arxivSearchEnabled", value)} label="允许联网发现与 Agent 搜索 arXiv" disabled={!preferencesReady} /></div>
+          <div className="setting-row"><span><strong>允许联网学术搜索</strong><small>发现页使用 arXiv；Agent 可按问题调用 arXiv、OpenAlex 或 Semantic Scholar。不会上传 PDF，下载导入前仍需确认。</small></span><PreferenceSwitch checked={settings.arxivSearchEnabled} onChange={(value) => updateSetting("arxivSearchEnabled", value)} label="允许联网学术搜索" disabled={!preferencesReady} /></div>
         </section>
 
         <section id="memory" className="settings-section">

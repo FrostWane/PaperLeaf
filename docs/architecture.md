@@ -223,7 +223,7 @@ sequenceDiagram
 - `academic-search-mcp` 是 Compose 私网内的独立只读服务，只访问 OpenAlex 与 Semantic Scholar 固定官方 API；模型和普通用户不能提交 Server URL 或任意网页地址。
 - API/Worker 通过 Gateway 完成工具发现、Schema 与只读标注校验、名称规范化、连接池、超时、重试边界、Redis 15 分钟缓存、健康状态和连续失败熔断。未知工具、可破坏工具、异常 Schema 和非白名单主机默认拒绝。
 - MCP 结果会限长、清洗脚本协议与内网链接，并作为“不可信外部元数据”进入模型；它不会转换成页级 `Evidence`，不能生成 PaperLeaf 物理页引用。
-- 搜索顺序保持“当前页 → 当前论文 → 当前集合 → 全库 → arXiv → 学术 MCP”。只有用户打开联网学术搜索且本地证据不足，或明确要求查找相关论文时，才会调用外部工具。
+- 搜索顺序保持“当前页 → 当前论文 → 当前集合 → 全库 → arXiv → 学术 MCP”。用户打开联网学术搜索后，相关论文发现若未指定来源，会由 Harness 确定性保留一次 OpenAlex 查询，再允许模型在总计四步内补充本地、arXiv 或 Semantic Scholar；明确指定来源时按该来源检索。普通论文问答仍只在本地证据不足或用户明确要求联网时调用外部工具。
 - `mcp_server_configs` 保存管理员启停、健康与熔断状态，`mcp_tool_snapshots` 保存经过校验的工具清单。API Key 只从服务端环境注入，数据库和管理页面均不返回 Key。
 
 ## 证据化产物

@@ -61,8 +61,9 @@ class _FakeMcpGateway:
 
     async def call(self, name: str, arguments: dict):
         self.calls.append((name, arguments))
+        source = "OpenAlex" if name.endswith("search_openalex") else "Semantic Scholar"
         return {
-            "source": "Semantic Scholar",
+            "source": source,
             "available": True,
             "cached": False,
             "results": [
@@ -238,8 +239,16 @@ def test_function_harness_exposes_mcp_only_when_web_enabled() -> None:
                 web_enabled=True,
             ),
         )
-        assert result.calls[0]["source"] == "Semantic Scholar"
+        assert result.automatic_source_fallback_used is True
+        assert [item["source"] for item in result.calls] == [
+            "OpenAlex",
+            "Semantic Scholar",
+        ]
         assert gateway.calls == [
+            (
+                "mcp__academic__search_openalex",
+                {"query": "查找相关论文", "limit": 8},
+            ),
             (
                 "mcp__academic__search_semantic_scholar",
                 {"query": "drug target affinity", "limit": 3},

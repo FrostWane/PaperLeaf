@@ -173,7 +173,9 @@ docker compose run --rm api python -m paperleaf_api.evaluation_harness_live \
 
 2026-08-09 Harness 可靠性回归：后端收集 330 项，324 项通过、6 项因可选外部基础设施跳过；Ruff 全部通过。确定性 evaluator 冻结 100 例，指代 67/67、澄清 89/89、Skill 61/61、记忆 10/10、工具 10/10、授权 10/10、审批 2/2，最终输入超限为 0；证据级别明确标记为 `deterministic_no_external_model`。前端 Vitest 112/112，Playwright 52 项通过、8 项按视口设计跳过，Storybook、TypeScript、ESLint（0 error，保留 2 个既有 TanStack Table 编译器提示）和生产构建通过。隔离 PostgreSQL 完成全新升级到 `20260809_0017`、`0017 → 0016 → 0017` 回滚再升级；Compose 的 API、Worker、Web 和学术 MCP 镜像构建及健康检查通过。
 
-同日真实本地复测使用 DeepSeek、Ollama、PostgreSQL、pgvector、Redis 与真实 PDF.js 文本层：鼠标拖选 37 字后，Run `8a237abb-196c-436d-b97d-7c448bf58a83` 以 `trace_original` 完成，引用 3 条且均为物理页 1，最终模型输入 5366/21307 Token；`get_page_text` 的精确 ID 与唯一可信标题解析都成功。此前 5 次向量故障注入均完成关键词降级。OpenAlex 严格联网门禁仍因本机未配置 `OPENALEX_API_KEY` 未完成，不能计入 99/100 真实模型结构性结论；已有 5 个 arXiv 工具场景通过，5 个 OpenAlex 场景按失败保留。这里记录的是单机当前配置的证据，不外推为全部 Provider 的语义准确率。
+同日真实本地复测使用 DeepSeek、Ollama、PostgreSQL、pgvector、Redis 与真实 PDF.js 文本层：鼠标拖选 37 字后，Run `8a237abb-196c-436d-b97d-7c448bf58a83` 以 `trace_original` 完成，引用 3 条且均为物理页 1，最终模型输入 5366/21307 Token；`get_page_text` 的精确 ID 与唯一可信标题解析都成功。此前 5 次向量故障注入均完成关键词降级。
+
+2026-08-10 已补齐 OpenAlex 严格联网闭环：用户未指定数据源时，Run `d0ce2efa-35df-48e8-923a-7c3854357de6` 自动选择 `find_related_papers@2` 并持久化一次成功的 OpenAlex Tool Call；最终在 25.274 秒内输出 5/5 篇带年份、出版物、DOI 和来源的候选，当前集合重复为 0，非法 Chunk 引用为 0，最终输入 2883/21307 Token。该 OpenAlex 调用命中 Redis 缓存，12 ms 不能作为外部网络延迟基线；完整报告见 `docs/reports/2026-08-10-openalex-auto-discovery.md`。这里记录的是单机当前配置的证据，不外推为全部 Provider 的语义准确率。
 
 当前 Vitest 覆盖登录表单校验、登录/改密/上传、持久会话 CRUD、202 幂等提交、会话切换竞态、Agent 断线补发与暂停恢复、安全 Markdown、单篇与集合范围绑定、管理员模型状态、文献修改/重试/删除、总结与结构图映射、层级集合、PDF 缩放与布局恢复、翻译确认/取消/失败/partial 终态。Storybook 提供上传弹窗、论文工作台、文献组织工作台和组织管理弹层供人工检查。
 

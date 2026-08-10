@@ -50,6 +50,7 @@ class LiveScenario:
     web_enabled: bool = False
     require_citations: bool = True
     require_native_tools: bool = False
+    expected_tools: tuple[str, ...] = ()
     group: str | None = None
 
 
@@ -243,8 +244,9 @@ class LiveHarness:
         return {key: value for key, value in samples.items() if value}
 
     async def create_session(self, scenario: LiveScenario) -> str:
+        unique_suffix = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
         payload: dict[str, Any] = {
-            "title": scenario.title,
+            "title": f"{scenario.title} · {unique_suffix} · {secrets.token_hex(2)}",
             "type": scenario.session_type,
         }
         if scenario.paper_id:
@@ -411,6 +413,14 @@ class LiveHarness:
             call.get("status") == "succeeded" for call in result.tool_calls
         ):
             result.failures.append("external_tool_call_not_succeeded")
+        succeeded_tools = {
+            str(call.get("tool", ""))
+            for call in result.tool_calls
+            if call.get("status") == "succeeded"
+        }
+        for expected_tool in scenario.expected_tools:
+            if expected_tool not in succeeded_tools:
+                result.failures.append(f"expected_tool_missing:{expected_tool}")
         if scenario.require_native_tools and not result.tool_mode_active:
             result.failures.append("usable_external_output_missing")
         if result.tool_mode_active and not result.tool_calls:
@@ -553,6 +563,22 @@ def build_scenarios(
         index += 1
 
     for offset in range(10):
+        source_mode = offset % 3
+        if source_mode == 0:
+            question = (
+                "请只调用 OpenAlex 学术检索查找与集合论文相关的近期公开论文，"
+                "不要使用本地文献库或 arXiv，并标明元数据来源。"
+            )
+            expected_tools = ("mcp__academic__search_openalex",)
+        elif source_mode == 1:
+            question = "请联网查找与当前集合研究主题相关的 arXiv 论文，并说明为什么相关。"
+            expected_tools = ("search_arxiv",)
+        else:
+            question = (
+                "请根据当前集合的研究主题联网推荐 5 篇尚未导入的相关论文，"
+                "列出题目、年份、出版物和 DOI，并说明推荐理由。"
+            )
+            expected_tools = ("mcp__academic__search_openalex",)
         groups.append(
             [
                 LiveScenario(
@@ -561,16 +587,12 @@ def build_scenarios(
                     title=f"[实测][工具] {index:03d}",
                     session_type="collection",
                     collection_id=collection_id,
-                    question=(
-                        "请只调用 OpenAlex 学术检索查找与集合论文相关的近期公开论文，"
-                        "不要使用本地文献库或 arXiv，并标明元数据来源。"
-                        if offset % 2 == 0
-                        else "请联网查找与当前集合研究主题相关的 arXiv 论文，并说明为什么相关。"
-                    ),
+                    question=question,
                     expected_skills=("find_related_papers",),
                     web_enabled=True,
                     require_citations=False,
                     require_native_tools=True,
+                    expected_tools=expected_tools,
                 )
             ]
         )

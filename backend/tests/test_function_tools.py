@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 
 from paperleaf_api.agent.function_tools import (
@@ -549,6 +550,173 @@ def test_explicit_openalex_request_uses_scoped_titles_when_model_omits_tool_call
         ]
         assert all(item["status"] == "succeeded" for item in result.calls)
         assert len(repository.agent_tool_calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_unspecified_online_discovery_reserves_openalex_and_caps_repeated_searches() -> None:
+    class FakeMcpGateway:
+        def __init__(self) -> None:
+            self.arguments: list[dict] = []
+
+        async def call(self, name: str, arguments: dict) -> dict:
+            assert name == "mcp__academic__search_openalex"
+            self.arguments.append(arguments)
+            return {
+                "source": "OpenAlex",
+                "available": True,
+                "cached": False,
+                "results": [
+                    {
+                        "external_id": f"W-related-{index}",
+                        "title": f"Related drug-target affinity paper {index}",
+                        "year": 2025 - index,
+                        "abstract": "完整摘要 " * 500,
+                    }
+                    for index in range(8)
+                ],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        gateway = FakeMcpGateway()
+        planner = SequencePlanner(
+            PlannerDecision(
+                (
+                    ToolCallRequest("local-1", "search_library", {"query": "DTA"}),
+                    ToolCallRequest("local-2", "search_library", {"query": "affinity"}),
+                    ToolCallRequest(
+                        "openalex-again",
+                        "mcp__academic__search_openalex",
+                        {"query": "another query", "limit": 5},
+                    ),
+                )
+            ),
+            PlannerDecision(),
+        )
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=planner,
+            mcp_gateway=gateway,
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=(
+                "AR-RAG: Autoregressive Retrieval Augmentation for Image Generation",
+                "AttentionDTA",
+                "DeepDTA: deep drug-target binding affinity prediction",
+                "SyntheticDTA",
+            ),
+        )
+
+        result = await harness.run(
+            "请根据当前集合的主题联网推荐相关论文。", context
+        )
+
+        assert result.automatic_source_fallback_used is True
+        assert result.native_function_calling_attempted is True
+        assert result.usable_external_context is True
+        assert result.tool_mode_active is True
+        assert [item["tool"] for item in result.calls] == [
+            "mcp__academic__search_openalex",
+            "search_library",
+        ]
+        assert gateway.arguments == [
+            {
+                "query": "DeepDTA: deep drug-target binding affinity prediction",
+                "limit": 8,
+            }
+        ]
+        assert result.steps == 2
+        assert len(repository.agent_tool_calls) == 2
+        openalex_context = json.loads(result.context_entries[1]["content"])
+        assert len(openalex_context["items"]) == 8
+        assert openalex_context["items"][-1]["title"].endswith("7")
+        assert openalex_context["existing_scope_titles"] == [
+            "AR-RAG: Autoregressive Retrieval Augmentation for Image Generation",
+            "AttentionDTA",
+            "DeepDTA: deep drug-target binding affinity prediction",
+            "SyntheticDTA",
+        ]
+        assert len(result.context_entries[1]["content"]) <= 3000
+        assert all(
+            len(item["abstract_preview"]) <= 120
+            for item in openalex_context["items"]
+        )
+
+    asyncio.run(scenario())
+
+
+def test_automatic_openalex_provider_error_is_a_failed_tool_not_usable_output() -> None:
+    class UnavailableMcpGateway:
+        async def call(self, _name: str, _arguments: dict) -> dict:
+            return {
+                "source": "OpenAlex",
+                "available": False,
+                "error_code": "OPENALEX_RATE_LIMITED",
+                "results": [],
+            }
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=SequencePlanner(PlannerDecision()),
+            mcp_gateway=UnavailableMcpGateway(),
+        )
+        context = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("DeepDTA",),
+        )
+
+        result = await harness.run("请联网推荐相关论文", context)
+
+        assert result.calls[0] == {
+            "tool": "mcp__academic__search_openalex",
+            "status": "failed",
+            "error_code": "OPENALEX_RATE_LIMITED",
+        }
+        assert result.usable_external_context is False
+        assert result.tool_mode_active is False
+        record = next(iter(repository.agent_tool_calls.values()))
+        assert record.status == "failed"
+        assert record.error_code == "OPENALEX_RATE_LIMITED"
+
+    asyncio.run(scenario())
+
+
+def test_automatic_openalex_respects_explicit_source_and_web_setting() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        harness = FunctionToolHarness(
+            repository,
+            FakeRetriever(),
+            UnusedRouter(),
+            planner=SequencePlanner(),
+            mcp_gateway=object(),
+        )
+        online = replace(
+            await _context(repository, "find_related_papers", web=True),
+            scope_paper_titles=("DeepDTA",),
+        )
+        schemas = harness.schemas_for(online.skill, web_enabled=True)
+
+        assert harness._automatic_openalex_calls(
+            "请只搜索 arXiv 相关论文", online, schemas
+        ) == ()
+        assert harness._automatic_openalex_calls(
+            "请联网搜索，但不要使用 OpenAlex", online, schemas
+        ) == ()
+        assert harness._automatic_openalex_calls(
+            "请使用 Semantic Scholar 搜索", online, schemas
+        ) == ()
+        assert harness._automatic_openalex_calls(
+            "请联网推荐相关论文", replace(online, web_enabled=False), schemas
+        ) == ()
 
     asyncio.run(scenario())
 

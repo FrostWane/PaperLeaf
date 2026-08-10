@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, Union
+from urllib.parse import quote, urlparse
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -92,6 +93,207 @@ def _normalize_answer_citations(
         return f"[chunk:{resolved}]" if resolved else match.group(0)
 
     return re.sub(r"\[chunk:([^\]]+)\]", replace, answer)
+
+
+def _normalized_title(value: str) -> str:
+    return "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", value.casefold()))
+
+
+def _external_metadata_from_contexts(
+    contexts: list[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """从已清洗 Tool Result 中提取书目候选和用于检索的论文标题。"""
+
+    candidates: list[dict[str, Any]] = []
+    search_queries: set[str] = set()
+    seen: set[str] = set()
+
+    def parse(value: Any, *, tool: str = "") -> None:
+        if isinstance(value, str):
+            try:
+                parse(json.loads(value), tool=tool)
+            except (json.JSONDecodeError, TypeError):
+                return
+            return
+        if isinstance(value, list):
+            for item in value:
+                parse(item, tool=tool)
+            return
+        if not isinstance(value, dict):
+            return
+        current_tool = str(value.get("tool") or tool)
+        if value.get("kind") == "call":
+            content = value.get("content")
+            try:
+                arguments = json.loads(str(content))
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+            query = str(arguments.get("query") or "").strip()
+            if query:
+                search_queries.add(_normalized_title(query))
+            return
+        if value.get("kind") == "result" and "content" in value:
+            parse(value.get("content"), tool=current_tool)
+            return
+        raw_items = value.get("items")
+        if not isinstance(raw_items, list):
+            return
+        for title in value.get("existing_scope_titles", []):
+            normalized = _normalized_title(str(title))
+            if normalized:
+                search_queries.add(normalized)
+        source = str(value.get("source") or "").strip()
+        if not source:
+            if "openalex" in current_tool:
+                source = "OpenAlex"
+            elif "semantic_scholar" in current_tool:
+                source = "Semantic Scholar"
+            elif "arxiv" in current_tool:
+                source = "arXiv"
+        if source not in {"OpenAlex", "Semantic Scholar", "arXiv"}:
+            return
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title") or raw.get("paper_title") or "").strip()
+            if not title:
+                continue
+            doi = str(raw.get("doi") or "").strip()
+            key = doi.casefold() or _normalized_title(title)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            published = str(raw.get("published") or "")
+            year = raw.get("year") or (published[:4] if len(published) >= 4 else None)
+            candidates.append(
+                {
+                    "title": title,
+                    "year": year,
+                    "publication": raw.get("publication") or raw.get("journal_ref"),
+                    "doi": doi,
+                    "url": raw.get("url") or raw.get("pdf_url"),
+                    "source": source,
+                }
+            )
+
+    for context in contexts:
+        parse(context)
+    return candidates, search_queries
+
+
+def _external_recommendation_reason(title: str, source: str) -> str:
+    lowered = title.casefold()
+    if any(term in lowered for term in ("review", "survey", "tools")):
+        focus = "可用于补充该方向的方法谱系与研究背景"
+    elif "affinity" in lowered:
+        focus = "直接聚焦结合亲和力预测，适合与当前 DTA 方法横向比较"
+    elif any(term in lowered for term in ("interaction", "dti", "drug-target")):
+        focus = "聚焦药物—靶点相互作用建模，可扩展当前集合的任务视角"
+    elif "ligand" in lowered:
+        focus = "覆盖蛋白—配体建模，可补充序列式 DTA 方法之外的研究路线"
+    else:
+        focus = "与本轮学术检索主题相关，适合作为后续扩展阅读候选"
+    return f"{source} 将其列入本轮相关结果；{focus}。"
+
+
+def _escape_markdown_table(value: Any) -> str:
+    escaped = " ".join(str(value).split())[:300]
+    for original, replacement in (
+        ("\\", "\\\\"),
+        ("|", "\\|"),
+        ("*", "\\*"),
+        ("_", "\\_"),
+        ("[", "\\["),
+        ("]", "\\]"),
+        ("<", "&lt;"),
+        (">", "&gt;"),
+    ):
+        escaped = escaped.replace(original, replacement)
+    return escaped
+
+
+def _external_link(doi_value: Any, url_value: Any) -> str:
+    doi = str(doi_value or "").strip().removeprefix("https://doi.org/")
+    if re.fullmatch(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", doi, re.IGNORECASE):
+        href = f"https://doi.org/{quote(doi, safe='/:._-;')}"
+        return f"[{_escape_markdown_table(doi)}]({href})"
+    url = str(url_value or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return f"[查看元数据]({url})"
+    return "未提供"
+
+
+def _matches_existing_title(candidate: str, existing_titles: set[str]) -> bool:
+    normalized = _normalized_title(candidate)
+    for existing in existing_titles:
+        if normalized == existing:
+            return True
+        # 本地元数据可能只有稳定模型名（DeepDTA、AttentionDTA），外部服务则返回
+        # “模型名: 完整副标题”。至少 6 字符的前缀才视为同一篇，避免 RAG 等短词误杀。
+        if min(len(normalized), len(existing)) >= 6 and (
+            normalized.startswith(existing) or existing.startswith(normalized)
+        ):
+            return True
+    return False
+
+
+def _ensure_external_recommendation_shape(
+    answer: str,
+    query: str,
+    contexts: list[str],
+    evidence: list[Evidence],
+) -> str:
+    """模型漏项时用已验证外部元数据生成确定性、完整的推荐清单。"""
+
+    count_match = re.search(r"(?:推荐|列出|查找|寻找)?\s*(\d{1,2})\s*篇", query)
+    if not count_match:
+        return answer
+    requested = min(10, max(1, int(count_match.group(1))))
+    candidates, search_queries = _external_metadata_from_contexts(contexts)
+    existing_titles = {
+        _normalized_title(item.paper_title) for item in evidence if item.paper_title.strip()
+    }
+    existing_titles.update(search_queries)
+    filtered = [
+        item
+        for item in candidates
+        if not _matches_existing_title(str(item["title"]), existing_titles)
+    ]
+    if len(filtered) < requested:
+        return answer
+    selected = filtered[:requested]
+    lines = [
+        "### 联网推荐",
+        "",
+        "| # | 论文 | 年份 | 出版物 | DOI / 链接 | 来源 |",
+        "|---:|---|---:|---|---|---|",
+    ]
+    for index, item in enumerate(selected, start=1):
+        title = _escape_markdown_table(item["title"])
+        publication = _escape_markdown_table(item.get("publication") or "未提供")
+        year_value = str(item.get("year") or "")
+        year = year_value if re.fullmatch(r"\d{4}", year_value) else "未提供"
+        link = _external_link(item.get("doi"), item.get("url"))
+        lines.append(
+            f"| {index} | **{title}** | {year} | "
+            f"{publication} | {link} | {item['source']} |"
+        )
+    lines.extend(["", "### 推荐理由", ""])
+    for index, item in enumerate(selected, start=1):
+        title = _escape_markdown_table(item["title"])
+        lines.append(
+            f"{index}. **{title}**："
+            f"{_external_recommendation_reason(title, str(item['source']))}"
+        )
+    lines.extend(
+        [
+            "",
+            "> 以上为外部学术数据源的公开元数据，尚未导入并核验 PDF 全文；"
+            "DOI 或出版物缺失时明确标为“未提供”。",
+        ]
+    )
+    return "\n".join(lines)
 
 
 async def no_op_evidence_support_grader(
@@ -242,6 +444,18 @@ def build_configured_answerer(
                 history.append(("human" if role == "user" else "assistant", content[:4000]))
         history = history[-8:]
 
+        # “推荐 N 篇”且外部工具已返回足量候选时，先由 Harness 做去重和书目格式化。
+        # LLM 已用于理解问题、选择 Skill 和规划工具；这里不再让生成波动破坏数量、
+        # DOI、来源和“不得推荐库内论文”等确定性契约。
+        external_answer = _ensure_external_recommendation_shape(
+            "",
+            query,
+            external_tool_contexts,
+            active_evidence,
+        )
+        if external_answer:
+            return external_answer, []
+
         async def invoke(provider: Any, *, compact: bool = False) -> Any:
             model = ChatOpenAI(
                 model=provider.chat_model,
@@ -275,7 +489,9 @@ def build_configured_answerer(
                     "出版物、DOI/链接及其与查询的相关性，不得声称‘没有返回结果’或再次要求"
                     "用户提供已经存在于 Tool Result 中的信息。每项明确标注元数据来源；可以"
                     "依据摘要简述相关性，但必须说明尚未导入和核验 PDF 全文，且不要使用"
-                    "`[chunk:...]` 引用。",
+                    "`[chunk:...]` 引用。如果用户要求推荐文献库中尚不存在的论文，应将"
+                    "Tool Call 中用于检索的当前论文标题视为去重线索，排除标题相同或明显"
+                    "重复的结果，只返回用户要求的数量。",
                 ),
             ]
             if cached_context:
@@ -389,6 +605,12 @@ def build_configured_answerer(
             )
         answer_text = _normalize_answer_citations(
             str(response), active_evidence, citation_aliases
+        )
+        answer_text = _ensure_external_recommendation_shape(
+            answer_text,
+            query,
+            external_tool_contexts,
+            active_evidence,
         )
         citation_ids = list(dict.fromkeys(re.findall(r"\[chunk:([^\]]+)\]", answer_text)))
         citations = [
@@ -577,6 +799,22 @@ class AgentRuntime:
             "answer": answer,
             "citations": citations,
             "retrieved_evidence": answer_evidence,
+            "external_metadata_answer": bool(
+                state.get("selected_skill") == "find_related_papers"
+                and str(answer).startswith("### 联网推荐")
+                and _ensure_external_recommendation_shape(
+                    "",
+                    state["query"],
+                    [
+                        json.dumps(
+                            state.get("tool_context_entries", []),
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                    ],
+                    answer_evidence,
+                )
+            ),
             "context_usage": context_usage,
             "stage_timings_ms": timings,
         }

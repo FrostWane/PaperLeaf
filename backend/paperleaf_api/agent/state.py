@@ -54,6 +54,7 @@ class AgentState(TypedDict, total=False):
     answer_repair_attempted: bool
     answer_repair_succeeded: bool
     context_usage: dict[str, Any]
+    external_metadata_answer: bool
     answer: str
     error: str | None
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]

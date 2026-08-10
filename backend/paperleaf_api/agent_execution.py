@@ -610,6 +610,7 @@ async def execute_agent_run(
         "pre_arxiv_candidates": [],
         "native_function_calling_attempted": False,
         "tool_output_used": False,
+        "automatic_source_fallback_used": False,
     }
     updated_run = await repository.update_agent_skill(
         run.id,
@@ -791,6 +792,9 @@ async def execute_agent_run(
             harness_trace["explicit_source_fallback_used"] = (
                 tool_loop_result.explicit_source_fallback_used
             )
+            harness_trace["automatic_source_fallback_used"] = (
+                tool_loop_result.automatic_source_fallback_used
+            )
             harness_trace["tool_output_used"] = tool_mode_active
             harness_trace["tool_activation_reason"] = tool_loop_result.activation_reason
             # 即使工具结果不可用于激活 Tool Mode，也保留成对且已清洗的状态结果，
@@ -812,7 +816,12 @@ async def execute_agent_run(
                     }
                     for item in tool_loop_result.calls
                 ]
-                harness_trace["function_calling"] = "native"
+                harness_trace["function_calling"] = (
+                    "native"
+                    if tool_loop_result.native_function_calling_attempted
+                    and tool_loop_result.provider_supported
+                    else "deterministic_harness"
+                )
             else:
                 harness_trace["function_calling"] = (
                     "native_unused"
@@ -1060,6 +1069,7 @@ async def execute_agent_run(
     paragraphs = _answer_paragraphs(answer)
     validated: list[tuple[str, str, list[CitationClaim]]] = []
     dropped_paragraphs = 0
+    external_metadata_answer = bool(result.get("external_metadata_answer"))
     await repository.append_agent_run_event(
         run_id,
         "node_started",
@@ -1086,25 +1096,28 @@ async def execute_agent_run(
         claim_token=claim_token,
     )
     citation_validation_started_at = time.perf_counter()
-    for paragraph in paragraphs:
-        valid, classification, paragraph_citations = _validate_publishable_paragraph(
-            paragraph,
-            citations,
-            evidence,
-            quality,
-            answer_quality_policy,
-        )
-        if not valid:
-            # 只丢弃未带合法来源的自然段，不再让一个漏引的开场白覆盖整篇已经
-            # 通过引用 ID/论文/页码校验的回答。至少需要保留一个有引用的事实段落。
-            dropped_paragraphs += 1
-            continue
-        validated.append((paragraph, classification, paragraph_citations))
+    if external_metadata_answer:
+        validated.append((answer, "external_metadata", []))
+    else:
+        for paragraph in paragraphs:
+            valid, classification, paragraph_citations = _validate_publishable_paragraph(
+                paragraph,
+                citations,
+                evidence,
+                quality,
+                answer_quality_policy,
+            )
+            if not valid:
+                # 只丢弃未带合法来源的自然段，不再让一个漏引的开场白覆盖整篇已经
+                # 通过引用 ID/论文/页码校验的回答。至少需要保留一个有引用的事实段落。
+                dropped_paragraphs += 1
+                continue
+            validated.append((paragraph, classification, paragraph_citations))
     stage_timings["citation_validation"] = round(
         (time.perf_counter() - citation_validation_started_at) * 1000
     )
     has_cited_answer = any(classification == "cited_answer" for _, classification, _ in validated)
-    if evidence and not has_cited_answer:
+    if evidence and not has_cited_answer and not external_metadata_answer:
         await _finish_observed_run(
             repository,
             run_id,
@@ -1165,7 +1178,11 @@ async def execute_agent_run(
     if result_status != "completed":
         result_status = "failed"
     published_answer = "\n\n".join(item[0] for item in validated)
-    outcome = "cited_answer" if all_citation_dicts else "abstained"
+    outcome = (
+        "external_metadata"
+        if external_metadata_answer
+        else ("cited_answer" if all_citation_dicts else "abstained")
+    )
     finished_run = await _finish_observed_run(
         repository,
         run_id,

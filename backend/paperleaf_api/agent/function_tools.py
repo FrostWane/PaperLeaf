@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -32,6 +33,128 @@ from .tools import (
 
 _SCALAR_TYPES = (int, float, bool)
 _TIMEOUT_ERRORS = (TimeoutError, asyncio.TimeoutError)
+_ACADEMIC_SOURCE_NAMES = ("openalex", "semantic scholar", "semanticscholar", "arxiv")
+_AUTO_DISCOVERY_SINGLE_USE_TOOLS = frozenset(
+    {
+        "search_library",
+        "search_arxiv",
+        "find_related_papers",
+        "mcp__academic__search_openalex",
+        "mcp__academic__search_semantic_scholar",
+    }
+)
+_TITLE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "as",
+        "based",
+        "for",
+        "from",
+        "in",
+        "of",
+        "on",
+        "the",
+        "to",
+        "using",
+        "via",
+        "with",
+    }
+)
+
+
+def _title_terms(value: str) -> set[str]:
+    # 科研标题常把任务缩写粘在模型名后（DeepDTA、AttentionDTA）。先拆驼峰，
+    # 否则同一集合中多个 DTA 标题会被误判为毫无共同主题。
+    normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
+    return {
+        token.casefold()
+        for token in re.findall(
+            r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,}", normalized
+        )
+        if token.casefold() not in _TITLE_STOPWORDS
+    }
+
+
+def _representative_scope_query(titles: tuple[str, ...], fallback: str) -> str:
+    """选择与同作用域其他标题重合最多的标题，作为确定性外部检索词。"""
+
+    candidates = [" ".join(title.split())[:500] for title in titles if title.strip()]
+    if not candidates:
+        return " ".join(fallback.split())[:500]
+    terms = [_title_terms(title) for title in candidates]
+    scores = [
+        sum(len(current & other) for other_index, other in enumerate(terms) if index != other_index)
+        for index, current in enumerate(terms)
+    ]
+    best = max(
+        range(len(candidates)),
+        key=lambda index: (scores[index], len(terms[index]), -index),
+    )
+    return candidates[best]
+
+
+def _tool_context_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    """为模型上下文保留全部候选的书目信息，同时限制摘要和片段体积。"""
+
+    compact = {key: value for key, value in preview.items() if key != "items"}
+    items = preview.get("items")
+    if not isinstance(items, list):
+        return compact
+    bounded: list[dict[str, Any]] = []
+    allowed = (
+        "external_id",
+        "arxiv_id",
+        "paper_title",
+        "title",
+        "authors",
+        "year",
+        "publication",
+        "doi",
+        "url",
+        "open_access_pdf_url",
+        "citation_count",
+        "physical_page",
+        "source",
+    )
+    for raw in items[:10]:
+        if not isinstance(raw, dict):
+            continue
+        item = {key: raw.get(key) for key in allowed if raw.get(key) is not None}
+        for key in ("paper_title", "title"):
+            if key in item:
+                item[key] = " ".join(str(item[key]).split())[:220]
+        if "publication" in item:
+            item["publication"] = " ".join(str(item["publication"]).split())[:120]
+        if "doi" in item:
+            item["doi"] = str(item["doi"])[:100]
+        if isinstance(item.get("authors"), list):
+            item["authors"] = [str(author)[:80] for author in item["authors"][:4]]
+        abstract = " ".join(str(raw.get("abstract") or "").split())
+        excerpt = " ".join(str(raw.get("excerpt") or "").split())
+        if abstract:
+            item["abstract_preview"] = abstract[:120]
+        if excerpt:
+            item["excerpt_preview"] = excerpt[:160]
+        bounded.append(item)
+    compact["items"] = bounded
+    compact["item_count"] = len(items)
+
+    # ``ContextEnvelope`` 会对超过约 800 Token 的旧 Tool Result 做字符截断。
+    # 这里先结构化减肥，确保不会把排在后面的论文标题截掉，也不产生半截 JSON。
+    if len(json.dumps(compact, ensure_ascii=False, default=str)) > 3000:
+        for item in bounded:
+            item.pop("abstract_preview", None)
+            item.pop("excerpt_preview", None)
+    if len(json.dumps(compact, ensure_ascii=False, default=str)) > 3000:
+        for item in bounded:
+            item.pop("url", None)
+            item.pop("open_access_pdf_url", None)
+            authors = item.get("authors")
+            if isinstance(authors, list):
+                item["authors"] = authors[:2]
+    return compact
 
 
 class SearchToolInput(BaseModel):
@@ -447,6 +570,7 @@ class ToolLoopResult:
     provider_supported: bool = True
     native_function_calling_attempted: bool = False
     explicit_source_fallback_used: bool = False
+    automatic_source_fallback_used: bool = False
     usable_evidence: bool = False
     usable_external_context: bool = False
     activation_reason: str | None = None
@@ -593,21 +717,28 @@ class FunctionToolHarness:
         seen_evidence: set[str] = set()
         invalid_repairs: set[str] = set()
         max_steps = min(4, context.skill.manifest.max_tool_steps)
+        automatic_calls = list(self._automatic_openalex_calls(query, context, schemas))
+        automatic_policy_active = bool(automatic_calls)
+        tool_call_counts: dict[str, int] = {}
 
         while result.steps < max_steps:
-            result.native_function_calling_attempted = True
-            try:
-                decision = await self.planner.decide(
-                    query=query,
-                    skill=context.skill,
-                    schemas=schemas,
-                    tool_results=planner_results,
-                )
-            except ModelRuntimeError as error:
-                # 后续规划失败不能抹掉此前已经持久化的 Tool Call/Result。保留审计，
-                # 再由 tool_mode_active 决定使用已有结果还是回退旧检索。
-                result.fallback_reason = f"tool_planner_{error.error_code.casefold()}"
-                break
+            if automatic_calls:
+                decision = PlannerDecision((automatic_calls.pop(0),), provider_supported=True)
+                result.automatic_source_fallback_used = True
+            else:
+                result.native_function_calling_attempted = True
+                try:
+                    decision = await self.planner.decide(
+                        query=query,
+                        skill=context.skill,
+                        schemas=schemas,
+                        tool_results=planner_results,
+                    )
+                except ModelRuntimeError as error:
+                    # 后续规划失败不能抹掉此前已经持久化的 Tool Call/Result。保留审计，
+                    # 再由 tool_mode_active 决定使用已有结果还是回退旧检索。
+                    result.fallback_reason = f"tool_planner_{error.error_code.casefold()}"
+                    break
             if not decision.provider_supported:
                 result.provider_supported = False
                 result.fallback_reason = "provider_without_native_function_calling"
@@ -626,12 +757,19 @@ class FunctionToolHarness:
                 result.explicit_source_fallback_used = True
             batch: list[ToolCallRequest] = []
             for call in decision.calls[:3]:
+                if (
+                    automatic_policy_active
+                    and call.name in _AUTO_DISCOVERY_SINGLE_USE_TOOLS
+                    and tool_call_counts.get(call.name, 0) >= 1
+                ):
+                    continue
                 serialized = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
                 signature = f"{call.name}:{serialized}"
                 if signature in seen_signatures:
                     continue
                 seen_signatures.add(signature)
                 batch.append(call)
+                tool_call_counts[call.name] = tool_call_counts.get(call.name, 0) + 1
                 if result.steps + len(batch) >= max_steps:
                     break
             if not batch:
@@ -699,13 +837,25 @@ class FunctionToolHarness:
                     planner_results.append(failure_preview)
                     continue
                 result.calls.append(outcome.preview)
+                context_preview = _tool_context_preview(outcome.preview)
+                if (
+                    context.skill.manifest.name == "find_related_papers"
+                    and context.scope_paper_titles
+                    and (
+                        call.name.startswith("mcp__academic__")
+                        or call.name in {"search_arxiv", "find_related_papers"}
+                    )
+                ):
+                    context_preview["existing_scope_titles"] = list(
+                        context.scope_paper_titles[:8]
+                    )
                 result.context_entries.append(
                     {
                         "kind": "result",
                         "tool_call_id": call.call_id,
                         "tool": call.name,
                         "content": json.dumps(
-                            outcome.preview, ensure_ascii=False, default=str
+                            context_preview, ensure_ascii=False, default=str
                         ),
                     }
                 )
@@ -722,7 +872,7 @@ class FunctionToolHarness:
                     and outcome.preview.get("available", True) is not False
                 ):
                     result.usable_external_context = True
-                planner_results.append(outcome.preview)
+                planner_results.append(context_preview)
                 if outcome.pending_action:
                     result.pending_action = outcome.pending_action
                     result.activation_reason = "pending_action"
@@ -736,6 +886,42 @@ class FunctionToolHarness:
         elif not result.calls and not result.fallback_reason:
             result.fallback_reason = "model_selected_no_tool"
         return result
+
+    @staticmethod
+    def _automatic_openalex_calls(
+        query: str,
+        context: ToolExecutionContext,
+        schemas: list[dict[str, Any]],
+    ) -> tuple[ToolCallRequest, ...]:
+        """未指定数据源的联网论文发现，确定性保留一次 OpenAlex 检索。"""
+
+        if (
+            not context.web_enabled
+            or context.skill.manifest.name != "find_related_papers"
+        ):
+            return ()
+        normalized = query.casefold()
+        # 用户明确指定或排除任何数据源时尊重其选择，交给显式来源策略处理。
+        if any(source in normalized for source in _ACADEMIC_SOURCE_NAMES):
+            return ()
+        available = {
+            str(item.get("function", {}).get("name", ""))
+            for item in schemas
+            if isinstance(item, dict)
+        }
+        tool = "mcp__academic__search_openalex"
+        if tool not in available:
+            return ()
+        search_query = _representative_scope_query(context.scope_paper_titles, query)
+        if not search_query:
+            return ()
+        return (
+            ToolCallRequest(
+                call_id="automatic-openalex-1",
+                name=tool,
+                arguments={"query": search_query, "limit": 8},
+            ),
+        )
 
     @staticmethod
     def _explicit_source_calls(
@@ -1109,6 +1295,11 @@ class FunctionToolHarness:
             if self.mcp_gateway is None:
                 raise RuntimeError("MCP_GATEWAY_UNAVAILABLE")
             result = await self.mcp_gateway.call(name, parsed.model_dump(mode="json"))
+            if result.get("available") is False:
+                raise McpGatewayError(
+                    str(result.get("error_code") or "MCP_PROVIDER_UNAVAILABLE"),
+                    "外部学术数据源暂不可用",
+                )
             return _ExecutedTool(
                 {
                     "source": result.get("source", "学术搜索"),

@@ -18,7 +18,16 @@ def test_default_skill_registry_is_versioned_and_loads_only_catalog_on_start() -
         "summarize_paper",
         "build_research_map",
     }
-    assert all(item["version"] == 1 for item in catalog)
+    versions = {item["name"]: item["version"] for item in catalog}
+    assert versions == {
+        "paper_qa": 1,
+        "trace_original": 1,
+        "compare_papers": 1,
+        "find_related_papers": 2,
+        "verify_claim": 1,
+        "summarize_paper": 1,
+        "build_research_map": 1,
+    }
     assert all("allowed_tools" not in item and "instructions" not in item for item in catalog)
     selected = registry.get("trace_original")
     assert selected.manifest.allowed_tools == ["search_current_paper", "get_page_text"]
@@ -57,7 +66,8 @@ def test_skill_routing_is_deterministic(
     registry = SkillRegistry.default()
     first = registry.route(query, intent=intent, scope=scope, web_enabled=web_enabled)
     second = registry.route(query, intent=intent, scope=scope, web_enabled=web_enabled)
-    assert first.identity == second.identity == f"{expected}@1"
+    expected_version = 2 if expected == "find_related_papers" else 1
+    assert first.identity == second.identity == f"{expected}@{expected_version}"
 
 
 def test_invalid_manifest_and_unknown_tool_fail_closed(tmp_path: Path) -> None:

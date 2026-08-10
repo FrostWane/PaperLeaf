@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -322,6 +323,101 @@ def test_configured_answerer_treats_openalex_results_as_metadata_not_pdf_evidenc
     assert "尚未导入和核验 PDF 全文" in prompt
     assert "本地 PDF 证据质量" in prompt
     assert '"title":"DeepDTA"' in prompt
+
+
+def test_external_recommendation_falls_back_to_complete_metadata_list(
+    monkeypatch,
+) -> None:
+    class FakeChatOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def astream(self, _prompt_messages):
+            yield SimpleNamespace(content="1. Candidate 1\n2. Candidate 2")
+
+    class SuccessRouter:
+        def has_provider(self, purpose):
+            return purpose == "answer"
+
+        async def execute(self, _purpose, operation, *, timeout_seconds=None):
+            provider = SimpleNamespace(
+                chat_model="deepseek-chat",
+                api_key="test-key",
+                base_url="http://model.invalid/v1",
+            )
+            return await operation(provider)
+
+    fake_langchain = ModuleType("langchain_openai")
+    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
+    config = SimpleNamespace(
+        evidence_min_confidence=0.35,
+        evidence_min_vector_score=0.35,
+        evidence_min_lexical_coverage=0.18,
+        agent_answer_timeout_seconds=90.0,
+        agent_answer_retry_timeout_seconds=60.0,
+    )
+    items = [
+        {
+            "title": "DeepDTA: deep drug-target binding affinity prediction",
+            "year": 2018,
+            "publication": "Bioinformatics",
+            "doi": "10.0000/existing",
+        },
+        *[
+                {
+                    "title": f"Candidate {index}",
+                    "year": 2020 + index,
+                    "publication": f"Venue {index}",
+                    "doi": None if index == 1 else f"10.0000/candidate.{index}",
+                    "url": "javascript:alert(1)" if index == 1 else None,
+            }
+            for index in range(1, 8)
+        ],
+    ]
+    evidence = [
+        Evidence(
+            "deepdta-chunk",
+            "deepdta",
+            "DeepDTA: deep drug-target binding affinity prediction",
+            1,
+            "本地论文证据",
+        )
+    ]
+
+    text, citations = asyncio.run(
+        build_configured_answerer(config, SuccessRouter())(
+            "请联网推荐 5 篇尚未在库中的相关论文",
+            evidence,
+            [
+                {
+                    "role": "tool_context",
+                    "content": json.dumps(
+                        {
+                            "source": "OpenAlex",
+                            "existing_scope_titles": [
+                                "DeepDTA",
+                                "Candidate 3",
+                            ],
+                            "items": items,
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+        )
+    )
+
+    assert "Candidate 1" in text
+    assert "Candidate 3" not in text
+    assert "Candidate 6" in text
+    assert "Candidate 7" not in text
+    assert "DeepDTA:" not in text
+    assert "10.0000/candidate.5" in text
+    assert "javascript:" not in text
+    assert text.count("| OpenAlex |") == 5
+    assert "[chunk:" not in text
+    assert citations == []
 
 
 def test_graph_abstains_when_no_evidence_exists() -> None:
