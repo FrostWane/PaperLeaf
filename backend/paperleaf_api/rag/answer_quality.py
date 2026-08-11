@@ -14,7 +14,7 @@ _LEADING_CITATIONS_RE = re.compile(
     re.DOTALL,
 )
 _SENTENCE_RE = re.compile(r"[^。！？!?；;\n]+(?:[。！？!?；;\n]+|$)")
-_LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)、])\s*")
+_LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*•]\s+|\d+[.)、]\s*)")
 _CONTROLLED_NOTICE_RE = re.compile(r"^\s*>?\s*证据说明[：:]", re.IGNORECASE)
 _STRUCTURAL_FRAGMENT_RE = re.compile(
     r"^\s*(?:#{1,6}\s+[^\n]+|[-*_]{3,}|```[^\n]*|~~~[^\n]*|"
@@ -24,6 +24,9 @@ _BOLD_HEADING_RE = re.compile(r"^\s*\*\*[^*\n]{1,40}\*\*\s*[：:]?\s*$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|[^\n]+\|\s*$")
 _TABLE_SEPARATOR_RE = re.compile(
     r"^\s*\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?\s*$"
+)
+_MALFORMED_LEADING_EMPHASIS_RE = re.compile(
+    r"^\*{1,2}([^*\n]{1,40})\*{1,2}(?=[：:])"
 )
 
 
@@ -103,6 +106,8 @@ def retain_cited_answer_claims(
     answer: str,
     citations: list[CitationClaim],
     evidence: list[Evidence],
+    *,
+    allowed_claim_indices: set[int] | None = None,
 ) -> tuple[str, list[CitationClaim]]:
     """只保留带有本轮合法证据的事实主张，生成可再次核验的紧凑稿。
 
@@ -117,6 +122,8 @@ def retain_cited_answer_claims(
     }
     retained: list[tuple[AnswerClaim, tuple[str, ...]]] = []
     for claim in extract_answer_claims(answer):
+        if allowed_claim_indices is not None and claim.index not in allowed_claim_indices:
+            continue
         source_ids = tuple(
             chunk_id for chunk_id in claim.citation_ids if chunk_id in citations_by_id
         )
@@ -131,7 +138,8 @@ def retain_cited_answer_claims(
     for claim, source_ids in retained:
         used_ids.extend(source_ids)
         markers = "".join(f"[chunk:{chunk_id}]" for chunk_id in source_ids)
-        lines.append(f"- {claim.text.rstrip('。！？!?；; ')} {markers}。")
+        visible_text = _MALFORMED_LEADING_EMPHASIS_RE.sub(r"\1", claim.text)
+        lines.append(f"- {visible_text.rstrip('。！？!?；; ')} {markers}。")
 
     unique_ids = list(dict.fromkeys(used_ids))
     return "\n".join(lines), [citations_by_id[chunk_id] for chunk_id in unique_ids]
@@ -209,10 +217,22 @@ def assess_answer_support(
         )
 
     semantic_confidence = semantic_support.confidence or 0.0
+    supported_indices = tuple(
+        sorted(
+            {
+                index
+                for index in semantic_support.supported_claim_indices
+                if 1 <= index <= claim_count
+            }
+        )
+    )
     supported = bool(
         semantic_support.supported
         and semantic_confidence >= policy.min_model_support_confidence
     )
+    if supported and not supported_indices:
+        supported_indices = tuple(range(1, claim_count + 1))
+    supported_claim_count = claim_count if supported else len(supported_indices)
     return AnswerSupport(
         supported,
         round(semantic_confidence, 6),
@@ -221,7 +241,8 @@ def assess_answer_support(
         else "support_confidence_too_low",
         claim_count,
         cited_claims,
-        claim_count if supported else 0,
+        supported_claim_count,
         citation_coverage,
-        1.0 if supported else 0.0,
+        supported_claim_count / claim_count,
+        supported_indices,
     )

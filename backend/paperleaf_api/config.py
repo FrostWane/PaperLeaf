@@ -134,7 +134,7 @@ class Settings:
         os.getenv("PAPERLEAF_AGENT_ANSWER_RETRY_TIMEOUT_SECONDS", "60")
     )
     agent_evidence_support_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_AGENT_EVIDENCE_SUPPORT_TIMEOUT_SECONDS", "45")
+        os.getenv("PAPERLEAF_AGENT_EVIDENCE_SUPPORT_TIMEOUT_SECONDS", "20")
     )
     translation_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS", "90")

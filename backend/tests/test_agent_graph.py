@@ -896,7 +896,7 @@ def test_external_metadata_answer_bypasses_pdf_citation_and_semantic_gates(
     assert "语义支持核验" not in result["answer"]
 
 
-def test_secondary_support_grader_blocks_semantically_unsupported_answer() -> None:
+def test_secondary_support_grader_returns_citation_validated_low_confidence_answer() -> None:
     result = _run(
         build_agent_graph(
             EvidenceRetriever(),
@@ -906,10 +906,16 @@ def test_secondary_support_grader_blocks_semantically_unsupported_answer() -> No
     )
 
     assert result["status"] == "completed"
-    assert result["citations"] == []
-    assert "没有通过逐条语义支持核验" in result["answer"]
+    assert result["citations"][0].chunk_id == "c1"
+    assert "论文结论" in result["answer"]
+    assert "不返回结论" not in result["answer"]
+    assert "建议结合页码来源回读" in result["answer"]
     assert result["evidence_quality"]["retrieval_grade"] == "sufficient"
-    assert result["evidence_quality"]["answer_support_grade"] == "unsupported"
+    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
+    assert (
+        result["evidence_quality"]["reason_code"]
+        == "citation_validated_low_confidence"
+    )
 
 
 def test_graph_prunes_uncited_claims_before_publishing_natural_paragraph() -> None:
@@ -920,6 +926,67 @@ def test_graph_prunes_uncited_claims_before_publishing_natural_paragraph() -> No
     assert "模型通过检索证据回答" in result["answer"]
     assert "另一个关键事实没有引用" not in result["answer"]
     assert result["evidence_quality"]["answer_support_grade"] == "supported"
+
+
+def test_graph_returns_supported_claim_subset_instead_of_suppressing_entire_answer() -> None:
+    async def two_claim_answerer(query, evidence, messages=None):
+        source = evidence[0]
+        citation = CitationClaim(source.chunk_id, source.paper_id, source.physical_page)
+        return (
+            f"论文结论是模型通过检索证据回答 [chunk:{source.chunk_id}]。"
+            f"前瞻性实验已经完成 [chunk:{source.chunk_id}]。",
+            [citation],
+        )
+
+    async def partial_support_grader(query, answer, evidence):
+        return AnswerSupport(
+            False,
+            0.95,
+            "answer_not_supported",
+            supported_claim_indices=(1,),
+        )
+
+    result = _run(
+        build_agent_graph(
+            EvidenceRetriever(),
+            two_claim_answerer,
+            support_grader=partial_support_grader,
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert "模型通过检索证据回答" in result["answer"]
+    assert "前瞻性实验" not in result["answer"]
+    assert "不返回结论" not in result["answer"]
+    assert "已隐藏 1 条" in result["answer"]
+    assert result["evidence_quality"]["reason_code"] == "partial_answer_supported"
+    assert result["evidence_quality"]["answer_support_grade"] == "supported"
+
+
+def test_graph_returns_citation_validated_answer_when_semantic_grader_is_unavailable() -> None:
+    async def cross_language_answerer(query, evidence, messages=None):
+        source = evidence[0]
+        return f"论文采用零探针先验完成预测 [chunk:{source.chunk_id}]。", [
+            CitationClaim(source.chunk_id, source.paper_id, source.physical_page)
+        ]
+
+    async def unavailable_grader(query, answer, evidence):
+        return AnswerSupport(False, 0.0, "grader_unavailable")
+
+    result = _run(
+        build_agent_graph(
+            EvidenceRetriever(),
+            cross_language_answerer,
+            support_grader=unavailable_grader,
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert "论文采用零探针先验" in result["answer"]
+    assert "不返回结论" not in result["answer"]
+    assert "语义复核服务暂时不可用" in result["answer"]
+    assert result["evidence_quality"]["reason_code"] == "citation_validated_provisional"
+    assert result["evidence_quality"]["answer_support_grade"] == "not_checked"
 
 
 def test_graph_interrupts_before_arxiv_import() -> None:

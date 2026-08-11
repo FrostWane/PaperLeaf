@@ -214,7 +214,7 @@ describe("ChatWorkspace", () => {
     await waitFor(() => expect(streamHandlers).toBeDefined());
     const answer = "这是逐字输出的已核验回答。";
     act(() => streamHandlers?.onAnswerUpdate?.(answer));
-    const live = await screen.findByLabelText("PaperLeaf 正在逐字生成已核验回答");
+    const live = await screen.findByLabelText("PaperLeaf 正在呈现回答");
     expect(screen.queryByText(answer)).not.toBeInTheDocument();
     await waitFor(() => {
       const partial = live.querySelector(".safe-markdown")?.textContent ?? "";

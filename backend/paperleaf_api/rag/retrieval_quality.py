@@ -101,6 +101,7 @@ class AnswerSupport:
     supported_claim_count: int = 0
     citation_coverage: float = 0.0
     support_coverage: float = 0.0
+    supported_claim_indices: tuple[int, ...] = ()
 
 
 def _clamp(value: float) -> float:

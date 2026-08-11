@@ -118,6 +118,72 @@ def test_retain_cited_claims_drops_uncited_text_without_inventing_sources() -> N
     assert "没有引用" not in answer
 
 
+def test_retain_cited_claims_can_keep_only_semantically_supported_indices() -> None:
+    evidence = [
+        _evidence("c1", "论文解决冷启动预测问题。"),
+        _evidence("c2", "方法使用支持集校准预测。"),
+    ]
+    citations = [
+        CitationClaim("c1", "paper-1", 3),
+        CitationClaim("c2", "paper-1", 3),
+    ]
+
+    answer, retained = retain_cited_answer_claims(
+        "论文解决冷启动预测问题 [chunk:c1]。"
+        "前瞻性实验已经完成 [chunk:c2]。",
+        citations,
+        evidence,
+        allowed_claim_indices={1},
+    )
+
+    assert "论文解决冷启动预测问题" in answer
+    assert "前瞻性实验" not in answer
+    assert [item.chunk_id for item in retained] == ["c1"]
+
+
+def test_retain_cited_claims_cleans_malformed_leading_markdown_emphasis() -> None:
+    evidence = [_evidence("c1", "论文解决冷启动预测问题。")]
+    citations = [CitationClaim("c1", "paper-1", 3)]
+
+    answer, _ = retain_cited_answer_claims(
+        "*研究问题**：论文解决冷启动预测问题 [chunk:c1]。",
+        citations,
+        evidence,
+    )
+
+    assert "研究问题：论文解决冷启动预测问题" in answer
+    assert "研究问题*" not in answer
+
+
+def test_semantic_support_preserves_supported_claim_indices_for_partial_answer() -> None:
+    evidence = [
+        _evidence("c1", "论文解决冷启动预测问题。"),
+        _evidence("c2", "方法使用支持集校准预测。"),
+    ]
+    citations = [
+        CitationClaim("c1", "paper-1", 3),
+        CitationClaim("c2", "paper-1", 3),
+    ]
+
+    support = assess_answer_support(
+        "论文解决冷启动预测问题 [chunk:c1]。"
+        "前瞻性实验已经完成 [chunk:c2]。",
+        citations,
+        evidence,
+        AnswerSupport(
+            False,
+            0.95,
+            "answer_not_supported",
+            supported_claim_indices=(1,),
+        ),
+    )
+
+    assert support.supported is False
+    assert support.supported_claim_indices == (1,)
+    assert support.supported_claim_count == 1
+    assert support.support_coverage == 0.5
+
+
 def test_configured_grader_failure_is_fail_closed() -> None:
     evidence = [_evidence("c1", "模型使用检索证据回答问题。")]
 
