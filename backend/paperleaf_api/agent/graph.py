@@ -29,6 +29,12 @@ from ..rag.retrieval_quality import (
 )
 from .context_budget import enforce_context_envelope
 from .discovery_policy import requested_paper_count
+from .provider_policy import (
+    claim_provider_attempt,
+    provider_can_run,
+    provider_policy_snapshot,
+)
+from .recommendation_quality import entity_keys
 from .state import AgentState
 from .tools import (
     ArxivSearch,
@@ -185,6 +191,8 @@ def _external_metadata_from_contexts(
                     "source": source,
                     "abstract": raw.get("abstract") or raw.get("abstract_preview"),
                     "relevance_score": raw.get("relevance_score"),
+                    "lexical_score": raw.get("lexical_score"),
+                    "semantic_score": raw.get("semantic_score"),
                     "matched_scope_title": raw.get("matched_scope_title"),
                 }
             )
@@ -520,6 +528,40 @@ def _ensure_external_recommendation_shape(
         ]
     )
     return "\n".join(lines)
+
+
+def _displayed_external_recommendations(
+    query: str,
+    contexts: list[str],
+    evidence: list[Evidence],
+    existing_scope_titles: list[str] | tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    """返回 Graph 实际选中的结构化实体，不再从 Markdown 反查标题。"""
+
+    requested = _requested_recommendation_count(query)
+    if requested is None:
+        return []
+    candidates, search_queries = _external_metadata_from_contexts(contexts)
+    year_range = _requested_year_range(query)
+    existing_titles = {
+        _normalized_title(item.paper_title) for item in evidence if item.paper_title.strip()
+    }
+    existing_titles.update(
+        _normalized_title(title) for title in existing_scope_titles if title.strip()
+    )
+    existing_titles.update(search_queries)
+    return [
+        dict(item)
+        for item in candidates
+        if not _matches_existing_title(str(item["title"]), existing_titles)
+        and (
+            year_range is None
+            or (
+                str(item.get("year") or "").isdigit()
+                and year_range[0] <= int(item["year"]) <= year_range[1]
+            )
+        )
+    ][:requested]
 
 
 async def no_op_evidence_support_grader(
@@ -907,6 +949,15 @@ class AgentRuntime:
                 ),
                 "tool_steps": state.get("tool_steps", 0),
             }
+        policy = dict(state.get("provider_policy", {}) or {})
+        allowed, reason = claim_provider_attempt(policy, "library", tool_name="search_library")
+        if not allowed:
+            return {
+                "retrieved_evidence": self._merge_evidence(selection_evidence),
+                "provider_policy": provider_policy_snapshot(policy),
+                "provider_fallback_reason": reason,
+                "tool_steps": state.get("tool_steps", 0),
+            }
         started_at = time.perf_counter()
         evidence = await self.retriever(
             LibrarySearchInput(
@@ -928,6 +979,7 @@ class AgentRuntime:
         timings["retrieval"] = round((time.perf_counter() - started_at) * 1000)
         return {
             "retrieved_evidence": self._merge_evidence(selection_evidence, evidence),
+            "provider_policy": provider_policy_snapshot(policy),
             "tool_steps": state.get("tool_steps", 0) + 1,
             "stage_timings_ms": timings,
         }
@@ -1032,6 +1084,30 @@ class AgentRuntime:
         answer, citations = await result if inspect.isawaitable(result) else result
         timings = dict(state.get("stage_timings_ms", {}))
         timings["generation"] = round((time.perf_counter() - started_at) * 1000)
+        external_contexts = [
+            json.dumps(
+                state.get("tool_context_entries", []),
+                ensure_ascii=False,
+                default=str,
+            )
+        ]
+        displayed_recommendations = (
+            _displayed_external_recommendations(
+                state["query"],
+                external_contexts,
+                answer_evidence,
+                state.get("scope_paper_titles", []),
+            )
+            if state.get("selected_skill") == "find_related_papers"
+            else []
+        )
+        displayed_entities = list(
+            dict.fromkeys(
+                key
+                for candidate in displayed_recommendations
+                for key in entity_keys(candidate)
+            )
+        )
         return {
             "answer": answer,
             "citations": citations,
@@ -1042,17 +1118,13 @@ class AgentRuntime:
                 and _ensure_external_recommendation_shape(
                     "",
                     state["query"],
-                    [
-                        json.dumps(
-                            state.get("tool_context_entries", []),
-                            ensure_ascii=False,
-                            default=str,
-                        )
-                    ],
+                    external_contexts,
                     answer_evidence,
                     state.get("scope_paper_titles", []),
                 )
             ),
+            "displayed_recommendations": displayed_recommendations,
+            "displayed_recommendation_entities": displayed_entities,
             "context_usage": context_usage,
             "stage_timings_ms": timings,
         }
@@ -1123,9 +1195,19 @@ class AgentRuntime:
                 "arxiv_candidates": list(state.get("pre_arxiv_candidates", [])),
                 "tool_steps": state.get("tool_steps", 0),
             }
+        policy = dict(state.get("provider_policy", {}) or {})
+        allowed, reason = claim_provider_attempt(policy, "arxiv", tool_name="search_arxiv")
+        if not allowed:
+            return {
+                "arxiv_candidates": [],
+                "provider_policy": provider_policy_snapshot(policy),
+                "provider_fallback_reason": reason,
+                "tool_steps": state.get("tool_steps", 0),
+            }
         result = await self.arxiv_search(ArxivSearchInput(query=state["query"], limit=5))
         return {
             "arxiv_candidates": result.data,
+            "provider_policy": provider_policy_snapshot(policy),
             "tool_steps": state.get("tool_steps", 0) + 1,
         }
 
@@ -1242,6 +1324,7 @@ class AgentRuntime:
             not state.get("retrieved_evidence")
             and state.get("web_enabled")
             and not usable_external_context
+            and provider_can_run(state.get("provider_policy"), "arxiv")[0]
         ):
             try:
                 state.update(await self.search_arxiv(state))
@@ -1341,6 +1424,7 @@ def build_agent_graph(
                 not state.get("retrieved_evidence")
                 and state.get("web_enabled")
                 and not (state.get("tool_mode_active") and state.get("tool_context_entries"))
+                and provider_can_run(state.get("provider_policy"), "arxiv")[0]
             )
             else "generate"
         ),

@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from paperleaf_api.agent.context import TaskFrameDecision
 from paperleaf_api.agent.function_tools import (
     FunctionToolHarness,
     PlannerDecision,
@@ -85,6 +86,16 @@ class RejectingToolPlanner:
 class EmptyToolRetriever:
     async def __call__(self, _payload):
         return []
+
+
+class ModelTaskFrameHarness:
+    def __init__(self, decision: TaskFrameDecision) -> None:
+        self.decision = decision
+        self.calls: list[dict] = []
+
+    async def resolve_task_frame(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.decision
 
 
 async def _submitted_run(repository: MemoryRepository, user_id: str = "u1"):
@@ -443,6 +454,108 @@ def test_completed_discovery_task_is_inherited_by_recent_year_followup() -> None
         assert graph.initial is not None
         assert graph.initial["intent"] == "literature_discovery"
         assert "继续联网推荐 5 篇" in graph.initial["query"]
+
+    asyncio.run(scenario())
+
+
+def test_model_task_frame_is_primary_context_path_for_source_only_followup() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "模型任务上下文", "library", None, None
+        )
+        await repository.update_session_compaction(
+            session.id,
+            "u1",
+            compact_summary={},
+            compacted_through_message_id=None,
+            entity_state={
+                "active_task": {
+                    "name": "find_related_papers",
+                    "requested_count": 5,
+                    "year_from": 2026,
+                    "year_to": 2026,
+                    "exclude_library": True,
+                    "shown_entities": ["doi:10.1/seen"],
+                    "requested_sources": ["mcp__academic__search_openalex"],
+                }
+            },
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "改用 Semantic Scholar",
+            "task-frame-message-1",
+            "task-frame-hash-1",
+            {
+                "type": "library",
+                "paper_ids": ["p1"],
+                "web_enabled": True,
+                "harness": {
+                    "context_engine_enabled": True,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                },
+            },
+        )
+        assert submission is not None
+        claim_token = await repository.claim_agent_run_job(submission.run.id)
+        assert claim_token
+        harness = ModelTaskFrameHarness(
+            TaskFrameDecision(
+                operation="update",
+                task_name="find_related_papers",
+                updated_fields=("requested_sources", "denied_sources"),
+                values={
+                    "requested_sources": [
+                        "mcp__academic__search_semantic_scholar"
+                    ],
+                    "denied_sources": [
+                        "mcp__academic__search_openalex",
+                        "search_arxiv",
+                    ],
+                },
+                confidence=0.97,
+            )
+        )
+        graph = CapturingResultGraph()
+        config = replace(
+            settings,
+            context_engine_enabled=True,
+            skills_enabled=True,
+            function_tools_enabled=False,
+            memory_enabled=False,
+        )
+
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            claim_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            harness_config=config,
+            function_tool_harness=harness,  # type: ignore[arg-type]
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and graph.initial is not None
+        task = run.context_snapshot["resolved_references"]["active_task"]
+        assert harness.calls
+        assert run.context_snapshot["task_frame"] == {
+            "source": "model_function_call",
+            "confidence": 0.97,
+        }
+        assert task["requested_count"] == 5
+        assert task["year_from"] == 2026
+        assert task["exclude_library"] is True
+        assert task["shown_entities"] == ["doi:10.1/seen"]
+        assert task["requested_sources"] == [
+            "mcp__academic__search_semantic_scholar"
+        ]
+        assert graph.initial["provider_policy"]["denied"] == [
+            "arxiv",
+            "openalex",
+        ]
 
     asyncio.run(scenario())
 

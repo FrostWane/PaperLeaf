@@ -5,16 +5,19 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
-from paperleaf_api.agent.context import ContextResolution, resolve_context
+from paperleaf_api.agent.context import (
+    ContextResolution,
+    resolve_context,
+)
 from paperleaf_api.agent.function_tools import (
     FunctionToolHarness,
     PlannerDecision,
     ToolCallRequest,
     ToolExecutionContext,
 )
+from paperleaf_api.agent.graph import _displayed_external_recommendations
 from paperleaf_api.agent.skills import SkillRegistry
 from paperleaf_api.agent_execution import (
-    _displayed_recommendation_entities,
     _next_entity_state,
     _selection_scope_is_locked,
     execute_agent_run,
@@ -54,19 +57,42 @@ class FakeRetriever:
         ]
 
 
-def test_only_candidates_rendered_in_final_answer_enter_next_batch_exclusions() -> None:
-    candidates = [
-        ("Provider-only candidate", ("doi:10.1/provider", "title:provideronlycandidate")),
-        ("Actually displayed", ("doi:10.1/displayed", "title:actuallydisplayed")),
+def test_graph_returns_structured_candidates_without_parsing_markdown_titles() -> None:
+    contexts = [
+        json.dumps(
+            [
+                {
+                    "kind": "result",
+                    "tool": "mcp__academic__search_openalex",
+                    "content": json.dumps(
+                        {
+                            "source": "OpenAlex",
+                            "items": [
+                                {
+                                    "title": "Title with | markdown _ characters",
+                                    "doi": "10.1/displayed",
+                                    "year": 2026,
+                                    "relevance_score": 0.9,
+                                },
+                                {
+                                    "title": "Provider-only candidate",
+                                    "doi": "10.1/provider",
+                                    "year": 2026,
+                                    "relevance_score": 0.8,
+                                },
+                            ],
+                        }
+                    ),
+                }
+            ]
+        )
     ]
 
-    entities = _displayed_recommendation_entities(
-        "| 1 | **Actually displayed** | 2026 |",
-        candidates,
-        limit=5,
+    displayed = _displayed_external_recommendations(
+        "推荐 1 篇 2026 年论文", contexts, []
     )
 
-    assert entities == ["doi:10.1/displayed", "title:actuallydisplayed"]
+    assert [item["doi"] for item in displayed] == ["10.1/displayed"]
 
 
 class UnusedRouter:

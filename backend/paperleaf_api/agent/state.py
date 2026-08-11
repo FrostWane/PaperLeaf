@@ -22,6 +22,8 @@ class AgentState(TypedDict, total=False):
     scope_paper_titles: list[str]
     scope_paper_texts: list[str]
     excluded_recommendation_entities: list[str]
+    provider_policy: dict[str, Any]
+    provider_fallback_reason: str | None
     web_enabled: bool
     client_context: dict[str, Any]
     resolved_query: str
@@ -58,6 +60,8 @@ class AgentState(TypedDict, total=False):
     answer_repair_succeeded: bool
     context_usage: dict[str, Any]
     external_metadata_answer: bool
+    displayed_recommendations: list[dict[str, Any]]
+    displayed_recommendation_entities: list[str]
     answer: str
     error: str | None
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]

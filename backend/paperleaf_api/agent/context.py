@@ -5,11 +5,30 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .discovery_policy import academic_source_policy, requested_paper_count
 
 CONTEXT_VERSION = 1
+_TASK_FRAME_FIELDS = frozenset(
+    {
+        "requested_count",
+        "year_from",
+        "year_to",
+        "exclude_library",
+        "requested_sources",
+        "denied_sources",
+        "semantic_query",
+        "reset_shown_entities",
+    }
+)
+_TASK_FRAME_SOURCES = frozenset(
+    {
+        "mcp__academic__search_openalex",
+        "mcp__academic__search_semantic_scholar",
+        "search_arxiv",
+    }
+)
 
 _REFERENCE_MARKERS = (
     "原文",
@@ -72,6 +91,8 @@ class ContextResolution:
     confidence: float
     sources: tuple[str, ...]
     clarification_question: str | None = None
+    task_frame_source: str | None = None
+    task_frame_confidence: float | None = None
 
     @property
     def needs_clarification(self) -> bool:
@@ -87,7 +108,111 @@ class ContextResolution:
             "reference_confidence": self.confidence,
             "sources": list(self.sources),
             "needs_clarification": self.needs_clarification,
+            "task_frame": {
+                "source": self.task_frame_source,
+                "confidence": self.task_frame_confidence,
+            },
         }
+
+
+@dataclass(frozen=True)
+class TaskFrameDecision:
+    """模型只提交结构化任务变化；Harness 决定如何合并和执行。"""
+
+    operation: Literal["continue", "update", "replace", "clear", "unrelated"]
+    task_name: str | None
+    updated_fields: tuple[str, ...]
+    values: dict[str, Any]
+    confidence: float
+    source: str = "model_function_call"
+
+
+def validate_task_frame_decision(value: dict[str, Any], *, source: str) -> TaskFrameDecision:
+    operation = str(value.get("operation") or "unrelated")
+    if operation not in {"continue", "update", "replace", "clear", "unrelated"}:
+        raise ValueError("未知任务上下文操作")
+    task_name = str(value.get("task_name") or "").strip() or None
+    if task_name not in {None, "find_related_papers"}:
+        raise ValueError("未知任务类型")
+    updated_fields = tuple(
+        dict.fromkeys(
+            str(item)
+            for item in value.get("updated_fields", [])
+            if str(item) in _TASK_FRAME_FIELDS
+        )
+    )
+    confidence = min(1.0, max(0.0, float(value.get("confidence", 0.0) or 0.0)))
+    return TaskFrameDecision(
+        operation=operation,  # type: ignore[arg-type]
+        task_name=task_name,
+        updated_fields=updated_fields,
+        values={key: value.get(key) for key in updated_fields},
+        confidence=confidence,
+        source=source,
+    )
+
+
+def merge_task_frame(
+    existing: dict[str, Any] | None,
+    decision: TaskFrameDecision,
+) -> dict[str, Any] | None:
+    """确定性合并模型槽位；模型不能直接覆盖权限、历史候选或未知字段。"""
+
+    if decision.operation in {"clear", "unrelated"}:
+        return None
+    task = (
+        {}
+        if decision.operation == "replace"
+        else dict(existing or {})
+    )
+    task["name"] = decision.task_name or str(task.get("name") or "find_related_papers")
+    if task["name"] != "find_related_papers":
+        return None
+    task.setdefault("web_required", True)
+    task.setdefault("requested_count", 5)
+    task.setdefault("exclude_library", False)
+    task.setdefault("source_policy", "academic_external")
+    for field in decision.updated_fields:
+        raw = decision.values.get(field)
+        if field == "requested_count":
+            task[field] = min(10, max(1, int(raw)))
+        elif field in {"year_from", "year_to"}:
+            year = int(raw)
+            if year < 1900 or year > 2100:
+                raise ValueError("年份超出允许范围")
+            task[field] = year
+        elif field == "exclude_library":
+            task[field] = bool(raw)
+        elif field in {"requested_sources", "denied_sources"}:
+            task[field] = sorted(
+                {
+                    str(item)
+                    for item in (raw if isinstance(raw, list) else [])
+                    if str(item) in _TASK_FRAME_SOURCES
+                }
+            )
+        elif field == "semantic_query":
+            normalized = " ".join(str(raw or "").split())[:1000]
+            if normalized:
+                task[field] = normalized
+        elif field == "reset_shown_entities" and bool(raw):
+            task["shown_entities"] = []
+    if task.get("year_from") and task.get("year_to"):
+        low = int(task["year_from"])
+        high = int(task["year_to"])
+        task["year_from"], task["year_to"] = min(low, high), max(low, high)
+    requested = set(task.get("requested_sources", []) or [])
+    denied = set(task.get("denied_sources", []) or [])
+    requested.difference_update(denied)
+    if requested:
+        # “只用某来源”由模型落为 requested_sources；共享 ProviderPolicy 会把其余
+        # 来源视为禁用。这里保留显式 denied 方便审计，不自行猜测用户措辞。
+        task["requested_sources"] = sorted(requested)
+    task["denied_sources"] = sorted(denied)
+    task["inherited"] = True
+    task["context_source"] = decision.source
+    task["context_confidence"] = decision.confidence
+    return task
 
 
 def _previous_user_text(messages: list[dict[str, Any]], query: str) -> str:
@@ -133,6 +258,7 @@ def _discovery_task_context(
     query: str,
     previous: str,
     cached: dict[str, Any],
+    task_frame_decision: TaskFrameDecision | None = None,
 ) -> dict[str, Any] | None:
     """识别“再新一点 / 2026 年的呢”这类对上一轮论文发现任务的续问。
 
@@ -140,14 +266,19 @@ def _discovery_task_context(
     隐藏推理。没有明确的上一轮发现任务时绝不猜测。
     """
 
-    if not _DISCOVERY_CONTINUATION_RE.search(query):
-        return None
-    if _TASK_SWITCH_RE.search(query) and not _DISCOVERY_REQUEST_RE.search(query):
-        return None
     entity_state = cached.get("entity_state")
     if not isinstance(entity_state, dict):
         entity_state = {}
     stored = entity_state.get("active_task")
+    if task_frame_decision is not None:
+        return merge_task_frame(
+            stored if isinstance(stored, dict) else None,
+            task_frame_decision,
+        )
+    if not _DISCOVERY_CONTINUATION_RE.search(query):
+        return None
+    if _TASK_SWITCH_RE.search(query) and not _DISCOVERY_REQUEST_RE.search(query):
+        return None
     if isinstance(stored, dict) and stored.get("name") == "find_related_papers":
         task = dict(stored)
     elif previous and _DISCOVERY_REQUEST_RE.search(previous):
@@ -178,7 +309,51 @@ def _discovery_task_context(
         task["requested_sources"] = sorted(current_sources.requested_tools)
         task["denied_sources"] = sorted(current_sources.denied_tools)
     task["inherited"] = True
+    task["context_source"] = "deterministic_fallback"
+    task["context_confidence"] = 0.72
     return task
+
+
+def fallback_task_frame_decision(
+    query: str,
+    existing: dict[str, Any] | None,
+) -> TaskFrameDecision | None:
+    """模型不可用时的窄化降级，不承担生产主路径的语义理解。"""
+
+    if not isinstance(existing, dict) or existing.get("name") != "find_related_papers":
+        return None
+    if _TASK_SWITCH_RE.search(query) and not _DISCOVERY_REQUEST_RE.search(query):
+        return TaskFrameDecision("unrelated", None, (), {}, 0.75, "deterministic_fallback")
+    fields: list[str] = []
+    values: dict[str, Any] = {}
+    count = requested_paper_count(query)
+    if count is not None:
+        fields.append("requested_count")
+        values["requested_count"] = count
+    years = [int(value) for value in _YEAR_RE.findall(query)]
+    if years:
+        fields.extend(("year_from", "year_to"))
+        values.update(year_from=min(years), year_to=max(years))
+    sources = academic_source_policy(query)
+    if sources.has_explicit_source:
+        fields.extend(("requested_sources", "denied_sources"))
+        values["requested_sources"] = sorted(sources.requested_tools)
+        values["denied_sources"] = sorted(sources.denied_tools)
+    continuation = bool(
+        fields
+        or _DISCOVERY_CONTINUATION_RE.search(query)
+        or re.search(r"改用|改成|只用|仅用|继续|same|instead", query, re.IGNORECASE)
+    )
+    if not continuation:
+        return TaskFrameDecision("unrelated", None, (), {}, 0.55, "deterministic_fallback")
+    return TaskFrameDecision(
+        "update" if fields else "continue",
+        "find_related_papers",
+        tuple(dict.fromkeys(fields)),
+        values,
+        0.72,
+        "deterministic_fallback",
+    )
 
 
 def _summary_anchor(payload: dict[str, Any], query: str) -> tuple[str, Any] | None:
@@ -234,6 +409,7 @@ def resolve_context(
     messages: list[dict[str, Any]],
     *,
     session_type: str,
+    task_frame_decision: TaskFrameDecision | None = None,
 ) -> ContextResolution:
     """解析“原文/它/这里”等常见追问；低置信度时返回澄清而不猜测。"""
 
@@ -244,7 +420,12 @@ def resolve_context(
     followup_entity = _FOLLOWUP_ENTITY.match(original)
     previous = _previous_user_text(messages, original)
     discovery_anchor = _previous_discovery_text(messages, original)
-    active_task = _discovery_task_context(original, discovery_anchor, cached)
+    active_task = _discovery_task_context(
+        original,
+        discovery_anchor,
+        cached,
+        task_frame_decision,
+    )
     has_cached_anchor = bool(cached.get("conversation_summary") or cached.get("entity_state"))
     if (
         not selected
@@ -253,7 +434,17 @@ def resolve_context(
         and not followup_entity
         and not any(marker in original for marker in _REFERENCE_MARKERS)
     ):
-        return ContextResolution(original, original, {}, 1.0, ("explicit_query",))
+        return ContextResolution(
+            original,
+            original,
+            {},
+            1.0,
+            ("explicit_query",),
+            task_frame_source=(task_frame_decision.source if task_frame_decision else None),
+            task_frame_confidence=(
+                task_frame_decision.confidence if task_frame_decision else None
+            ),
+        )
 
     paper_title = str(context.get("paper_title", "")).strip()
     paper_id = str(context.get("paper_id", "")).strip()
@@ -325,6 +516,10 @@ def resolve_context(
             tuple(sources),
             "我还不能确定你指的是哪篇论文、哪一页或哪个方法。请补充论文名称，"
             "或在阅读器中选中对应原文后再提问。",
+            task_frame_source=(task_frame_decision.source if task_frame_decision else None),
+            task_frame_confidence=(
+                task_frame_decision.confidence if task_frame_decision else None
+            ),
         )
 
     qualifiers: list[str] = []
@@ -385,4 +580,12 @@ def resolve_context(
         if paper_id or collection_id
         else 0.72
     )
-    return ContextResolution(original, resolved, references, confidence, tuple(sources))
+    return ContextResolution(
+        original,
+        resolved,
+        references,
+        confidence,
+        tuple(sources),
+        task_frame_source=(task_frame_decision.source if task_frame_decision else None),
+        task_frame_confidence=(task_frame_decision.confidence if task_frame_decision else None),
+    )

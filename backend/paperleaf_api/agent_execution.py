@@ -9,7 +9,11 @@ import time
 import uuid
 from typing import Any
 
-from .agent.context import ContextResolution, resolve_context
+from .agent.context import (
+    ContextResolution,
+    fallback_task_frame_decision,
+    resolve_context,
+)
 from .agent.context_budget import allocate_context_budget, compact_conversation
 from .agent.discovery_policy import academic_source_policy, requested_paper_count
 from .agent.function_tools import (
@@ -22,7 +26,8 @@ from .agent.memory import (
     memory_hash,
     select_relevant_memories,
 )
-from .agent.recommendation_quality import entity_keys, normalize_title
+from .agent.provider_policy import build_provider_run_policy, provider_policy_snapshot
+from .agent.recommendation_quality import entity_keys
 from .agent.skills import SkillRegistry, route_verified_selection
 from .agent.tools import LibrarySearchInput
 from .config import settings
@@ -238,30 +243,6 @@ def _next_entity_state(
         state.pop("active_task", None)
     state["last_user_query"] = original_query[:500]
     return state
-
-
-def _displayed_recommendation_entities(
-    answer: str,
-    candidates: list[tuple[str, tuple[str, ...]]],
-    *,
-    limit: int,
-) -> list[str]:
-    """只持久化最终回答实际展示的候选，避免 Provider 内部候选污染“换一批”。"""
-
-    normalized_answer = normalize_title(answer)
-    displayed: list[str] = []
-    displayed_count = 0
-    for title, group in candidates:
-        normalized_title = normalize_title(title)
-        if not normalized_title or normalized_title not in normalized_answer:
-            continue
-        displayed_count += 1
-        for key in group:
-            if key not in displayed:
-                displayed.append(key)
-        if displayed_count >= max(1, limit):
-            break
-    return displayed
 
 
 def _validate_publishable_paragraph(
@@ -583,12 +564,37 @@ async def execute_agent_run(
         verified_client_context.setdefault("paper_id", snapshot["paper_id"])
     if scope == "collection" and snapshot.get("collection_id"):
         verified_client_context.setdefault("collection_id", snapshot["collection_id"])
+    task_frame_decision = None
+    existing_active_task = entity_state.get("active_task")
+    if (
+        harness_flags.get("context_engine_enabled")
+        and isinstance(existing_active_task, dict)
+        and existing_active_task.get("name") == "find_related_papers"
+    ):
+        if function_tool_harness is not None:
+            try:
+                task_frame_decision = await function_tool_harness.resolve_task_frame(
+                    query=query,
+                    existing_task=existing_active_task,
+                    recent_user_messages=[
+                        str(item.get("content", ""))[:1000]
+                        for item in history
+                        if str(item.get("role", "")) == "user"
+                    ],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                task_frame_decision = None
+        if task_frame_decision is None or task_frame_decision.confidence < 0.55:
+            task_frame_decision = fallback_task_frame_decision(query, existing_active_task)
     if harness_flags.get("context_engine_enabled"):
         resolution = resolve_context(
             query,
             verified_client_context,
             history,
             session_type=scope,
+            task_frame_decision=task_frame_decision,
         )
     else:
         resolution = ContextResolution(query, query, {}, 1.0, ("legacy_agent",))
@@ -698,6 +704,9 @@ async def execute_agent_run(
         "native_function_calling_attempted": False,
         "tool_output_used": False,
         "automatic_source_fallback_used": False,
+        "task_frame_source": resolution.task_frame_source,
+        "task_frame_confidence": resolution.task_frame_confidence,
+        "provider_policy": {},
     }
     updated_run = await repository.update_agent_skill(
         run.id,
@@ -722,6 +731,7 @@ async def execute_agent_run(
         "scope_paper_titles": [],
         "scope_paper_texts": [],
         "excluded_recommendation_entities": [],
+        "provider_policy": {},
         "web_enabled": bool(snapshot.get("web_enabled", False)),
         "client_context": dict(snapshot.get("client_context", {})),
         "resolved_query": resolution.resolved_query,
@@ -776,6 +786,28 @@ async def execute_agent_run(
         initial["excluded_recommendation_entities"] = sorted(
             {key for paper in scoped_papers for key in entity_keys(paper)}
         )
+    discovery_task = dict(
+        resolution.references.get("active_task")
+        if isinstance(resolution.references.get("active_task"), dict)
+        else {}
+    )
+    if selected_skill == "find_related_papers":
+        discovery_task.setdefault(
+            "requested_count", requested_paper_count(query, default=5) or 5
+        )
+        years = [
+            int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", query)
+        ]
+        if years:
+            discovery_task["year_from"] = min(years)
+            discovery_task["year_to"] = max(years)
+        source_policy = academic_source_policy(query)
+        if source_policy.has_explicit_source:
+            discovery_task["requested_sources"] = sorted(source_policy.requested_tools)
+            discovery_task["denied_sources"] = sorted(source_policy.denied_tools)
+    provider_policy = build_provider_run_policy(discovery_task)
+    initial["provider_policy"] = provider_policy
+    harness_trace["provider_policy"] = provider_policy_snapshot(provider_policy)
     if harness_flags.get("skills_enabled"):
         await repository.append_agent_run_event(
             run_id,
@@ -853,25 +885,6 @@ async def execute_agent_run(
         ):
             tool_started_at = time.perf_counter()
             scope_paper_titles = list(initial.get("scope_paper_titles", []))
-            discovery_task = dict(
-                resolution.references.get("active_task")
-                if isinstance(resolution.references.get("active_task"), dict)
-                else {}
-            )
-            if selected_skill == "find_related_papers":
-                discovery_task.setdefault(
-                    "requested_count", requested_paper_count(query, default=5) or 5
-                )
-                years = [
-                    int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", query)
-                ]
-                if years:
-                    discovery_task["year_from"] = min(years)
-                    discovery_task["year_to"] = max(years)
-                source_policy = academic_source_policy(query)
-                if source_policy.has_explicit_source:
-                    discovery_task["requested_sources"] = sorted(source_policy.requested_tools)
-                    discovery_task["denied_sources"] = sorted(source_policy.denied_tools)
             # get_page_text 的模型参数必须使用服务端论文 ID；同时保留可信标题，
             # 以便对模型偶尔返回标题而非 ID 的情况做单论文、无歧义的受控解析。
             # 这份元数据也服务于外部学术检索，因此不能只在 web_enabled 时构建。
@@ -907,6 +920,7 @@ async def execute_agent_run(
                             if str(value).strip()
                         ),
                         discovery_task=discovery_task,
+                        provider_policy=provider_policy,
                         verified_selection_page=(
                             int(selection_page) if selection_page is not None else None
                         ),
@@ -933,6 +947,10 @@ async def execute_agent_run(
             )
             harness_trace["tool_output_used"] = tool_mode_active
             harness_trace["tool_activation_reason"] = tool_loop_result.activation_reason
+            initial["provider_policy"] = dict(tool_loop_result.provider_policy or provider_policy)
+            harness_trace["provider_policy"] = provider_policy_snapshot(
+                tool_loop_result.provider_policy or provider_policy
+            )
             # 即使工具结果不可用于激活 Tool Mode，也保留成对且已清洗的状态结果，
             # 让回答能准确说明“OpenAlex 缺少 Key”等降级原因；旧检索仍照常执行。
             initial["tool_context_entries"] = list(tool_loop_result.context_entries)
@@ -1094,6 +1112,17 @@ async def execute_agent_run(
             return
     model_attempts = [item.as_dict() for item in attempts]
     stage_timings = dict(result.get("stage_timings_ms", {}))
+    if result.get("provider_policy"):
+        harness_trace["provider_policy"] = provider_policy_snapshot(
+            result.get("provider_policy")
+        )
+        await repository.update_agent_skill(
+            run.id,
+            claim_token,
+            selected_skill=selected_skill,
+            skill_version=skill_version,
+            harness_trace=harness_trace,
+        )
     final_context_usage = dict(result.get("context_usage", {}) or {})
     if final_context_usage:
         context_snapshot["usage"] = {
@@ -1362,21 +1391,16 @@ async def execute_agent_run(
             "evidence_quality": quality,
             "model_attempts": model_attempts,
             "dropped_paragraph_count": dropped_paragraphs,
+            "displayed_recommendations": list(
+                result.get("displayed_recommendations", []) or []
+            ),
         },
     )
-    exposed_entities_for_state: list[str] = []
-    if tool_loop_result is not None:
-        active_task = resolution.references.get("active_task")
-        requested_exposure_count = int(
-            active_task.get("requested_count")
-            if isinstance(active_task, dict) and active_task.get("requested_count")
-            else requested_paper_count(query, default=5) or 5
-        )
-        exposed_entities_for_state = _displayed_recommendation_entities(
-            published_answer,
-            tool_loop_result.exposed_recommendation_candidates,
-            limit=requested_exposure_count,
-        )
+    exposed_entities_for_state = [
+        str(value)
+        for value in result.get("displayed_recommendation_entities", []) or []
+        if str(value).strip()
+    ]
     if finished_run and result_status == "completed":
         try:
             await repository.update_session_compaction(

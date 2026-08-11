@@ -1,4 +1,8 @@
-from paperleaf_api.agent.context import resolve_context
+from paperleaf_api.agent.context import (
+    TaskFrameDecision,
+    merge_task_frame,
+    resolve_context,
+)
 
 
 def test_resolves_original_text_from_current_paper_and_recent_topic() -> None:
@@ -122,16 +126,14 @@ def test_recent_year_followup_inherits_external_discovery_constraints() -> None:
 
     assert result.needs_clarification is False
     task = result.references["active_task"]
-    assert task == {
-        "name": "find_related_papers",
-        "web_required": True,
-        "requested_count": 5,
-        "exclude_library": True,
-        "source_policy": "academic_external",
-        "year_from": 2026,
-        "year_to": 2026,
-        "inherited": True,
-    }
+    assert task["name"] == "find_related_papers"
+    assert task["web_required"] is True
+    assert task["requested_count"] == 5
+    assert task["exclude_library"] is True
+    assert task["source_policy"] == "academic_external"
+    assert task["year_from"] == task["year_to"] == 2026
+    assert task["inherited"] is True
+    assert task["context_source"] == "deterministic_fallback"
     assert "继续联网推荐 5 篇" in result.resolved_query
     assert "目标发表年份：2026" in result.resolved_query
 
@@ -183,3 +185,71 @@ def test_discovery_context_recovers_after_a_previous_failed_followup() -> None:
     assert result.references["active_task"]["name"] == "find_related_papers"
     assert result.references["active_task"]["requested_count"] == 5
     assert result.references["active_task"]["year_from"] == 2026
+
+
+def test_model_task_frame_updates_only_source_and_preserves_other_slots() -> None:
+    existing = {
+        "name": "find_related_papers",
+        "requested_count": 5,
+        "year_from": 2026,
+        "year_to": 2026,
+        "exclude_library": True,
+        "shown_entities": ["doi:10.1/already-shown"],
+        "requested_sources": ["mcp__academic__search_openalex"],
+    }
+    decision = TaskFrameDecision(
+        operation="update",
+        task_name="find_related_papers",
+        updated_fields=("requested_sources", "denied_sources"),
+        values={
+            "requested_sources": ["mcp__academic__search_semantic_scholar"],
+            "denied_sources": ["mcp__academic__search_openalex", "search_arxiv"],
+        },
+        confidence=0.96,
+    )
+
+    merged = merge_task_frame(existing, decision)
+
+    assert merged is not None
+    assert merged["requested_count"] == 5
+    assert merged["year_from"] == 2026
+    assert merged["exclude_library"] is True
+    assert merged["shown_entities"] == ["doi:10.1/already-shown"]
+    assert merged["requested_sources"] == [
+        "mcp__academic__search_semantic_scholar"
+    ]
+
+
+def test_model_task_frame_understands_count_only_followup_without_phrase_whitelist() -> None:
+    decision = TaskFrameDecision(
+        operation="update",
+        task_name="find_related_papers",
+        updated_fields=("requested_count",),
+        values={"requested_count": 3},
+        confidence=0.94,
+    )
+    result = resolve_context(
+        "改成三篇",
+        {"collection_id": "collection-1"},
+        [
+            {
+                "role": "context",
+                "content": (
+                    '{"entity_state":{"active_task":{"name":"find_related_papers",'
+                    '"requested_count":5,"year_from":2026,"year_to":2026,'
+                    '"exclude_library":true}}}'
+                ),
+            }
+        ],
+        session_type="collection",
+        task_frame_decision=decision,
+    )
+
+    task = result.references["active_task"]
+    assert task["requested_count"] == 3
+    assert task["year_from"] == 2026
+    assert task["exclude_library"] is True
+    assert result.snapshot({})["task_frame"] == {
+        "source": "model_function_call",
+        "confidence": 0.94,
+    }

@@ -24,7 +24,16 @@ from ..repository import (
     AgentToolCallRecord,
     Repository,
 )
+from .context import TaskFrameDecision, validate_task_frame_decision
 from .discovery_policy import academic_source_policy, requested_paper_count
+from .provider_policy import (
+    build_provider_run_policy,
+    claim_provider_attempt,
+    provider_can_run,
+    provider_for_tool,
+    provider_policy_snapshot,
+    release_provider_attempt,
+)
 from .recommendation_quality import (
     entity_keys,
     filter_and_deduplicate_candidates,
@@ -42,13 +51,6 @@ from .tools import (
 
 _SCALAR_TYPES = (int, float, bool)
 _TIMEOUT_ERRORS = (TimeoutError, asyncio.TimeoutError)
-_DISCOVERY_SOURCE_BY_TOOL = {
-    "search_library": "library",
-    "search_arxiv": "arxiv",
-    "find_related_papers": "arxiv",
-    "mcp__academic__search_openalex": "openalex",
-    "mcp__academic__search_semantic_scholar": "semantic_scholar",
-}
 _TITLE_STOPWORDS = frozenset(
     {
         "a",
@@ -130,6 +132,7 @@ def _tool_context_preview(preview: dict[str, Any]) -> dict[str, Any]:
         "authors",
         "year",
         "publication",
+        "published",
         "doi",
         "url",
         "open_access_pdf_url",
@@ -447,6 +450,133 @@ class OpenAIFunctionPlanner:
     def __init__(self, model_router: ModelRouter[Any]) -> None:
         self.model_router = model_router
 
+    async def resolve_task_frame(
+        self,
+        *,
+        query: str,
+        existing_task: dict[str, Any],
+        recent_user_messages: list[str],
+    ) -> TaskFrameDecision | None:
+        """用强制 Function Call 理解任务连续性，不让自由文本直接改写状态。"""
+
+        if not self.model_router.has_provider("answer"):
+            return None
+        from langchain_openai import ChatOpenAI
+
+        source_enum = [
+            "mcp__academic__search_openalex",
+            "mcp__academic__search_semantic_scholar",
+            "search_arxiv",
+        ]
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "resolve_task_frame",
+                "description": "判断当前话语如何更新上一轮结构化科研任务。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["continue", "update", "replace", "clear", "unrelated"],
+                        },
+                        "task_name": {
+                            "type": "string",
+                            "enum": ["find_related_papers"],
+                        },
+                        "updated_fields": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "requested_count",
+                                    "year_from",
+                                    "year_to",
+                                    "exclude_library",
+                                    "requested_sources",
+                                    "denied_sources",
+                                    "semantic_query",
+                                    "reset_shown_entities",
+                                ],
+                            },
+                        },
+                        "requested_count": {"type": "integer", "minimum": 1, "maximum": 10},
+                        "year_from": {"type": "integer", "minimum": 1900, "maximum": 2100},
+                        "year_to": {"type": "integer", "minimum": 1900, "maximum": 2100},
+                        "exclude_library": {"type": "boolean"},
+                        "requested_sources": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": source_enum},
+                        },
+                        "denied_sources": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": source_enum},
+                        },
+                        "semantic_query": {"type": "string", "maxLength": 1000},
+                        "reset_shown_entities": {"type": "boolean"},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                    "required": [
+                        "operation",
+                        "task_name",
+                        "updated_fields",
+                        "confidence",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+        async def invoke(provider: Any) -> Any:
+            model = ChatOpenAI(
+                model=provider.chat_model,
+                api_key=provider.api_key,
+                base_url=provider.base_url,
+                temperature=0,
+                max_retries=0,
+                max_tokens=220,
+            ).bind_tools([schema])
+            return await model.ainvoke(
+                [
+                    (
+                        "system",
+                        "你是科研 Agent Harness 的任务状态解释器。判断当前消息是在继续、"
+                        "修改、替换、结束上一任务，还是与它无关。像‘改用 Semantic "
+                        "你必须调用 resolve_task_frame，不能输出普通文本。像‘改用 Semantic "
+                        "Scholar’‘改成三篇’也是 update，必须保留未被本轮明确修改的年份、"
+                        "数量、排除已入库和已展示候选。只把用户本轮明确表达的槽位列入 "
+                        "updated_fields；来源发生变化时必须同时返回 requested_sources 和 "
+                        "denied_sources，以完整替换旧来源策略。不得推测或输出回答。",
+                    ),
+                    (
+                        "human",
+                        "上一任务："
+                        + json.dumps(existing_task, ensure_ascii=False, default=str)[:5000]
+                        + "\n最近用户消息："
+                        + json.dumps(recent_user_messages[-6:], ensure_ascii=False)[:3000]
+                        + f"\n当前消息：{query}",
+                    ),
+                ]
+            )
+
+        try:
+            response = await self.model_router.execute(
+                "answer", invoke, timeout_seconds=min(self.model_router.timeout_seconds, 15)
+            )
+        except ModelRuntimeError:
+            return None
+        for item in getattr(response, "tool_calls", []) or []:
+            if not isinstance(item, dict) or item.get("name") != "resolve_task_frame":
+                continue
+            arguments = item.get("args")
+            if not isinstance(arguments, dict):
+                return None
+            try:
+                return validate_task_frame_decision(arguments, source="model_function_call")
+            except (TypeError, ValueError):
+                return None
+        return None
+
     async def select_skill(
         self,
         *,
@@ -604,6 +734,7 @@ class ToolExecutionContext:
     excluded_recommendation_entities: frozenset[str] = frozenset()
     previous_recommendation_entities: frozenset[str] = frozenset()
     discovery_task: dict[str, Any] = field(default_factory=dict)
+    provider_policy: dict[str, Any] = field(default_factory=dict)
     verified_selection_page: int | None = None
     selection_scope_locked: bool = False
 
@@ -628,6 +759,7 @@ class ToolLoopResult:
     usable_external_context: bool = False
     activation_reason: str | None = None
     fallback_reason: str | None = None
+    provider_policy: dict[str, Any] = field(default_factory=dict)
     steps: int = 0
 
     @property
@@ -779,6 +911,22 @@ class FunctionToolHarness:
             0.85,
         )
 
+    async def resolve_task_frame(
+        self,
+        *,
+        query: str,
+        existing_task: dict[str, Any],
+        recent_user_messages: list[str],
+    ) -> TaskFrameDecision | None:
+        resolver = getattr(self.planner, "resolve_task_frame", None)
+        if resolver is None:
+            return None
+        return await resolver(
+            query=query,
+            existing_task=existing_task,
+            recent_user_messages=recent_user_messages,
+        )
+
     def schemas_for(self, skill: SkillDefinition, *, web_enabled: bool) -> list[dict[str, Any]]:
         allowed = set(skill.manifest.allowed_tools)
         if not web_enabled:
@@ -798,16 +946,29 @@ class FunctionToolHarness:
 
     async def run(self, query: str, context: ToolExecutionContext) -> ToolLoopResult:
         schemas = self.schemas_for(context.skill, web_enabled=context.web_enabled)
-        if not schemas:
-            return ToolLoopResult(fallback_reason="skill_has_no_available_tools")
-        result = ToolLoopResult()
         # 已验证上下文会携带上一轮论文发现任务的来源约束。必须解析完整的
         # resolved_query，否则“改用 Semantic Scholar”后的年份追问会退回 OpenAlex。
         source_policy = academic_source_policy(query)
-        denied_source_tools = set(source_policy.denied_tools)
-        denied_source_tools.update(
-            str(value) for value in context.discovery_task.get("denied_sources", [])
-        )
+        policy_task = dict(context.discovery_task)
+        if source_policy.has_explicit_source:
+            policy_task["requested_sources"] = sorted(source_policy.requested_tools)
+            policy_task["denied_sources"] = sorted(source_policy.denied_tools)
+        provider_policy = context.provider_policy or build_provider_run_policy(policy_task)
+        schemas = [
+            schema
+            for schema in schemas
+            if (
+                (provider := provider_for_tool(str(schema.get("function", {}).get("name", ""))))
+                is None
+                or provider_can_run(provider_policy, provider)[0]
+            )
+        ]
+        if not schemas:
+            return ToolLoopResult(
+                fallback_reason="skill_has_no_available_tools",
+                provider_policy=provider_policy_snapshot(provider_policy),
+            )
+        result = ToolLoopResult(provider_policy=provider_policy)
         planner_results: list[dict[str, Any]] = []
         planner_results.append(
             {
@@ -834,7 +995,7 @@ class FunctionToolHarness:
         invalid_repairs: set[str] = set()
         max_steps = min(4, context.skill.manifest.max_tool_steps)
         automatic_calls = list(self._automatic_openalex_calls(query, context, schemas))
-        source_call_counts: dict[str, int] = {}
+        rejected_calls: dict[str, str] = {}
 
         while result.steps < max_steps:
             if automatic_calls:
@@ -872,17 +1033,24 @@ class FunctionToolHarness:
                 result.explicit_source_fallback_used = True
             batch: list[ToolCallRequest] = []
             for call in decision.calls[:3]:
-                source_key = _DISCOVERY_SOURCE_BY_TOOL.get(call.name)
-                if source_key is not None and source_call_counts.get(source_key, 0) >= 1:
-                    continue
                 serialized = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
                 signature = f"{call.name}:{serialized}"
                 if signature in seen_signatures:
                     continue
                 seen_signatures.add(signature)
+                provider = provider_for_tool(call.name)
+                if provider is not None:
+                    allowed, _reason = claim_provider_attempt(
+                        provider_policy,
+                        provider,
+                        tool_name=call.name,
+                    )
+                    if not allowed:
+                        if _reason == "source_excluded_by_user":
+                            rejected_calls[call.call_id] = "SOURCE_EXCLUDED_BY_USER"
+                            batch.append(call)
+                        continue
                 batch.append(call)
-                if source_key is not None:
-                    source_call_counts[source_key] = source_call_counts.get(source_key, 0) + 1
                 if result.steps + len(batch) >= max_steps:
                     break
             if not batch:
@@ -891,8 +1059,8 @@ class FunctionToolHarness:
             result.steps += len(batch)
             executed = await asyncio.gather(
                 *(
-                    self._record_rejection(call, context, "SOURCE_EXCLUDED_BY_USER")
-                    if call.name in denied_source_tools
+                    self._record_rejection(call, context, rejected_calls[call.call_id])
+                    if call.call_id in rejected_calls
                     else self._execute_call(call, context)
                     for call in batch
                 ),
@@ -915,11 +1083,9 @@ class FunctionToolHarness:
                 if isinstance(outcome, ValidationError):
                     # Schema 修复不计入“同一检索工具只执行一次”；允许模型用同一
                     # Tool 名称修正参数一次，但已执行、失败或被策略拒绝的调用仍计数。
-                    source_key = _DISCOVERY_SOURCE_BY_TOOL.get(call.name)
-                    if source_key is not None:
-                        source_call_counts[source_key] = max(
-                            0, source_call_counts.get(source_key, 1) - 1
-                        )
+                    provider = provider_for_tool(call.name)
+                    if provider is not None and call.call_id not in rejected_calls:
+                        release_provider_attempt(provider_policy, provider)
                     await self._record_invalid_arguments(call, context)
                     invalid_preview = {
                         "tool": call.name,
@@ -1014,6 +1180,7 @@ class FunctionToolHarness:
             result.fallback_reason = "tool_outputs_not_usable"
         elif not result.calls and not result.fallback_reason:
             result.fallback_reason = "model_selected_no_tool"
+        result.provider_policy = provider_policy_snapshot(provider_policy)
         return result
 
     @staticmethod
