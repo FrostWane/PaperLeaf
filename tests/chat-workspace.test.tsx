@@ -107,6 +107,45 @@ describe("ChatWorkspace", () => {
     expect(screen.getByText("Enter 发送 · Shift + Enter 换行")).toBeInTheDocument();
   });
 
+  it("历史回答失败时显示对应助手占位，不把连续重试伪装成重复用户消息", async () => {
+    const session: ChatSession = {
+      id: "s-failed",
+      title: "失败回答",
+      type: "paper",
+      paperId: "paper-1",
+      currentRunId: "r-failed",
+      currentRunStatus: "failed",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const messages: ChatMessage[] = [
+      { id: "m-user", sessionId: session.id, role: "user", sequence: 1, status: "completed", content: "这篇文章讲了什么", citations: [], runId: "r-failed", createdAt, updatedAt: createdAt },
+      { id: "m-assistant", sessionId: session.id, role: "assistant", sequence: 2, status: "failed", content: "", citations: [], runId: "r-failed", createdAt, updatedAt: createdAt },
+    ];
+    const failedRun: AgentRunSnapshot = {
+      runId: "r-failed",
+      sessionId: session.id,
+      status: "failed",
+      cancelRequested: false,
+      answer: "",
+      citations: [],
+      error: "回答仍未通过证据核验",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValue([session]),
+      listChatMessages: vi.fn().mockResolvedValue(messages),
+      getAgentRun: vi.fn().mockResolvedValue(failedRun),
+    };
+
+    render(<ChatWorkspace binding={{ type: "paper", paperId: "paper-1" }} scopeLabel="测试论文" dataSource={source} />);
+
+    expect(await screen.findByText("本次回答未通过证据核验，未向你展示未经验证的内容。")).toBeInTheDocument();
+    expect(screen.getAllByText("这篇文章讲了什么")).toHaveLength(1);
+  });
+
   it("新对话尚未创建完成时禁用输入，避免问题误发到旧会话", async () => {
     const previous: ChatSession = { id: "s-old", title: "旧对话", type: "library", createdAt, updatedAt: createdAt };
     const next: ChatSession = { id: "s-new", title: "新对话", type: "library", createdAt, updatedAt: "2026-08-07T10:00:00Z" };

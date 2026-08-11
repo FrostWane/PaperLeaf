@@ -58,6 +58,8 @@ class AgentState(TypedDict, total=False):
     citation_validation_passed: bool
     answer_repair_attempted: bool
     answer_repair_succeeded: bool
+    support_repair_attempted: bool
+    support_repair_succeeded: bool
     context_usage: dict[str, Any]
     external_metadata_answer: bool
     displayed_recommendations: list[dict[str, Any]]

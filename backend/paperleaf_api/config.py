@@ -133,6 +133,9 @@ class Settings:
     agent_answer_retry_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_AGENT_ANSWER_RETRY_TIMEOUT_SECONDS", "60")
     )
+    agent_evidence_support_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_AGENT_EVIDENCE_SUPPORT_TIMEOUT_SECONDS", "45")
+    )
     translation_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS", "90")
     )
@@ -196,6 +199,7 @@ class Settings:
             self.model_timeout_seconds <= 0
             or self.agent_answer_timeout_seconds <= 0
             or self.agent_answer_retry_timeout_seconds <= 0
+            or self.agent_evidence_support_timeout_seconds <= 0
             or self.translation_timeout_seconds <= 0
         ):
             raise RuntimeError("模型超时必须大于 0")
@@ -204,6 +208,7 @@ class Settings:
                 self.model_timeout_seconds,
                 self.agent_answer_timeout_seconds,
                 self.agent_answer_retry_timeout_seconds,
+                self.agent_evidence_support_timeout_seconds,
                 self.translation_timeout_seconds,
             )
             > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS

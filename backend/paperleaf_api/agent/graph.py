@@ -19,6 +19,7 @@ from ..model_runtime import ModelRouter, ModelRuntimeError, build_model_router
 from ..rag.answer_quality import (
     AnswerQualityPolicy,
     assess_answer_support,
+    retain_cited_answer_claims,
 )
 from ..rag.citations import CitationClaim, Evidence, validate_citations
 from ..rag.retrieval_quality import (
@@ -584,11 +585,23 @@ def build_configured_evidence_support_grader(
         from langchain_openai import ChatOpenAI
 
         support_evidence = _evidence_for_support_check(answer, evidence)
-        context = "\n\n".join(
-            f"[chunk:{item.chunk_id}｜论文:{item.paper_title}｜物理页:{item.physical_page}]\n"
-            f"{item.text[:6000]}"
-            for item in support_evidence
-        )
+        # 支持核验只需要回答实际引用的证据，且不应再次发送回答阶段的完整
+        # 9k+ Token 上下文。按总字符预算压缩可以显著降低 DeepSeek 超时，
+        # 同时让每个被引用 Chunk 都至少保留一段原文供跨语言语义判断。
+        remaining_chars = 24_000
+        context_parts: list[str] = []
+        for index, item in enumerate(support_evidence):
+            remaining_items = len(support_evidence) - index
+            if remaining_items <= 0 or remaining_chars <= 0:
+                break
+            allowance = min(2_400, max(800, remaining_chars // remaining_items))
+            excerpt = item.text[:allowance]
+            remaining_chars -= len(excerpt)
+            context_parts.append(
+                f"[chunk:{item.chunk_id}｜论文:{item.paper_title}｜物理页:{item.physical_page}]\n"
+                f"{excerpt}"
+            )
+        context = "\n\n".join(context_parts)
 
         async def invoke(provider: Any) -> Any:
             model = ChatOpenAI(
@@ -624,7 +637,13 @@ def build_configured_evidence_support_grader(
             return _EvidenceSupportOutput.model_validate(json.loads(content))
 
         try:
-            result = await router.execute("evidence_support", invoke)
+            result = await router.execute(
+                "evidence_support",
+                invoke,
+                timeout_seconds=float(
+                    getattr(config, "agent_evidence_support_timeout_seconds", 45.0)
+                ),
+            )
             parsed = _EvidenceSupportOutput.model_validate(result)
             return AnswerSupport(
                 supported=parsed.supported,
@@ -1142,38 +1161,147 @@ class AgentRuntime:
             timings = dict(state.get("stage_timings_ms", {}))
             timings["answer_support"] = 0
             return {"stage_timings_ms": timings}
+        async def evaluate(answer: str, citations: list[CitationClaim]) -> dict[str, Any]:
+            deterministic = assess_answer_support(
+                answer,
+                citations,
+                evidence,
+                AnswerSupport(None, None, "not_configured"),
+                policy=self.answer_quality_policy,
+            )
+            # 缺引属于完全确定性的结构错误，先修复再调用昂贵的语义分类器；否则
+            # 一次概览失败会白白等待 30 秒，修复稿又重复等待一次。
+            if deterministic.reason_code in {"missing_claim_citations", "no_answer_claims"}:
+                quality = assess_evidence(state["query"], evidence, policy=self.quality_policy)
+                return apply_answer_support(quality, deterministic).as_dict()
+            support_result = self.support_grader(state["query"], answer, evidence)
+            semantic_support = (
+                await support_result if inspect.isawaitable(support_result) else support_result
+            )
+            # 语义分类器超时或不可用时，只有“每条主张均有引用且词项支持全部通过”
+            # 才使用确定性结果；否则继续安全拒绝，不能用降级掩盖未落地的主张。
+            support = (
+                deterministic
+                if semantic_support.reason_code == "grader_unavailable"
+                and deterministic.supported
+                else assess_answer_support(
+                    answer,
+                    citations,
+                    evidence,
+                    semantic_support,
+                    policy=self.answer_quality_policy,
+                )
+            )
+            quality = assess_evidence(state["query"], evidence, policy=self.quality_policy)
+            return apply_answer_support(quality, support).as_dict()
+
         answer = str(state.get("answer", ""))
-        support_result = self.support_grader(state["query"], answer, evidence)
-        semantic_support = (
-            await support_result if inspect.isawaitable(support_result) else support_result
-        )
-        support = assess_answer_support(
-            answer,
-            state.get("citations", []),
-            evidence,
-            semantic_support,
-            policy=self.answer_quality_policy,
-        )
-        quality = assess_evidence(state["query"], evidence, policy=self.quality_policy)
-        quality = apply_answer_support(quality, support)
-        timings = dict(state.get("stage_timings_ms", {}))
+        citations = list(state.get("citations", []))
+        quality = await evaluate(answer, citations)
+        payload: dict[str, Any] = {}
+
+        if (
+            str(quality.get("answer_support_grade", "")) == "unsupported"
+            and not state.get("support_repair_attempted")
+        ):
+            # 引用 ID 合法不代表每条事实都已引用。对常见的概览回答
+            # 进行一次服务端受控修复：减少主张、逐句引用，然后重新
+            # 执行引用和语义支持检查，不要求用户重新输入。
+            repair = await self.generate_answer(
+                {
+                    **state,
+                    "messages": [
+                        *state.get("messages", []),
+                        {
+                            "role": "answer_repair",
+                            "content": (
+                                f"上一稿被拆分为 {int(quality.get('claim_count', 0))} 条事实，"
+                                f"其中 {int(quality.get('cited_claim_count', 0))} 条带有合法引用。"
+                                "请重新生成简洁的中文回答：只保留 5–8 条最重要的"
+                                "研究问题、方法、实验和结论；每个事实句末都必须"
+                                "直接带一个或多个本轮合法 `[chunk:E#]` 引用；不要在"
+                                "一句中堆叠多个不相干事实；证据不支持的细节直接删除。"
+                            ),
+                        },
+                    ],
+                    "answer_repair_attempted": True,
+                    "support_repair_attempted": True,
+                }
+            )
+            repaired_answer = str(repair.get("answer", ""))
+            repaired_citations = list(repair.get("citations", []))
+            repaired_valid, _errors = validate_citations(repaired_citations, evidence)
+            if repaired_valid:
+                repaired_quality = await evaluate(repaired_answer, repaired_citations)
+                if (
+                    str(repaired_quality.get("answer_support_grade", "")) == "unsupported"
+                    and str(repaired_quality.get("reason_code", ""))
+                    == "missing_claim_citations"
+                ):
+                    # 模型第二稿仍漏引时，不猜测引用来源。仅保留已经带有
+                    # 本轮合法引用的事实，再执行语义支持核验；未引用内容
+                    # 会被直接删除，不能借此绕过证据门禁。
+                    pruned_answer, pruned_citations = retain_cited_answer_claims(
+                        repaired_answer,
+                        repaired_citations,
+                        evidence,
+                    )
+                    if pruned_answer:
+                        repaired_answer = pruned_answer
+                        repaired_citations = pruned_citations
+                        repaired_quality = await evaluate(
+                            repaired_answer,
+                            repaired_citations,
+                        )
+                        repair["answer"] = repaired_answer
+                        repair["citations"] = repaired_citations
+                payload.update(repair)
+                quality = repaired_quality
+                payload["answer_repair_succeeded"] = (
+                    str(repaired_quality.get("answer_support_grade", "")) == "supported"
+                )
+                payload["support_repair_succeeded"] = payload["answer_repair_succeeded"]
+            else:
+                quality = {
+                    **quality,
+                    "grade": "insufficient",
+                    "answer_support_grade": "unsupported",
+                    "reason_code": "support_repair_citation_invalid",
+                    "summary": "紧凑修复稿的引用仍未通过服务端校验",
+                }
+            payload["answer_repair_attempted"] = True
+            payload["support_repair_attempted"] = True
+
+        timings = dict(payload.get("stage_timings_ms") or state.get("stage_timings_ms", {}))
         timings["answer_support"] = round((time.perf_counter() - started_at) * 1000)
-        return {
-            "evidence_grade": quality.grade,
-            "evidence_quality": quality.as_dict(),
-            "stage_timings_ms": timings,
-        }
+        payload.update(
+            {
+                "evidence_grade": str(quality.get("grade", "insufficient")),
+                "evidence_quality": quality,
+                "stage_timings_ms": timings,
+            }
+        )
+        return payload
 
     async def suppress_unsupported_answer(self, state: AgentState) -> AgentState:
         quality = state.get("evidence_quality", {})
         cited = int(quality.get("cited_claim_count", 0))
         total = int(quality.get("claim_count", 0))
+        final_quality = {
+            **quality,
+            "grade": "insufficient",
+            "answer_support_grade": "unsupported",
+            "reason_code": "answer_support_failed_after_repair",
+            "summary": "回答在自动紧凑修复后仍未通过证据支持核验",
+        }
         return {
             "answer": (
                 "> 证据说明：检索到了相关原文，但最终回答没有通过逐条语义支持核验，"
                 f"已覆盖 {cited}/{total} 条主张，因此本次不返回结论。"
             ),
             "citations": [],
+            "evidence_grade": "insufficient",
+            "evidence_quality": final_quality,
             "status": "completed",
         }
 

@@ -273,7 +273,7 @@ export function ChatWorkspace({
   const currentRun = selected && run?.sessionId === selected.id ? run : null;
   const active = submitting || (currentRun ? isActiveRun(currentRun) : isActiveSession(selected));
   const progressiveAnswer = useProgressiveAnswer(liveAnswer, currentRun?.runId ?? selected?.id ?? "empty");
-  const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === selected?.id && message.content.trim() && !(Boolean(currentRun && liveAnswer) && message.role === "assistant" && message.runId === currentRun?.runId)), [currentRun, liveAnswer, messages, selected?.id]);
+  const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === selected?.id && (message.content.trim() || (message.role === "assistant" && ["failed", "cancelled"].includes(message.status))) && !(Boolean(currentRun && liveAnswer) && message.role === "assistant" && message.runId === currentRun?.runId)), [currentRun, liveAnswer, messages, selected?.id]);
   const visibleSessions = useMemo(() => sortedWorkspaceSessions(sessions, stableBinding), [sessions, stableBinding]);
   const historyPageCount = Math.max(1, Math.ceil(visibleSessions.length / historyPageSize));
   const effectiveHistoryPage = Math.min(Math.max(1, historyPage), historyPageCount);
@@ -583,7 +583,7 @@ export function ChatWorkspace({
           {!loading && visibleMessages.length === 0 && !liveAnswer && <div className="chat-empty"><strong>向文献提问</strong><div className="chat-prompts"><span>可以这样问</span>{exampleQuestions.map((prompt) => <button type="button" key={prompt} onClick={() => fillPrompt(prompt)}>{prompt}<ChevronRight size={14} /></button>)}</div></div>}
           {visibleMessages.map((message) => <article key={message.id} className={`chat-message ${message.role}`} aria-label={message.role === "user" ? "你的消息" : "PaperLeaf 回复"}>
             <span className="chat-message-author">{message.role === "user" ? "你" : "PaperLeaf"}{message.role === "assistant" && message.status !== "completed" ? ` · ${message.status === "failed" ? "回答失败，已保留核验段落" : message.status === "cancelled" ? "已取消，已保留核验段落" : "正在写入"}` : ""}</span>
-            {message.role === "assistant" ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p>{message.content}</p>}
+            {message.role === "assistant" ? message.content.trim() ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p className="chat-message-fallback">{message.status === "cancelled" ? "本次回答已取消。" : "本次回答未通过证据核验，未向你展示未经验证的内容。"}</p> : <p>{message.content}</p>}
             {message.role === "assistant" && <ChatCitations citations={message.citations} onOpenCitation={onOpenCitation} />}
           </article>)}
           {currentRun && liveAnswer && <article className="chat-message assistant live" aria-label="PaperLeaf 正在逐字生成已核验回答"><span className="chat-message-author">PaperLeaf · 已核验内容正在生成</span><div className={progressiveAnswer === liveAnswer ? "progressive-answer" : "progressive-answer typing"}><SafeMarkdown content={progressiveAnswer} citations={liveCitations} onOpenCitation={onOpenCitation} /></div><ChatCitations citations={liveCitations} onOpenCitation={onOpenCitation} /></article>}
