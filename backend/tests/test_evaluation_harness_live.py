@@ -144,16 +144,23 @@ def test_live_sequence_detects_repeated_batch_and_lost_year_constraint() -> None
         index=1,
         category="function_mcp",
         title="first",
-        question="推荐五篇",
+        question="推荐一篇",
         answer="| 1 | **Paper A** | 2025 | Venue | DOI | OpenAlex |",
+        displayed_recommendations=[
+            {"title": "Paper A", "year": 2025, "relevance_score": 0.9}
+        ],
         structural_pass=True,
     )
     followup = LiveRunResult(
         index=2,
         category="function_mcp",
         title="followup",
-        question="换一批 2026 年的",
+        question="换一批一篇 2026 年的",
         answer="| 1 | **Paper A** | 2025 | Venue | DOI | OpenAlex |",
+        active_task={"requested_count": 1, "year_from": 2026, "year_to": 2026},
+        displayed_recommendations=[
+            {"title": "Paper A", "year": 2025, "relevance_score": 0.9}
+        ],
         structural_pass=True,
     )
 
@@ -165,3 +172,32 @@ def test_live_sequence_detects_repeated_batch_and_lost_year_constraint() -> None
         "recommendation_year_constraint_lost",
     ]
     assert followup.structural_pass is False
+
+
+def test_live_sequence_rejects_empty_short_or_library_recommendations() -> None:
+    empty = LiveRunResult(
+        index=1,
+        category="function_mcp",
+        title="empty",
+        question="推荐五篇",
+        active_task={"requested_count": 5, "exclude_library": True},
+        answer="### 联网推荐\n\n没有候选。",
+    )
+    library = LiveRunResult(
+        index=2,
+        category="function_mcp",
+        title="library",
+        question="改成一篇",
+        active_task={"requested_count": 1, "exclude_library": True},
+        answer="| 1 | **DeepDTA** | 2018 | Venue | DOI | OpenAlex |",
+        displayed_recommendations=[
+            {"title": "DeepDTA", "year": 2018, "lexical_score": 1.0}
+        ],
+        library_titles=["DeepDTA"],
+    )
+
+    _grade_recommendation_sequence([empty, library])
+
+    assert "recommendation_empty" in empty.failures
+    assert "recommendation_count:0/5" not in empty.failures
+    assert "recommendation_contains_library_paper" in library.failures

@@ -1,0 +1,8 @@
+{
+  "snapshot_id": "collection-dta-snapshot-01",
+  "captured_at": "2026-08-11T00:00:00+08:00",
+  "paper_entities": [
+    {"title": "DeepDTA", "doi": "10.1093/bioinformatics/bty593"},
+    {"title": "AttentionDTA", "doi": "10.1109/TCBB.2022.3170365"}
+  ]
+}

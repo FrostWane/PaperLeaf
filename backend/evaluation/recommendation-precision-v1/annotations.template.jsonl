@@ -1,5 +1,5 @@
-{"query_id":"collection-dta-01","candidate_id":"doi:10.x/example-1","rank":1,"title":"待标注候选 1","relevant":null,"annotator":"","note":""}
-{"query_id":"collection-dta-01","candidate_id":"doi:10.x/example-2","rank":2,"title":"待标注候选 2","relevant":null,"annotator":"","note":""}
-{"query_id":"collection-dta-01","candidate_id":"doi:10.x/example-3","rank":3,"title":"待标注候选 3","relevant":null,"annotator":"","note":""}
-{"query_id":"collection-dta-01","candidate_id":"doi:10.x/example-4","rank":4,"title":"待标注候选 4","relevant":null,"annotator":"","note":""}
-{"query_id":"collection-dta-01","candidate_id":"doi:10.x/example-5","rank":5,"title":"待标注候选 5","relevant":null,"annotator":"","note":""}
+{"dataset_id":"recommendation-precision-v1-template","query_id":"collection-dta-01","candidate_id":"doi:10.x/example-1","rank":1,"title":"待冻结真实候选 1","relevant":null,"annotator_id":"researcher-a","note":""}
+{"dataset_id":"recommendation-precision-v1-template","query_id":"collection-dta-01","candidate_id":"doi:10.x/example-2","rank":2,"title":"待冻结真实候选 2","relevant":null,"annotator_id":"researcher-a","note":""}
+{"dataset_id":"recommendation-precision-v1-template","query_id":"collection-dta-01","candidate_id":"doi:10.x/example-3","rank":3,"title":"待冻结真实候选 3","relevant":null,"annotator_id":"researcher-a","note":""}
+{"dataset_id":"recommendation-precision-v1-template","query_id":"collection-dta-01","candidate_id":"doi:10.x/example-4","rank":4,"title":"待冻结真实候选 4","relevant":null,"annotator_id":"researcher-a","note":""}
+{"dataset_id":"recommendation-precision-v1-template","query_id":"collection-dta-01","candidate_id":"doi:10.x/example-5","rank":5,"title":"待冻结真实候选 5","relevant":null,"annotator_id":"researcher-a","note":""}

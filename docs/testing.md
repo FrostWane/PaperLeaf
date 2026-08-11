@@ -54,6 +54,14 @@ GitHub Actions 对拉取请求执行上述检查并运行密钥扫描。后端�
 
 ## 当前后端自动化范围
 
+2026-08-11 TaskFrame 与 Run 级 ProviderPolicy 返工：后端收集 436 项，430 项通过、6 项因
+可选外部基础设施跳过，Ruff 全绿；确定性 Harness 100/100。最终真实 DeepSeek + OpenAlex /
+Semantic Scholar / arXiv + PostgreSQL + Redis 矩阵为 5/6：三类模型 TaskFrame 均走
+`model_function_call`，纯数量修改保留年份和来源，纯来源修改保留数量、年份和历史候选；唯一
+失败是 Semantic Scholar 429 后没有候选。该 Run 的 ProviderPolicy 明确禁止 OpenAlex/arXiv，
+没有发生旧兜底越权，也没有把空表格算成推荐成功。完整证据见
+`docs/reports/2026-08-11-task-frame-and-provider-policy.md`。
+
 2026-08-10 论文发现与外部工具可靠性门禁：后端全量 407 passed / 6 skipped；前端
 21 个文件、113 项 Vitest 全部通过；TypeScript、Ruff、ESLint（0 错误）和生产构建通过。
 新增 38 项确定性多轮矩阵，覆盖 `5 篇`、`五篇`、`five papers`，来源指定、来源排除、

@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from .agent.discovery_policy import requested_paper_count
 from .config import settings
 from .db import get_session_factory
 from .mcp_gateway import McpGateway, McpGatewayError
@@ -59,6 +60,7 @@ class LiveScenario:
     expected_attempted_tools: tuple[str, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
     group: str | None = None
+    library_titles: tuple[str, ...] = ()
 
 
 @dataclass
@@ -84,6 +86,10 @@ class LiveRunResult:
     citation_pages: list[int] = field(default_factory=list)
     vector_fallback_reasons: list[str] = field(default_factory=list)
     external_provider_degradations: list[str] = field(default_factory=list)
+    active_task: dict[str, Any] = field(default_factory=dict)
+    provider_policy: dict[str, Any] = field(default_factory=dict)
+    displayed_recommendations: list[dict[str, Any]] = field(default_factory=list)
+    library_titles: list[str] = field(default_factory=list)
     answer: str = ""
     duration_ms: int | None = None
     structural_pass: bool = False
@@ -118,21 +124,71 @@ def _recommendation_rows(answer: str) -> list[tuple[str, str]]:
     ]
 
 
+def _normalized_title(value: str) -> str:
+    return "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", value.casefold()))
+
+
 def _grade_recommendation_sequence(results: list[LiveRunResult]) -> None:
-    """验证连续推荐不重复，并确保明确年份约束落实到用户可见表格。"""
+    """验证数量、去重、年份、来源与机器相关性代理，禁止空结果真空通过。"""
 
     seen_titles: set[str] = set()
+    inherited_count: int | None = None
     for item in results:
         rows = _recommendation_rows(item.answer)
         current_titles = {title for title, _year in rows}
+        task = dict(item.active_task or {})
+        requested_count = _as_int(task.get("requested_count"))
+        if requested_count is None:
+            requested_count = requested_paper_count(item.question, default=inherited_count)
+        if requested_count is not None:
+            inherited_count = requested_count
+        if not rows:
+            item.failures.append("recommendation_empty")
+        elif requested_count is not None and len(rows) != requested_count:
+            item.failures.append(
+                f"recommendation_count:{len(rows)}/{requested_count}"
+            )
         if current_titles & seen_titles:
             item.failures.append("recommendation_batch_repeated")
+        year_from = _as_int(task.get("year_from"))
+        year_to = _as_int(task.get("year_to"))
         requested_years = {
-            value
-            for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", item.question)
+            value for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", item.question)
         }
-        if requested_years and any(year not in requested_years for _title, year in rows):
+        if year_from is not None:
+            year_to = year_to if year_to is not None else year_from
+            if any(
+                not year.isdigit() or not year_from <= int(year) <= year_to
+                for _title, year in rows
+            ):
+                item.failures.append("recommendation_year_constraint_lost")
+        elif requested_years and any(year not in requested_years for _title, year in rows):
             item.failures.append("recommendation_year_constraint_lost")
+        library_titles = {_normalized_title(value) for value in item.library_titles if value}
+        if any(_normalized_title(title) in library_titles for title in current_titles):
+            item.failures.append("recommendation_contains_library_paper")
+        structured = list(item.displayed_recommendations or [])
+        if len(structured) != len(rows):
+            item.failures.append("recommendation_structured_output_mismatch")
+        elif structured:
+            relevant_proxy = sum(
+                bool(candidate.get("matched_scope_title"))
+                or float(candidate.get("lexical_score") or 0) > 0
+                or float(candidate.get("relevance_score") or 0) > 0
+                for candidate in structured
+            )
+            if relevant_proxy / len(structured) < 0.8:
+                item.failures.append("recommendation_topic_proxy_below_threshold")
+        policy = dict(item.provider_policy or {})
+        denied = {str(value) for value in policy.get("denied", [])}
+        attempted = {
+            str(key): int(value)
+            for key, value in dict(policy.get("attempted", {}) or {}).items()
+        }
+        if any(value > 1 for value in attempted.values()):
+            item.failures.append("provider_budget_exceeded")
+        if denied & {provider for provider, count in attempted.items() if count > 0}:
+            item.failures.append("denied_provider_attempted")
         item.structural_pass = not item.failures
         seen_titles.update(current_titles)
 
@@ -363,6 +419,7 @@ class LiveHarness:
             category=scenario.category,
             title=scenario.title,
             question=scenario.question,
+            library_titles=list(scenario.library_titles),
         )
         started = time.perf_counter()
         try:
@@ -374,6 +431,13 @@ class LiveHarness:
             result.error_code = run.error_code
             result.selected_skill = run.selected_skill
             trace = dict(run.harness_trace or {})
+            result.provider_policy = dict(trace.get("provider_policy", {}) or {})
+            result.active_task = dict(
+                (run.context_snapshot or {}).get("resolved_references", {}).get(
+                    "active_task", {}
+                )
+                or {}
+            )
             result.native_function_calling_attempted = bool(
                 trace.get("native_function_calling_attempted")
             )
@@ -407,6 +471,9 @@ class LiveHarness:
                 }
             )
             result.answer = str(public_run.get("answer", ""))
+            result.displayed_recommendations = list(
+                (run.result_summary or {}).get("displayed_recommendations", []) or []
+            )
             rag_trace = dict((run.result_summary or {}).get("rag_trace", {}) or {})
             result.vector_fallback_reasons = [
                 str(item) for item in rag_trace.get("vector_fallback_reasons", []) or []
@@ -646,45 +713,66 @@ def build_scenarios(
             "请根据当前集合主题联网推荐 5 篇尚未入库的相关论文。",
             "有没有更近的论文，如 2026 年的？",
             ("mcp__academic__search_openalex",),
+            ("mcp__academic__search_openalex",),
+            (),
             (),
         ),
         (
-            "请只使用 OpenAlex 推荐五篇尚未入库的相关论文。",
-            "换一批 three papers，限定 2025 年。",
+            "请只使用 OpenAlex 推荐五篇尚未入库的 2026 年相关论文。",
+            "改用 Semantic Scholar",
             ("mcp__academic__search_openalex",),
+            ("mcp__academic__search_semantic_scholar",),
             ("mcp__academic__search_semantic_scholar", "search_arxiv"),
+            ("mcp__academic__search_openalex", "search_arxiv"),
         ),
         (
-            "请只使用 Semantic Scholar 推荐 five papers。",
-            "有没有 2026 年的？",
-            ("mcp__academic__search_semantic_scholar",),
-            ("mcp__academic__search_openalex", "search_arxiv"),
+            "请只使用 OpenAlex 推荐 five papers，限定 2026 年。",
+            "改成三篇",
+            ("mcp__academic__search_openalex",),
+            ("mcp__academic__search_openalex",),
+            ("mcp__academic__search_semantic_scholar", "search_arxiv"),
+            ("mcp__academic__search_semantic_scholar", "search_arxiv"),
         ),
         (
             "不要使用 OpenAlex，请用 Semantic Scholar 推荐五篇相关论文。",
             "换一批 3 篇，限定 2025 年。",
             ("mcp__academic__search_semantic_scholar",),
+            ("mcp__academic__search_semantic_scholar",),
+            ("mcp__academic__search_openalex",),
             ("mcp__academic__search_openalex",),
         ),
         (
             "请只使用 arXiv 推荐 5 篇相关论文。",
             "再推荐三篇 2026 年的。",
             ("search_arxiv",),
+            ("search_arxiv",),
+            (
+                "mcp__academic__search_openalex",
+                "mcp__academic__search_semantic_scholar",
+            ),
             (
                 "mcp__academic__search_openalex",
                 "mcp__academic__search_semantic_scholar",
             ),
         ),
     )
+    collection_library_titles = tuple(
+        str(item.get("title") or "").strip()
+        for item in papers
+        if str(item.get("title") or "").strip()
+    )
     for pair_index, (
         first_question,
         followup_question,
-        expected_tools,
-        forbidden_tools,
+        first_expected_tools,
+        followup_expected_tools,
+        first_forbidden_tools,
+        followup_forbidden_tools,
     ) in enumerate(discovery_pairs):
         # 默认的“联网推荐”要求 Harness 尝试 OpenAlex，但允许 Provider 超时后
         # 自动降级至 arXiv；显式指定数据源时才要求该来源成功或受控失败。
-        required_success_tools = () if pair_index == 0 else expected_tools
+        first_required_success = () if pair_index == 0 else first_expected_tools
+        followup_required_success = () if pair_index == 0 else followup_expected_tools
         group_id = f"discovery-followup-{pair_index}"
         first = LiveScenario(
             index=index,
@@ -697,10 +785,11 @@ def build_scenarios(
             web_enabled=True,
             require_citations=False,
             require_native_tools=True,
-            expected_tools=required_success_tools,
-            expected_attempted_tools=expected_tools,
-            forbidden_tools=forbidden_tools,
+            expected_tools=first_required_success,
+            expected_attempted_tools=first_expected_tools,
+            forbidden_tools=first_forbidden_tools,
             group=group_id,
+            library_titles=collection_library_titles,
         )
         index += 1
         followup = LiveScenario(
@@ -714,10 +803,11 @@ def build_scenarios(
             web_enabled=True,
             require_citations=False,
             require_native_tools=True,
-            expected_tools=required_success_tools,
-            expected_attempted_tools=expected_tools,
-            forbidden_tools=forbidden_tools,
+            expected_tools=followup_required_success,
+            expected_attempted_tools=followup_expected_tools,
+            forbidden_tools=followup_forbidden_tools,
             group=group_id,
+            library_titles=collection_library_titles,
         )
         index += 1
         groups.append([first, followup])

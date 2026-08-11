@@ -1,0 +1,8 @@
+[
+  {
+    "query_id": "collection-dta-01",
+    "query": "请根据当前集合主题推荐 5 篇尚未入库的相关论文。",
+    "requested_count": 5,
+    "scope_snapshot_id": "collection-dta-snapshot-01"
+  }
+]

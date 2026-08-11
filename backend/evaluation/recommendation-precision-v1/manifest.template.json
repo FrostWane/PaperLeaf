@@ -1,0 +1,25 @@
+{
+  "dataset_id": "recommendation-precision-v1-template",
+  "frozen_at": "2026-08-11T00:00:00+08:00",
+  "artifacts": {
+    "queries": {
+      "path": "queries.json",
+      "sha256": "b34c9d143fcfc46e3f31b72bf0e4324e336a807156811af7445ad07232b6e690"
+    },
+    "collection_snapshot": {
+      "path": "collection_snapshot.json",
+      "sha256": "4d0a475c2100953f798b0b4c41d2f06e92a2e96ca2212060e850281bc6cea9d0"
+    },
+    "candidates": {
+      "path": "candidates.jsonl",
+      "sha256": "6282d09087071e6a989987b1c8afdc40512850520524d021e5da0fc1e3aabb68"
+    }
+  },
+  "annotators": [
+    {
+      "id": "researcher-a",
+      "type": "human",
+      "attestation": "本人基于冻结查询、集合快照与候选输出独立完成标注，未使用模型代替人工判断。"
+    }
+  ]
+}
