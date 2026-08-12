@@ -43,8 +43,8 @@ test("文献组织数量来自真实状态且支持批量整理、归档与恢�
   const ragRow = page.getByRole("row").filter({ hasText: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" });
   await ragRow.getByRole("checkbox").check();
   await page.getByRole("button", { name: "重新识别与索引" }).click();
-  const reindexDialog = page.getByRole("dialog", { name: /重新识别并索引 1 篇文献/ });
-  await expect(reindexDialog.getByText(/复用已保存的原始 PDF/)).toBeVisible();
+  const reindexDialog = page.getByRole("dialog", { name: /重新处理 1 篇文献/ });
+  await expect(reindexDialog.getByText(/已有译文将失效/)).toBeVisible();
   await reindexDialog.getByRole("button", { name: "确认重新处理" }).click();
   await expect(page.getByText("已将 1 篇文献加入重新识别与索引队列。")).toBeVisible();
 
