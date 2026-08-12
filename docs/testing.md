@@ -272,3 +272,49 @@ docker compose run --rm api python -m paperleaf_api.evaluation_harness_live \
 - 未配置模型时界面明确降级，不出现无限加载。
 - 重启 API/Worker 后未完成任务与 Agent 中断可恢复。
 - 备份文件可在隔离环境恢复。
+
+## 并行 Map-Reduce 跨论文 A/B
+
+`backend/evaluation/multi-agent-compare-v1/` 提供独立于既有 RAG 数据集的跨论文
+A/B draft。当前包含 36 个 3～10 篇论文的复杂任务和 12 个单篇、安全及不可回答
+对照。复杂任务通过 `source_case_ids` 复用 `paperleaf-rag-v1` 中已经校验过物理页
+锚点的源题，避免把临时生成内容当作人工真值。
+
+当前清单明确设置：
+
+```text
+annotation_status=draft
+frozen=false
+quality_claims_allowed=false
+```
+
+因此它目前只能验证数据协议、A/B 配对、故障降级和指标实现，不能用于声称 v2 已经提升
+质量。组合问题、反证关系和冲突预期经过人工逐条复核并签字后，才能发布新的冻结版本。
+
+校验 draft 数据：
+
+```bash
+cd backend
+python -m paperleaf_api.evaluation_multi_agent \
+  --manifest evaluation/multi-agent-compare-v1/manifest.json \
+  --cases evaluation/multi-agent-compare-v1/cases.jsonl \
+  --source-manifest evaluation/datasets/paperleaf-rag-v1/manifest.json \
+  --source-cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl
+```
+
+真实 A/B 必须对同一问题、授权论文范围、集合快照和模型配置交替执行 AB/BA。任一哈希
+不一致的 Pair 标记为 `protocol_invalid`，不得进入聚合结果。报告至少包含：
+
+- 预期主张证据覆盖与输出主张支持精度；
+- 必需论文、比较维度和冲突覆盖；
+- 引用物理页准确率与不可回答错误作答率；
+- p95 总耗时、首个核验增量耗时、模型调用和工具调用次数；
+- 估算输入/输出 Token、分支完成/失败/超时与 v1 回退；
+- 非法引用、越权、跨用户泄漏、未审批写入、Prompt Injection 和上下文超限。
+
+Token 当前来自 Context 预算器，只能称作 `estimated`，不能称作 Provider 实际计费量。
+Go/No-Go 采用预冻结门槛：所有安全计数必须为 0；复杂任务完成率至少 95%；全分支失败
+回退、部分失败提示、取消传播、Worker 失租 fencing 与 Checkpoint 恢复均须 100% 通过；
+v2 的 p95 和估算 Token 不超过 v1 的 2 倍。质量指标使用接近天花板时不回退、否则至少
+提升 5 个百分点的 ceiling-aware 规则，同时要求人工盲评完成。没有完整人工盲评时，
+即使结构、安全和成本门通过，也只能输出 `quality_pending`。

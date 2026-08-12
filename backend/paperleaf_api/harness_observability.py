@@ -29,6 +29,38 @@ def _percentile(values: Iterable[int | float], fraction: float) -> int | None:
     return round(ordered[index])
 
 
+_COMPARE_ORCHESTRATION_VERSION = "compare_map_reduce_v2"
+_COMPARE_FALLBACK_REASONS = {
+    "disabled",
+    "skill_not_supported",
+    "scope_too_small",
+    "scope_too_large",
+    "invalid_plan",
+    "budget_exceeded",
+    "all_subtasks_failed",
+    "no_merged_evidence",
+    "cancelled",
+    "timeout",
+    "lease_lost",
+    "internal_error",
+}
+
+
+def _non_negative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):  # noqa: UP038
+        return max(0, int(value))
+    return 0
+
+
+def _compare_fallback_reason(value: Any) -> str | None:
+    reason = str(value or "").strip().lower()
+    if not reason:
+        return None
+    return reason if reason in _COMPARE_FALLBACK_REASONS else "other"
+
+
 def aggregate_harness_metrics(
     runs: list[Any],
     tool_calls: list[Any],
@@ -52,6 +84,19 @@ def aggregate_harness_metrics(
     skill_completed: Counter[str] = Counter()
     skill_terminal: Counter[str] = Counter()
     vector_fallback_reasons: Counter[str] = Counter()
+    compare_runs = 0
+    compare_planned_subtasks = 0
+    compare_succeeded_subtasks = 0
+    compare_failed_subtasks = 0
+    compare_timeout_subtasks = 0
+    compare_partial_runs = 0
+    compare_fallback_runs = 0
+    compare_fallback_reasons: Counter[str] = Counter()
+    compare_subtask_durations: list[int] = []
+    compare_merge_durations: list[int] = []
+    compare_dedup_count = 0
+    compare_conflict_count = 0
+    compare_finding_count = 0
 
     for run in runs:
         snapshot = _dict(getattr(run, "context_snapshot", {}))
@@ -85,6 +130,46 @@ def aggregate_harness_metrics(
         skill_counts[skill] += 1
         harness_trace = _dict(getattr(run, "harness_trace", {}))
         route_sources[str(harness_trace.get("skill_route_source") or "unknown")[:64]] += 1
+        if harness_trace.get("orchestration_version") == _COMPARE_ORCHESTRATION_VERSION:
+            compare_runs += 1
+            compare_planned_subtasks += min(
+                3, _non_negative_int(harness_trace.get("planned_subtasks"))
+            )
+            compare_succeeded_subtasks += min(
+                3, _non_negative_int(harness_trace.get("succeeded_subtasks"))
+            )
+            compare_failed_subtasks += min(
+                3, _non_negative_int(harness_trace.get("failed_subtasks"))
+            )
+            compare_timeout_subtasks += min(
+                3, _non_negative_int(harness_trace.get("timeout_subtasks"))
+            )
+            compare_dedup_count += _non_negative_int(harness_trace.get("merge_dedup_count"))
+            compare_conflict_count += _non_negative_int(
+                harness_trace.get("merge_conflict_count")
+            )
+            compare_finding_count += _non_negative_int(harness_trace.get("finding_count"))
+            if harness_trace.get("partial_failure") is True:
+                compare_partial_runs += 1
+            if harness_trace.get("fallback_to_v1") is True:
+                compare_fallback_runs += 1
+            fallback_reason = _compare_fallback_reason(
+                harness_trace.get("fallback_reason")
+            )
+            if fallback_reason:
+                compare_fallback_reasons[fallback_reason] += 1
+            raw_durations = harness_trace.get("subtask_durations_ms")
+            if isinstance(raw_durations, list):
+                compare_subtask_durations.extend(
+                    _non_negative_int(value)
+                    for value in raw_durations[:3]
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)  # noqa: UP038
+                )
+            merge_duration = harness_trace.get("merge_duration_ms")
+            if isinstance(merge_duration, (int, float)) and not isinstance(  # noqa: UP038
+                merge_duration, bool
+            ):
+                compare_merge_durations.append(_non_negative_int(merge_duration))
         run_status = str(getattr(run, "status", ""))
         if run_status in {"completed", "failed", "cancelled"}:
             skill_terminal[skill] += 1
@@ -216,5 +301,27 @@ def aggregate_harness_metrics(
             **dict(embedding or {}),
             "fallback_reasons": dict(vector_fallback_reasons),
             "fallback_runs": sum(vector_fallback_reasons.values()),
+        },
+        "parallel_compare": {
+            "runs": compare_runs,
+            "planned_subtasks": compare_planned_subtasks,
+            "succeeded_subtasks": compare_succeeded_subtasks,
+            "failed_subtasks": compare_failed_subtasks,
+            "timeout_subtasks": compare_timeout_subtasks,
+            "success_rate": _rate(
+                compare_succeeded_subtasks, compare_planned_subtasks
+            ),
+            "partial_runs": compare_partial_runs,
+            "partial_rate": _rate(compare_partial_runs, compare_runs),
+            "fallback_runs": compare_fallback_runs,
+            "fallback_rate": _rate(compare_fallback_runs, compare_runs),
+            "fallback_reasons": dict(compare_fallback_reasons),
+            "subtask_p50_ms": _percentile(compare_subtask_durations, 0.5),
+            "subtask_p95_ms": _percentile(compare_subtask_durations, 0.95),
+            "merge_p50_ms": _percentile(compare_merge_durations, 0.5),
+            "merge_p95_ms": _percentile(compare_merge_durations, 0.95),
+            "finding_count": compare_finding_count,
+            "dedup_count": compare_dedup_count,
+            "conflict_count": compare_conflict_count,
         },
     }

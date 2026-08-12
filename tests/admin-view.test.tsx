@@ -271,6 +271,7 @@ describe("AdminView 管理信息语义", () => {
         tools: { calls: 30, successful: 28, success_rate: 0.9333, p50_ms: 88, p95_ms: 610, retried_calls: 2, timeouts: 1, permission_denied: 0, statuses: { completed: 28 }, error_categories: { timeout: 1 }, distribution: [{ tool: "search_library", calls: 20 }] },
         mcp: { calls: 5, successful: 4, success_rate: 0.8, servers: [{ id: "academic", display_name: "学术搜索", enabled: true, health_status: "healthy", consecutive_failures: 0 }] },
         embedding: { configured: true, provider: "ollama", model: "qwen3-embedding:0.6b", dimensions: 1024, revision: 1, total: 5, ready: 4, ready_current: 3, stale: 1, unavailable: 0, failed: 0, fallback_runs: 2, fallback_reasons: { query_dimension_mismatch: 2 } },
+        parallel_compare: { runs: 4, planned_subtasks: 10, succeeded_subtasks: 8, failed_subtasks: 2, timeout_subtasks: 1, success_rate: 0.8, partial_runs: 1, partial_rate: 0.25, fallback_runs: 1, fallback_rate: 0.25, fallback_reasons: { all_subtasks_failed: 1 }, subtask_p50_ms: 180, subtask_p95_ms: 880, merge_p50_ms: 45, merge_p95_ms: 120, finding_count: 28, dedup_count: 7, conflict_count: 2 },
         privacy: { content_collected: false, identifiers_collected: false },
         debug_memory_text: "绝密记忆不应展示",
       })),
@@ -296,6 +297,10 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getByText("qwen3-embedding:0.6b · 1024 维 · 修订 1")).toBeInTheDocument();
     expect(screen.getByText("3 / 4")).toBeInTheDocument();
     expect(screen.getByText(/查询向量维度不一致 2/)).toBeInTheDocument();
+    const comparePanel = screen.getByRole("heading", { name: "跨文献并行比较" }).closest("article")!;
+    expect(within(comparePanel).getByText("80.0%")).toBeInTheDocument();
+    expect(within(comparePanel).getByText("28 / 7 / 2")).toBeInTheDocument();
+    expect(within(comparePanel).getByText(/全部子任务失败 1/)).toBeInTheDocument();
     expect(screen.getByText(/可用 · 3 个已发现工具/)).toBeInTheDocument();
     expect(screen.queryByText("绝密记忆不应展示")).not.toBeInTheDocument();
 

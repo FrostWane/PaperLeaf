@@ -96,4 +96,37 @@ describe("持久化对话真实 API", () => {
     expect(requests).toBe(1);
     expect(connections).toEqual(["connected"]);
   });
+
+  it("将并行比较子任务映射为隔离活动，并把超时标记为未完成", async () => {
+    server.use(
+      http.get(`${API_BASE_URL}/agent/runs/r1/events`, () => new HttpResponse(
+        [
+          'id: 1\nevent: node_started\ndata: {"sequence":1,"event":"node_started","data":{"node":"plan_comparison","subtask_total":2,"objective":"不得展示"}}\n\n',
+          'id: 2\nevent: node_started\ndata: {"sequence":2,"event":"node_started","data":{"node":"compare_subtask","subtask_id":"s1","ordinal":1,"total":2,"paper_count":2,"paper_ids":["private"]}}\n\n',
+          'id: 3\nevent: node_started\ndata: {"sequence":3,"event":"node_started","data":{"node":"compare_subtask","subtask_id":"s2","ordinal":2,"total":2}}\n\n',
+          'id: 4\nevent: node_finished\ndata: {"sequence":4,"event":"node_finished","data":{"node":"compare_subtask","subtask_id":"s1","ordinal":1,"total":2,"status":"completed","finding_count":4,"duration_ms":120}}\n\n',
+          'id: 5\nevent: node_finished\ndata: {"sequence":5,"event":"node_finished","data":{"node":"compare_subtask","subtask_id":"s2","ordinal":2,"total":2,"status":"timeout","error_category":"provider","duration_ms":500}}\n\n',
+          'id: 6\nevent: node_finished\ndata: {"sequence":6,"event":"node_finished","data":{"node":"merge_comparison","status":"partial","partial_failure":true,"succeeded_subtasks":1,"failed_subtasks":1}}\n\n',
+          'id: 7\nevent: run_finished\ndata: {"sequence":7,"event":"run_finished","data":{"status":"completed"}}\n\n',
+        ].join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      )),
+      http.get(`${API_BASE_URL}/agent/runs/r1`, () => HttpResponse.json(runPayload("completed"))),
+    );
+    const activities: Array<{ key: string; status: string; kind?: string; rawStatus?: string; findingCount?: number }> = [];
+
+    await realDataSource.subscribeAgentRun("r1", { onActivity: (activity) => activities.push(activity) });
+
+    expect(activities.filter((item) => item.key === "subtask:s1")).toMatchObject([
+      { status: "running", kind: "comparison_subtask" },
+      { status: "completed", kind: "comparison_subtask", findingCount: 4 },
+    ]);
+    expect(activities.filter((item) => item.key === "subtask:s2")).toMatchObject([
+      { status: "running", kind: "comparison_subtask" },
+      { status: "failed", kind: "comparison_subtask", rawStatus: "timeout" },
+    ]);
+    expect(activities.at(-1)).toMatchObject({ key: "comparison:merge", status: "completed", kind: "comparison_merge", rawStatus: "partial" });
+    expect(JSON.stringify(activities)).not.toContain("不得展示");
+    expect(JSON.stringify(activities)).not.toContain("private");
+  });
 });

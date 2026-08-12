@@ -423,7 +423,7 @@ function dispatchAgentEvent(event: AgentEvent, handlers: AgentEventSubscriptionH
   };
   handlers.onEvent?.(event);
   if (event.type === "node_started" || event.type === "node_finished") {
-    const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : ((event.data as Record<string, unknown>)?.status === "failed" ? "failed" : "completed"));
+    const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : finishedActivityStatus(event.data));
     if (activity) handlers.onActivity?.(activity);
   }
   if (event.type === "tool_started" || event.type === "tool_finished") {
@@ -580,7 +580,35 @@ const nodeLabels: Record<string, string> = {
   suppress_unsupported_answer: "拦截无依据回答",
   finalize: "完成证据回答",
   abstain: "说明证据不足",
+  plan_comparison: "拆分跨文献比较",
+  compare_subtask: "并行整理论文证据",
+  merge_comparison: "合并并去重证据",
 };
+
+const failedActivityStatuses = new Set(["failed", "timeout", "cancelled", "rejected"]);
+const comparisonNodes = new Set(["plan_comparison", "compare_subtask", "merge_comparison"]);
+const safeCompareFallbackReasons = new Set([
+  "disabled", "skill_not_supported", "scope_too_small", "scope_too_large", "invalid_plan",
+  "budget_exceeded", "all_subtasks_failed", "no_merged_evidence", "cancelled", "timeout",
+  "lease_lost", "internal_error",
+]);
+
+function finishedActivityStatus(data: unknown): AgentActivity["status"] {
+  if (!data || typeof data !== "object") return "completed";
+  return failedActivityStatuses.has(String((data as Record<string, unknown>).status ?? "")) ? "failed" : "completed";
+}
+
+function boundedActivityNumber(value: unknown, maximum: number): number | undefined {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  return Math.min(maximum, Math.max(0, Math.trunc(number)));
+}
+
+function safeFallbackReason(value: unknown): string | undefined {
+  const reason = String(value ?? "").trim();
+  if (!reason) return undefined;
+  return safeCompareFallbackReasons.has(reason) ? reason : "other";
+}
 
 function mapAgentActivity(data: unknown, status: AgentActivity["status"]): AgentActivity | null {
   if (!data || typeof data !== "object") return null;
@@ -588,12 +616,58 @@ function mapAgentActivity(data: unknown, status: AgentActivity["status"]): Agent
   const node = String(item.node ?? "");
   if (!node) return null;
   const step = Number(item.step ?? 0);
+  if (comparisonNodes.has(node)) {
+    const rawStatus = String(item.status ?? (status === "running" ? "running" : "completed"));
+    const safeStatus = failedActivityStatuses.has(rawStatus) ? "failed" : status;
+    if (node === "compare_subtask") {
+      const subtaskId = String(item.subtask_id ?? "");
+      const ordinal = boundedActivityNumber(item.ordinal, 3);
+      const total = boundedActivityNumber(item.total, 3);
+      if (!/^s[1-3]$/.test(subtaskId) || !ordinal || !total) return null;
+      return {
+        key: `subtask:${subtaskId}`,
+        node,
+        label: nodeLabels[node],
+        step: 10 + ordinal,
+        status: safeStatus,
+        kind: "comparison_subtask",
+        rawStatus,
+        subtaskId,
+        ordinal,
+        total,
+        paperCount: boundedActivityNumber(item.paper_count, 10),
+        findingCount: boundedActivityNumber(item.finding_count, 100),
+        durationMs: boundedActivityNumber(item.duration_ms, 86_400_000),
+      };
+    }
+    return {
+      key: node === "plan_comparison" ? "comparison:plan" : "comparison:merge",
+      node,
+      label: nodeLabels[node],
+      step: node === "plan_comparison" ? 9 : 14,
+      status: safeStatus,
+      kind: node === "plan_comparison" ? "comparison_plan" : "comparison_merge",
+      rawStatus,
+      total: boundedActivityNumber(item.subtask_total ?? item.total, 3),
+      findingCount: boundedActivityNumber(item.finding_count, 300),
+      succeededSubtasks: boundedActivityNumber(item.succeeded_subtasks, 3),
+      failedSubtasks: boundedActivityNumber(item.failed_subtasks, 3),
+      timeoutSubtasks: boundedActivityNumber(item.timeout_subtasks, 3),
+      dedupCount: boundedActivityNumber(item.dedup_count, 10_000),
+      conflictCount: boundedActivityNumber(item.conflict_count, 10_000),
+      partialFailure: item.partial_failure === true || rawStatus === "partial",
+      fallbackToV1: item.fallback_to_v1 === true,
+      fallbackReason: safeFallbackReason(item.fallback_reason),
+      durationMs: boundedActivityNumber(item.duration_ms, 86_400_000),
+    };
+  }
   return {
     key: `${step}:${node}`,
     node,
     label: nodeLabels[node] ?? "处理研究任务",
     step,
     status,
+    kind: "node",
     durationMs: item.duration_ms === undefined ? undefined : Number(item.duration_ms),
   };
 }
@@ -626,6 +700,7 @@ function mapToolActivity(data: unknown, status: AgentActivity["status"]): AgentA
     label: toolLabels[tool] ?? "调用科研工具",
     step: 100 + callIndex,
     status,
+    kind: "tool",
     durationMs: item.duration_ms === undefined ? undefined : Number(item.duration_ms),
   };
 }
@@ -721,6 +796,7 @@ export async function getAdminHarnessMetrics(window: "24h" | "7d" | "30d" = "24h
   const tools = (raw.tools ?? {}) as Record<string, unknown>;
   const mcp = (raw.mcp ?? {}) as Record<string, unknown>;
   const embedding = (raw.embedding ?? {}) as Record<string, unknown>;
+  const parallelCompare = (raw.parallel_compare ?? {}) as Record<string, unknown>;
   const privacy = (raw.privacy ?? {}) as Record<string, unknown>;
   const bands = (context.reference_confidence_bands ?? {}) as Record<string, unknown>;
   const optionalNumber = (value: unknown): number | undefined => typeof value === "number" ? value : undefined;
@@ -761,6 +837,26 @@ export async function getAdminHarnessMetrics(window: "24h" | "7d" | "30d" = "24h
       failed: Number(embedding.failed ?? 0),
       fallbackRuns: Number(embedding.fallback_runs ?? 0),
       fallbackReasons: numberMap(embedding.fallback_reasons),
+    },
+    parallelCompare: {
+      runs: Number(parallelCompare.runs ?? 0),
+      plannedSubtasks: Number(parallelCompare.planned_subtasks ?? 0),
+      succeededSubtasks: Number(parallelCompare.succeeded_subtasks ?? 0),
+      failedSubtasks: Number(parallelCompare.failed_subtasks ?? 0),
+      timeoutSubtasks: Number(parallelCompare.timeout_subtasks ?? 0),
+      successRate: Number(parallelCompare.success_rate ?? 0),
+      partialRuns: Number(parallelCompare.partial_runs ?? 0),
+      partialRate: Number(parallelCompare.partial_rate ?? 0),
+      fallbackRuns: Number(parallelCompare.fallback_runs ?? 0),
+      fallbackRate: Number(parallelCompare.fallback_rate ?? 0),
+      fallbackReasons: numberMap(parallelCompare.fallback_reasons),
+      subtaskP50Ms: optionalNumber(parallelCompare.subtask_p50_ms),
+      subtaskP95Ms: optionalNumber(parallelCompare.subtask_p95_ms),
+      mergeP50Ms: optionalNumber(parallelCompare.merge_p50_ms),
+      mergeP95Ms: optionalNumber(parallelCompare.merge_p95_ms),
+      findingCount: Number(parallelCompare.finding_count ?? 0),
+      dedupCount: Number(parallelCompare.dedup_count ?? 0),
+      conflictCount: Number(parallelCompare.conflict_count ?? 0),
     },
     privacy: { contentCollected: privacy.content_collected === true, identifiersCollected: privacy.identifiers_collected === true },
   };
@@ -1393,7 +1489,7 @@ export const realDataSource: PaperLeafDataSource = {
     try {
       for await (const event of readAgentStream(r)) {
         if (event.type === "node_started" || event.type === "node_finished") {
-          const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : ((event.data as Record<string, unknown>)?.status === "failed" ? "failed" : "completed"));
+          const activity = mapAgentActivity(event.data, event.type === "node_started" ? "running" : finishedActivityStatus(event.data));
           if (activity) { activities = upsertActivity(activities, activity); handlers?.onActivity?.(activity); }
         }
         if (event.type === "tool_started" || event.type === "tool_finished") {

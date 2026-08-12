@@ -72,6 +72,7 @@ const emptyHarnessMetrics: AdminHarnessMetrics = {
   tools: { calls: 0, successful: 0, successRate: 0, retriedCalls: 0, timeouts: 0, permissionDenied: 0, statuses: {}, distribution: [], errorCategories: {} },
   mcp: { calls: 0, successful: 0, successRate: 0, servers: [] },
   embedding: { configured: false, total: 0, ready: 0, readyCurrent: 0, stale: 0, unavailable: 0, failed: 0, fallbackRuns: 0, fallbackReasons: {} },
+  parallelCompare: { runs: 0, plannedSubtasks: 0, succeededSubtasks: 0, failedSubtasks: 0, timeoutSubtasks: 0, successRate: 0, partialRuns: 0, partialRate: 0, fallbackRuns: 0, fallbackRate: 0, fallbackReasons: {}, findingCount: 0, dedupCount: 0, conflictCount: 0 },
   privacy: { contentCollected: false, identifiersCollected: false },
 };
 const emptyMcpServers: AdminMcpServers = { featureEnabled: false, servers: [] };
@@ -107,6 +108,22 @@ const embeddingFallbackLabels: Record<string, string> = {
   query_dimension_mismatch: "查询向量维度不一致",
   stored_dimension_mismatch: "已存向量维度不一致",
   vector_query_failed: "向量查询失败",
+};
+
+const compareFallbackLabels: Record<string, string> = {
+  disabled: "功能关闭",
+  skill_not_supported: "任务不适用",
+  scope_too_small: "范围过小",
+  scope_too_large: "范围过大",
+  invalid_plan: "计划无效",
+  budget_exceeded: "预算超限",
+  all_subtasks_failed: "全部子任务失败",
+  no_merged_evidence: "无合并证据",
+  cancelled: "运行取消",
+  timeout: "运行超时",
+  lease_lost: "工作租约失效",
+  internal_error: "内部错误",
+  other: "其他原因",
 };
 
 const mcpStatusLabels: Record<string, string> = {
@@ -450,6 +467,7 @@ export function AdminView() {
           <article className="rag-panel"><h3>Skill 路由</h3>{harnessMetrics.skills.distribution.length === 0 ? <p className="rag-empty">当前窗口还没有 Skill 路由样本。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="Skill 路由分布"><thead><tr><th>Skill</th><th>运行</th><th>终态完成率</th></tr></thead><tbody>{harnessMetrics.skills.distribution.map((item) => <tr key={item.skill}><td>{skillLabels[item.skill] ?? item.skill}</td><td>{item.runs}</td><td>{item.terminalRuns > 0 ? percent(item.completionRate) : "—"}</td></tr>)}</tbody></table></div>}</article>
           <article className="rag-panel"><h3>工具调用</h3>{harnessMetrics.tools.distribution.length === 0 ? <p className="rag-empty">当前窗口还没有工具调用。</p> : <div className="rag-table-wrap"><table className="rag-table" aria-label="工具调用分布"><thead><tr><th>工具</th><th>调用</th></tr></thead><tbody>{harnessMetrics.tools.distribution.slice(0, 8).map((item) => <tr key={item.tool}><td>{toolLabels[item.tool] ?? item.tool}</td><td>{item.calls}</td></tr>)}</tbody></table></div>}<dl className="harness-stat-list compact"><div><dt>P50 / P95</dt><dd>{duration(harnessMetrics.tools.p50Ms)} / {duration(harnessMetrics.tools.p95Ms)}</dd></div><div><dt>重试 / 超时 / 权限拒绝</dt><dd>{harnessMetrics.tools.retriedCalls} / {harnessMetrics.tools.timeouts} / {harnessMetrics.tools.permissionDenied}</dd></div></dl></article>
           <article className="rag-panel"><h3>向量索引契约</h3><dl className="harness-stat-list"><div><dt>当前模型</dt><dd>{harnessMetrics.embedding.configured ? `${harnessMetrics.embedding.model} · ${harnessMetrics.embedding.dimensions} 维 · 修订 ${harnessMetrics.embedding.revision}` : "未配置"}</dd></div><div><dt>当前可用 / 全部就绪</dt><dd>{harnessMetrics.embedding.readyCurrent} / {harnessMetrics.embedding.ready}</dd></div><div><dt>过期 / 不可用 / 失败</dt><dd>{harnessMetrics.embedding.stale} / {harnessMetrics.embedding.unavailable} / {harnessMetrics.embedding.failed}</dd></div><div><dt>关键词降级</dt><dd>{harnessMetrics.embedding.fallbackRuns} 次</dd></div></dl>{Object.keys(harnessMetrics.embedding.fallbackReasons).length > 0 && <p className="rag-empty">{Object.entries(harnessMetrics.embedding.fallbackReasons).map(([reason, count]) => `${embeddingFallbackLabels[reason] ?? "其他向量异常"} ${count}`).join(" · ")}</p>}</article>
+          <article className="rag-panel"><h3>跨文献并行比较</h3>{harnessMetrics.parallelCompare.runs === 0 ? <p className="rag-empty">当前窗口还没有并行跨文献比较样本。</p> : <><dl className="harness-stat-list"><div><dt>运行 / 子任务</dt><dd>{harnessMetrics.parallelCompare.runs} / {harnessMetrics.parallelCompare.plannedSubtasks}</dd></div><div><dt>子任务成功率</dt><dd>{percent(harnessMetrics.parallelCompare.successRate)}</dd></div><div><dt>部分完成 / 回退</dt><dd>{harnessMetrics.parallelCompare.partialRuns} / {harnessMetrics.parallelCompare.fallbackRuns}</dd></div><div><dt>子任务 P50 / P95</dt><dd>{duration(harnessMetrics.parallelCompare.subtaskP50Ms)} / {duration(harnessMetrics.parallelCompare.subtaskP95Ms)}</dd></div><div><dt>合并 P50 / P95</dt><dd>{duration(harnessMetrics.parallelCompare.mergeP50Ms)} / {duration(harnessMetrics.parallelCompare.mergeP95Ms)}</dd></div><div><dt>候选证据 / 去重 / 冲突</dt><dd>{harnessMetrics.parallelCompare.findingCount} / {harnessMetrics.parallelCompare.dedupCount} / {harnessMetrics.parallelCompare.conflictCount}</dd></div></dl>{Object.keys(harnessMetrics.parallelCompare.fallbackReasons).length > 0 && <p className="rag-empty">{Object.entries(harnessMetrics.parallelCompare.fallbackReasons).map(([reason, count]) => `${compareFallbackLabels[reason] ?? compareFallbackLabels.other} ${count}`).join(" · ")}</p>}</>}</article>
         </div>}
       </section>
       <section className="admin-section"><div className="section-bar"><div><span className="eyebrow">只读学术搜索</span><h2>MCP 服务</h2><small>仅允许服务端白名单中的 OpenAlex 与 Semantic Scholar 元数据工具。</small></div><button type="button" className="secondary-button" disabled={harnessLoading} onClick={() => void refreshHarness()}><RefreshCw size={15} />刷新状态</button></div>

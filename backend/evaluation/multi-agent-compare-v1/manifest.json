@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-multi-agent-compare-v1",
+  "version": "2026-08-12-draft.1",
+  "annotation_status": "draft",
+  "frozen": false,
+  "quality_claims_allowed": false,
+  "source_dataset_id": "paperleaf-rag-v1",
+  "source_manifest_sha256": "8ba28472aef97056748d4d1ea1a815d8d3cce6d4fe8239ba2da53f7f27ee6d1d",
+  "source_cases_sha256": "5dc0144ea02b2536a7921ee399126c10117497d865f814b3ef6682759c953310",
+  "case_count": 48,
+  "complex_case_count": 36,
+  "control_case_count": 12,
+  "category_counts": {
+    "composite_claim_verification": 12,
+    "prompt_injection_control": 3,
+    "research_trajectory": 8,
+    "scope_violation_control": 2,
+    "single_paper_control": 4,
+    "systematic_compare": 16,
+    "unanswerable_control": 3
+  },
+  "split_counts": {"dev": 8, "test": 40},
+  "thresholds": {
+    "minimum_quality_delta": 0.05,
+    "minimum_paper_coverage_delta": 0.05,
+    "maximum_quality_regression": 0.02,
+    "minimum_human_net_win": 0.10,
+    "minimum_citation_page_accuracy": 0.95,
+    "maximum_unanswerable_wrong_rate": 0.05,
+    "minimum_complex_completion_rate": 0.95,
+    "maximum_cost_ratio": 2.0
+  }
+}

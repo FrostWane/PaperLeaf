@@ -146,6 +146,51 @@ function phaseLabel(status: string | undefined): string {
   return "等待";
 }
 
+const comparisonFallbackLabels: Record<string, string> = {
+  disabled: "并行比较已关闭",
+  skill_not_supported: "当前任务不适合并行比较",
+  scope_too_small: "文献范围较小",
+  scope_too_large: "文献范围过大",
+  invalid_plan: "比较计划未通过校验",
+  budget_exceeded: "本轮预算不足",
+  all_subtasks_failed: "并行分析均未完成",
+  no_merged_evidence: "未合并出可用证据",
+  cancelled: "并行分析已取消",
+  timeout: "并行分析超时",
+  lease_lost: "后台任务已由其他工作进程接管",
+  internal_error: "并行分析暂时不可用",
+  other: "并行分析暂时不可用",
+};
+
+function comparisonActivityText(activity: AgentActivity): string {
+  if (activity.kind === "comparison_plan") {
+    if (activity.status === "running") return "正在拆分跨文献比较";
+    if (activity.status === "failed") return "比较计划未完成，将使用标准检索";
+    return activity.total ? `已拆分为 ${activity.total} 个只读分析任务` : "跨文献比较计划已完成";
+  }
+  if (activity.kind === "comparison_subtask") {
+    const ordinal = activity.ordinal ?? 0;
+    const total = activity.total ?? 0;
+    const prefix = `第 ${ordinal}/${total} 组`;
+    if (activity.status === "running") return `${prefix}正在分析${activity.paperCount ? ` · ${activity.paperCount} 篇文献` : ""}`;
+    if (activity.rawStatus === "timeout") return `${prefix}分析超时，将基于其余证据继续`;
+    if (activity.rawStatus === "cancelled") return `${prefix}已取消`;
+    if (activity.status === "failed") return `${prefix}未完成，将基于其余证据继续`;
+    return `${prefix}已整理${activity.findingCount === undefined ? "候选证据" : ` ${activity.findingCount} 条候选证据`}`;
+  }
+  if (activity.kind === "comparison_merge") {
+    if (activity.fallbackToV1) {
+      const reason = comparisonFallbackLabels[activity.fallbackReason ?? "other"] ?? comparisonFallbackLabels.other;
+      return `${reason}，已切换为标准检索`;
+    }
+    if (activity.status === "running") return "正在合并并去重证据";
+    if (activity.status === "failed") return "证据合并未完成，正在使用标准检索";
+    if (activity.partialFailure) return "部分分析未完成，回答仅使用已完成并核验的证据";
+    return `证据合并完成${activity.dedupCount ? ` · 去重 ${activity.dedupCount} 条` : ""}${activity.conflictCount ? ` · 保留 ${activity.conflictCount} 组冲突` : ""}`;
+  }
+  return activity.label;
+}
+
 function runStatusText(run: AgentRunSnapshot | null, connection: "connected" | "reconnecting"): string {
   if (connection === "reconnecting" && isActiveRun(run)) return "正在恢复连接…";
   if (!run) return "";
@@ -547,6 +592,9 @@ export function ChatWorkspace({
     generation: activities.filter((item) => item.node.includes("generate")).at(-1)?.status,
     validation: activities.filter((item) => item.node.includes("validate") || item.node.includes("grade")).at(-1)?.status,
   };
+  const comparisonActivities = activities
+    .filter((item) => item.kind?.startsWith("comparison_"))
+    .sort((left, right) => left.step - right.step);
 
   return (
     <div className={compact ? "chat-workspace compact" : "chat-workspace"} data-active-run={active || creatingSession ? "true" : "false"}>
@@ -595,6 +643,15 @@ export function ChatWorkspace({
               <li data-status={phaseNodes.generation}><span>2</span>生成 <small>{phaseLabel(phaseNodes.generation)}</small></li>
               <li data-status={phaseNodes.validation}><span>3</span>核验 <small>{phaseLabel(phaseNodes.validation)}</small></li>
             </ol>}
+            {comparisonActivities.length > 0 && <section className="chat-parallel-status" aria-label="并行跨文献比较状态">
+              <div><strong>并行跨文献比较</strong><small>进度摘要</small></div>
+              <ol aria-live="off">
+                {comparisonActivities.map((activity) => <li key={activity.key} data-status={activity.status}>
+                  <span aria-hidden="true">{activity.status === "completed" ? "✓" : activity.status === "failed" ? "!" : "·"}</span>
+                  <span>{comparisonActivityText(activity)}</span>
+                </li>)}
+              </ol>
+            </section>}
             {currentRun.error?.includes("暂时无法恢复") && <button type="button" className="text-button" onClick={() => void recoverRun()}><RotateCw size={13} />重新连接运行状态</button>}
             {currentRun.status === "failed" && <button type="button" className="text-button" onClick={() => { setRun(null); textareaRef.current?.focus(); }}><RotateCw size={13} />重新编辑问题</button>}
           </div>}

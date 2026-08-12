@@ -233,6 +233,60 @@ describe("ChatWorkspace", () => {
     expect(progressiveChunkSize(20)).toBe(1);
   });
 
+  it("紧凑展示并行跨文献比较、部分失败与安全回退，不展示内部任务内容", async () => {
+    const session = activeSession();
+    let streamHandlers: Parameters<typeof demoDataSource.subscribeAgentRun>[1] | undefined;
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValue([session]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      getAgentRun: vi.fn().mockResolvedValue(activeRun("")),
+      subscribeAgentRun: vi.fn(async (_runId, handlers, options) => {
+        streamHandlers = handlers;
+        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      }),
+    };
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+    await waitFor(() => expect(streamHandlers).toBeDefined());
+
+    act(() => {
+      streamHandlers?.onActivity?.({ key: "comparison:plan", node: "plan_comparison", label: "拆分跨文献比较", step: 9, status: "completed", kind: "comparison_plan", total: 2 });
+      streamHandlers?.onActivity?.({ key: "subtask:s1", node: "compare_subtask", label: "并行整理论文证据", step: 11, status: "completed", kind: "comparison_subtask", subtaskId: "s1", ordinal: 1, total: 2, findingCount: 4 });
+      streamHandlers?.onActivity?.({ key: "subtask:s2", node: "compare_subtask", label: "并行整理论文证据", step: 12, status: "failed", kind: "comparison_subtask", rawStatus: "timeout", subtaskId: "s2", ordinal: 2, total: 2 });
+      streamHandlers?.onActivity?.({ key: "comparison:merge", node: "merge_comparison", label: "合并并去重证据", step: 14, status: "completed", kind: "comparison_merge", partialFailure: true });
+    });
+
+    const status = await screen.findByRole("region", { name: "并行跨文献比较状态" });
+    expect(within(status).getByText("已拆分为 2 个只读分析任务")).toBeInTheDocument();
+    expect(within(status).getByText("第 1/2 组已整理 4 条候选证据")).toBeInTheDocument();
+    expect(within(status).getByText("第 2/2 组分析超时，将基于其余证据继续")).toBeInTheDocument();
+    expect(within(status).getByText("部分分析未完成，回答仅使用已完成并核验的证据")).toBeInTheDocument();
+    expect(status).toHaveTextContent("进度摘要");
+    expect(status).not.toHaveTextContent("chunk");
+
+    act(() => streamHandlers?.onActivity?.({ key: "comparison:merge", node: "merge_comparison", label: "合并并去重证据", step: 14, status: "completed", kind: "comparison_merge", fallbackToV1: true, fallbackReason: "all_subtasks_failed" }));
+    expect(await within(status).findByText("并行分析均未完成，已切换为标准检索")).toBeInTheDocument();
+  });
+
+  it("普通单篇问答不展示并行比较状态", async () => {
+    const session = activeSession();
+    let streamHandlers: Parameters<typeof demoDataSource.subscribeAgentRun>[1] | undefined;
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValue([session]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      getAgentRun: vi.fn().mockResolvedValue(activeRun("")),
+      subscribeAgentRun: vi.fn(async (_runId, handlers, options) => {
+        streamHandlers = handlers;
+        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      }),
+    };
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+    await waitFor(() => expect(streamHandlers).toBeDefined());
+    act(() => streamHandlers?.onActivity?.({ key: "1:retrieve_library", node: "retrieve_library", label: "检索文献证据", step: 1, status: "running", kind: "node" }));
+    expect(screen.queryByRole("region", { name: "并行跨文献比较状态" })).not.toBeInTheDocument();
+  });
+
   it("用户消息和 Agent 回复使用明确方向，并统一展示可回读引用", async () => {
     const session: ChatSession = { id: "s-chat", title: "对齐测试", type: "library", createdAt, updatedAt: createdAt };
     const citation = { id: "citation-1", paperId: "p1", paperTitle: "Attention Is All You Need", page: 4, chunkId: "p1:p4:c1", quote: "The encoder maps an input sequence to representations.", href: "/library/p1?page=4" };

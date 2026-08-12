@@ -154,6 +154,21 @@ export interface AgentActivity {
   step: number;
   status: "running" | "completed" | "failed";
   durationMs?: number;
+  kind?: "node" | "tool" | "comparison_plan" | "comparison_subtask" | "comparison_merge";
+  rawStatus?: string;
+  subtaskId?: string;
+  ordinal?: number;
+  total?: number;
+  paperCount?: number;
+  findingCount?: number;
+  succeededSubtasks?: number;
+  failedSubtasks?: number;
+  timeoutSubtasks?: number;
+  dedupCount?: number;
+  conflictCount?: number;
+  partialFailure?: boolean;
+  fallbackToV1?: boolean;
+  fallbackReason?: string;
 }
 
 export type PaperTranslationStatus = "queued" | "running" | "partial" | "completed" | "failed" | "cancelled";
@@ -451,6 +466,26 @@ export interface AdminHarnessMetrics {
     failed: number;
     fallbackRuns: number;
     fallbackReasons: Record<string, number>;
+  };
+  parallelCompare: {
+    runs: number;
+    plannedSubtasks: number;
+    succeededSubtasks: number;
+    failedSubtasks: number;
+    timeoutSubtasks: number;
+    successRate: number;
+    partialRuns: number;
+    partialRate: number;
+    fallbackRuns: number;
+    fallbackRate: number;
+    fallbackReasons: Record<string, number>;
+    subtaskP50Ms?: number;
+    subtaskP95Ms?: number;
+    mergeP50Ms?: number;
+    mergeP95Ms?: number;
+    findingCount: number;
+    dedupCount: number;
+    conflictCount: number;
   };
   privacy: { contentCollected: boolean; identifiersCollected: boolean };
 }

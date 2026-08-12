@@ -839,6 +839,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .chat-run-state li[data-status="running"] > span { border-color: var(--blue-line); background: var(--blue-soft); color: var(--blue-ink); }
 .chat-run-state li[data-status="completed"] > span { border-color: var(--sage-line); background: var(--sage-soft); color: var(--sage-ink); }
 .chat-run-state .text-button { min-height: 40px; margin-top: 8px; }
+.chat-parallel-status { margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--border); }
+.chat-parallel-status > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.chat-parallel-status > div strong { color: var(--ink); font-size: 13px; font-weight: 650; }
+.chat-parallel-status > div small { color: var(--quiet); font-size: 12px; }
+.chat-parallel-status ol { display: grid; grid-template-columns: 1fr !important; gap: 5px !important; margin-top: 9px !important; }
+.chat-parallel-status li { min-height: 32px; grid-template-columns: 22px 1fr !important; gap: 7px !important; padding: 3px 0 !important; color: var(--muted); font-size: 12px !important; }
+.chat-parallel-status li > span:first-child { grid-row: auto !important; width: 20px !important; height: 20px !important; border: 1px solid var(--blue-line); border-radius: 50%; background: var(--blue-soft); color: var(--blue-ink); font-family: var(--font-mono); font-size: 11px !important; }
+.chat-parallel-status li[data-status="completed"] > span:first-child { border-color: var(--sage-line); background: var(--sage-soft); color: var(--sage-ink); }
+.chat-parallel-status li[data-status="failed"] > span:first-child { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-ink); }
 .chat-pending-action { display: block !important; margin-top: 12px; padding: 12px; border: 1px solid var(--blue-line); background: var(--blue-soft); color: var(--ink-soft) !important; }
 .chat-pending-action strong, .chat-pending-action p, .chat-pending-action > span { display: block; }
 .chat-pending-action p { margin: 5px 0 9px; line-height: 1.55; }
