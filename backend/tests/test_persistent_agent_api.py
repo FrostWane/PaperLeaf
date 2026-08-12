@@ -77,9 +77,7 @@ def test_pdf_selection_accepts_text_layer_variants_and_rejects_other_page(
                     "paper_id": "selection-paper",
                     "physical_page": 1,
                     "selected_text": invalid_text,
-                    "selected_text_hash": hashlib.sha256(
-                        invalid_text.encode("utf-8")
-                    ).hexdigest(),
+                    "selected_text_hash": hashlib.sha256(invalid_text.encode("utf-8")).hexdigest(),
                 },
             },
         )
@@ -115,6 +113,67 @@ def _login(client: TestClient) -> str:
     csrf = client.cookies.get("paperleaf_csrf")
     assert csrf
     return csrf
+
+
+def test_api_freezes_parallel_compare_for_multi_paper_summary(tmp_path) -> None:
+    config = replace(
+        settings,
+        mode="test",
+        local_storage_path=tmp_path,
+        bootstrap_admin_email="admin@example.com",
+        bootstrap_admin_password="admin-password-123",
+        skills_enabled=True,
+        multi_agent_enabled=True,
+        multi_agent_token_budget=3072,
+    )
+    repository = MemoryRepository(config.session_secret)
+    app = create_app(config, repository=repository, storage=LocalObjectStorage(tmp_path))
+    app.state.services.agent_graph = ResultGraph()
+
+    with TestClient(app) as client:
+        csrf = _login(client)
+        user = client.get("/api/v1/auth/me").json()
+        for index in range(1, 4):
+            asyncio.run(
+                repository.create_paper(
+                    PaperRecord(
+                        id=f"compare-paper-{index}",
+                        owner_id=user["id"],
+                        title=f"Compare paper {index}",
+                        authors=[],
+                        year=2026,
+                        abstract=None,
+                        doi=None,
+                        arxiv_id=None,
+                        filename=f"compare-{index}.pdf",
+                        storage_key=f"{user['id']}/compare-{index}.pdf",
+                        mime_type="application/pdf",
+                        size_bytes=100,
+                        sha256=str(index) * 64,
+                        page_count=1,
+                        status=PaperStatus.ready,
+                    )
+                )
+            )
+        session = client.post(
+            "/api/v1/chat/sessions",
+            headers={"X-CSRF-Token": csrf},
+            json={"title": "多篇总结", "type": "library"},
+        )
+        assert session.status_code == 201
+        accepted = client.post(
+            f"/api/v1/chat/sessions/{session.json()['id']}/messages",
+            headers={
+                "X-CSRF-Token": csrf,
+                "Idempotency-Key": "multi-paper-summary-v2",
+            },
+            json={"content": "总结这三篇论文的方法和实验"},
+        )
+        assert accepted.status_code == 202
+        run = repository.agent_runs[accepted.json()["run_id"]]
+        assert run.orchestration_version == "compare_map_reduce_v2"
+        assert run.scope_snapshot["orchestration_version"] == "compare_map_reduce_v2"
+        assert run.scope_snapshot["harness"]["multi_agent_enabled"] is True
 
 
 def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
@@ -158,11 +217,14 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
             )
         )
 
-        assert client.post(
-            "/api/v1/chat/sessions",
-            headers={"X-CSRF-Token": csrf},
-            json={"title": "   ", "type": "library"},
-        ).status_code == 422
+        assert (
+            client.post(
+                "/api/v1/chat/sessions",
+                headers={"X-CSRF-Token": csrf},
+                json={"title": "   ", "type": "library"},
+            ).status_code
+            == 422
+        )
         session_response = client.post(
             "/api/v1/chat/sessions",
             headers={"X-CSRF-Token": csrf},
@@ -172,11 +234,14 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
         session_id = session_response.json()["id"]
 
         endpoint = f"/api/v1/chat/sessions/{session_id}/messages"
-        assert client.post(
-            endpoint,
-            headers={"X-CSRF-Token": csrf},
-            json={"content": "比较方法和实验"},
-        ).status_code == 422
+        assert (
+            client.post(
+                endpoint,
+                headers={"X-CSRF-Token": csrf},
+                json={"content": "比较方法和实验"},
+            ).status_code
+            == 422
+        )
         headers = {
             "X-CSRF-Token": csrf,
             "Idempotency-Key": "browser-message-1",
@@ -214,9 +279,7 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
         assert all_events.status_code == 200
         assert "event: message_delta" in all_events.text
         assert "event: run_finished" in all_events.text
-        persisted = asyncio.run(
-            repository.list_owned_agent_run_events(run_id, user["id"])
-        )
+        persisted = asyncio.run(repository.list_owned_agent_run_events(run_id, user["id"]))
         assert persisted is not None
         cursor = persisted[-2].sequence
         resumed = client.get(
@@ -233,9 +296,7 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
         assert "event: run_finished" in resumed.text
 
         interrupted_session = asyncio.run(
-            repository.create_chat_session(
-                user["id"], "导入确认", "library", None, None
-            )
+            repository.create_chat_session(user["id"], "导入确认", "library", None, None)
         )
         interrupted_submission = asyncio.run(
             repository.submit_chat_message(
@@ -252,11 +313,7 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
             repository.claim_agent_run_job(interrupted_submission.run.id)
         )
         assert interrupted_claim is not None
-        asyncio.run(
-            repository.start_agent_run(
-                interrupted_submission.run.id, interrupted_claim
-            )
-        )
+        asyncio.run(repository.start_agent_run(interrupted_submission.run.id, interrupted_claim))
         asyncio.run(
             repository.finish_agent_run(
                 interrupted_submission.run.id,
@@ -279,9 +336,7 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
                 claim_token=interrupted_claim,
             )
         )
-        interrupted_read = client.get(
-            f"/api/v1/agent/runs/{interrupted_submission.run.id}"
-        )
+        interrupted_read = client.get(f"/api/v1/agent/runs/{interrupted_submission.run.id}")
         assert interrupted_read.status_code == 200
         public_action = interrupted_read.json()["pending_action"]
         assert public_action["action_id"] == "approve-arxiv-1"
@@ -298,6 +353,4 @@ def test_persistent_chat_api_returns_202_and_replays_sse(tmp_path) -> None:
             repository.get_owned_agent_run(interrupted_submission.run.id, user["id"])
         )
         assert persisted_resume is not None
-        assert persisted_resume.scope_snapshot["resumed_action"]["action_id"] == (
-            "approve-arxiv-1"
-        )
+        assert persisted_resume.scope_snapshot["resumed_action"]["action_id"] == ("approve-arxiv-1")

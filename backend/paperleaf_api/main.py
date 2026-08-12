@@ -65,7 +65,7 @@ from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import Evidence
 from .rag.retrieval_quality import EvidenceQualityPolicy
-from .rag_observability import aggregate_rag_runs
+from .rag_observability import aggregate_rag_runs, classify_intent
 from .repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
@@ -424,6 +424,7 @@ def _agent_run_read(record: Any) -> AgentRunRead:
         session_id=record.session_id,
         status=record.status,
         cancel_requested=bool(getattr(record, "cancel_requested", False)),
+        orchestration_version=str(getattr(record, "orchestration_version", "single_agent_v1")),
         scope_snapshot=dict(getattr(record, "scope_snapshot", {}) or {}),
         context_snapshot=dict(getattr(record, "context_snapshot", {}) or {}),
         pending_action=pending_action,
@@ -630,9 +631,7 @@ def create_app(
             active=sum(bool(item.enabled) for item in records),
         )
 
-    @app.post(
-        "/api/v1/memories", response_model=MemoryRead, status_code=status.HTTP_201_CREATED
-    )
+    @app.post("/api/v1/memories", response_model=MemoryRead, status_code=status.HTTP_201_CREATED)
     async def create_memory(
         payload: MemoryCreate,
         user: Annotated[UserRecord, Depends(current_user)],
@@ -695,9 +694,7 @@ def create_app(
             changes["embedding"] = embedding
             changes["embedding_fingerprint"] = embedding_fingerprint
         try:
-            updated = await services.repository.update_owned_memory(
-                memory_id, user.id, **changes
-            )
+            updated = await services.repository.update_owned_memory(memory_id, user.id, **changes)
         except ValueError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         if not updated:
@@ -902,12 +899,8 @@ def create_app(
         tool_limit = 10000
         contract = configured_embedding_contract(config, services.model_router)
         runs, calls, memory, servers, embedding_counts = await asyncio.gather(
-            services.repository.list_agent_runs_for_observability(
-                since, limit=run_limit
-            ),
-            services.repository.list_agent_tool_calls_for_observability(
-                since, limit=tool_limit
-            ),
+            services.repository.list_agent_runs_for_observability(since, limit=run_limit),
+            services.repository.list_agent_tool_calls_for_observability(since, limit=tool_limit),
             services.repository.memory_observability_counts(),
             services.mcp_gateway.list_servers(),
             services.repository.embedding_contract_counts(
@@ -1484,9 +1477,10 @@ def create_app(
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "arXiv 暂时不可用") from exc
 
         excluded_ids = await services.repository.list_discovery_seen_arxiv_ids(user.id)
-        positive_feedback, negative_feedback = (
-            await services.repository.get_discovery_feedback_signals(user.id)
-        )
+        (
+            positive_feedback,
+            negative_feedback,
+        ) = await services.repository.get_discovery_feedback_signals(user.id)
         ranked, strategy = await collect_recommendations(
             profile,
             candidates,
@@ -2054,8 +2048,34 @@ def create_app(
                 "skills_enabled": config.skills_enabled,
                 "function_tools_enabled": config.function_tools_enabled,
                 "mcp_enabled": config.mcp_enabled,
+                "multi_agent_enabled": config.multi_agent_enabled,
+                "multi_agent_max_branches": config.multi_agent_max_branches,
+                "multi_agent_branch_timeout_seconds": (config.multi_agent_branch_timeout_seconds),
+                "multi_agent_total_timeout_seconds": (config.multi_agent_total_timeout_seconds),
+                "multi_agent_token_budget": config.multi_agent_token_budget,
             },
         }
+        frozen_intent = classify_intent(
+            payload.content,
+            scope=chat_session.type,
+            selected_paper_count=len(paper_ids),
+            web_enabled=bool(scope_snapshot["web_enabled"]),
+        )
+        frozen_skill = services.skill_registry.route(
+            payload.content,
+            intent=frozen_intent,
+            scope=chat_session.type,
+            web_enabled=bool(scope_snapshot["web_enabled"]),
+        ).manifest.name
+        scope_snapshot["orchestration_version"] = (
+            "compare_map_reduce_v2"
+            if config.multi_agent_enabled
+            and config.skills_enabled
+            and frozen_skill == "compare_papers"
+            and chat_session.type in {"collection", "library"}
+            and 3 <= len(paper_ids) <= 10
+            else "single_agent_v1"
+        )
         rate_limit = await services.runtime_store.acquire_rate_limit(
             "agent-submit",
             user.id,

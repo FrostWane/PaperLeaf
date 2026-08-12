@@ -280,6 +280,7 @@ class AgentRunRead(BaseModel):
     session_id: str
     status: Literal["pending", "running", "interrupted", "completed", "failed", "cancelled"]
     cancel_requested: bool = False
+    orchestration_version: str = "single_agent_v1"
     scope_snapshot: dict[str, Any] = Field(default_factory=dict)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     pending_action: Optional[dict[str, Any]] = None

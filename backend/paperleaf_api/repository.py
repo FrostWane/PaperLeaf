@@ -222,6 +222,7 @@ class AgentRunRecord:
     selected_skill: str | None = None
     skill_version: int | None = None
     harness_trace: dict = field(default_factory=dict)
+    orchestration_version: str = "single_agent_v1"
     user_message_id: str | None = None
     assistant_message_id: str | None = None
     request_hash: str | None = None
@@ -625,6 +626,7 @@ class Repository(Protocol):
     async def list_agent_runs_for_observability(
         self, since: datetime, *, limit: int = 5000
     ) -> list[AgentRunRecord | AgentRun]: ...
+    async def is_agent_claim_current(self, run_id: str, claim_token: str) -> bool: ...
     async def update_agent_context(
         self,
         run_id: str,
@@ -2040,6 +2042,9 @@ class MemoryRepository:
             session_id=session_id,
             thread_id=f"{user_id}:{session_id}:{run_id}",
             scope_snapshot=dict(scope_snapshot),
+            orchestration_version=str(
+                scope_snapshot.get("orchestration_version", "single_agent_v1")
+            ),
             user_message_id=user_message.id,
             assistant_message_id=assistant_message.id,
             request_hash=request_hash,
@@ -2172,6 +2177,9 @@ class MemoryRepository:
             and job.claimed_at
             and job.claimed_at >= now() - AGENT_JOB_LEASE
         )
+
+    async def is_agent_claim_current(self, run_id: str, claim_token: str) -> bool:
+        return self._agent_claim_is_current(run_id, claim_token)
 
     async def claim_agent_run_job(self, run_id: str) -> str | None:
         job = next((item for item in self.jobs.values() if item.agent_run_id == run_id), None)
@@ -3505,6 +3513,10 @@ class SQLAlchemyRepository:
             .with_for_update()
         )
         return bool(job)
+
+    async def is_agent_claim_current(self, run_id: str, claim_token: str) -> bool:
+        async with get_session_factory()() as session:
+            return await self._sql_agent_claim_current(session, run_id, claim_token)
 
     async def claim_agent_run_job(self, run_id: str) -> str | None:
         async with get_session_factory()() as session:
@@ -5020,6 +5032,9 @@ class SQLAlchemyRepository:
                 status="pending",
                 cancel_requested=False,
                 scope_snapshot=dict(scope_snapshot),
+                orchestration_version=str(
+                    scope_snapshot.get("orchestration_version", "single_agent_v1")
+                ),
                 user_message_id=user_message.id,
                 assistant_message_id=assistant_message.id,
                 request_hash=request_hash,

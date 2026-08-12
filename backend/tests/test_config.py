@@ -69,6 +69,12 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
         ({"model_attempts_per_provider": 4}, "尝试次数"),
         ({"model_circuit_failure_threshold": 0}, "失败阈值"),
         ({"model_circuit_cooldown_seconds": 0}, "冷却时间"),
+        ({"multi_agent_max_branches": 0}, "并行研究分支数"),
+        (
+            {"multi_agent_branch_timeout_seconds": 10, "multi_agent_total_timeout_seconds": 11},
+            "预留 2 秒",
+        ),
+        ({"multi_agent_max_branches": 1, "multi_agent_token_budget": 20000}, "分支可分配上限"),
         ({"embedding_batch_size": 0}, "向量批次大小"),
         ({"embedding_batch_size": 65}, "向量批次大小"),
         ({"embedding_timeout_seconds": 0}, "向量批次超时"),

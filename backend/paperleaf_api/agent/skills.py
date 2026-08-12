@@ -190,11 +190,30 @@ class SkillRegistry:
             selected = "summarize_paper"
         else:
             selected = "paper_qa"
+        explicit_multi_paper = bool(
+            re.search(
+                r"(?:这些|那些|上述|当前集合(?:中)?|多篇|几篇|"
+                r"[三四五六七八九十3-9]\s*篇).{0,24}(?:论文|文献|研究)?",
+                normalized,
+            )
+        )
         if scope == "collection" and selected in {
             "paper_qa",
             "summarize_paper",
             "trace_original",
         }:
+            selected = "compare_papers"
+        elif (
+            scope == "library"
+            and explicit_multi_paper
+            and selected
+            in {
+                "paper_qa",
+                "summarize_paper",
+                "trace_original",
+                "verify_claim",
+            }
+        ):
             selected = "compare_papers"
         definition = self.get(selected)
         if scope == "library" and selected == "trace_original":

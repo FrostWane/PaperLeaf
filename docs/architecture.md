@@ -219,6 +219,28 @@ sequenceDiagram
 - arXiv 候选通过 `interrupt` 进入持久等待状态。批准或拒绝动作携带 `action_id`，相同决定可幂等重放；恢复后清除待确认动作并重新入队同一 Run。
 - 取消请求先持久化。Worker 在节点和写入边界检查取消与租约；失去租约的旧 Worker 不能取消或覆盖后来领取者的结果。
 
+### 有界跨文献并行比较
+
+3～10 篇论文的集合或全库比较可以启用 `compare_map_reduce_v2`。它不是自由自治的 Agent Swarm，而是在单个父 `AgentRun` 内执行最多三个相互隔离的只读证据分支：
+
+```text
+服务端冻结范围与编排版本
+→ 确定性 ResearchPlan（最多 3 个互斥论文子集）
+→ 并行 Evidence Scout（仅调用用户范围内的文献库检索）
+→ 服务端按 Chunk、论文和物理页复验、去重与轮转选证
+→ 现有 LangGraph 回答生成
+→ 引用合法性与语义支持门禁
+```
+
+- Coordinator 只分配目标、论文子集、比较维度和预算，不读取论文正文，也不陈述事实。
+- Scout 没有联网、导入、删除、Memory 写入或审批权限；其返回的描述不作为最终证据，只有重新通过服务端范围检查的 `Evidence` 能进入回答。
+- 分支限制为最多 3 个，单分支和父任务分别设置超时与 Token 预算。用户取消或 Worker 失租会取消仍在运行的只读检索。
+- 部分分支失败时保留成功证据并公开覆盖边界；全部失败、计划无效或超时则回退原有标准检索。
+- Run 创建时冻结 `orchestration_version`，Checkpoint 使用版本命名空间。Phase 1 只保证父 Run 可重试；外层分支在 Worker 崩溃后会安全重跑，不承诺分支级 Checkpoint 或 exactly-once。
+- SSE 只公开 `s1`～`s3`、状态、计数与耗时，不公开问题、论文 ID、Chunk ID、分支提示或隐藏推理。管理员只看到低基数聚合。
+
+该能力通过 `PAPERLEAF_MULTI_AGENT_ENABLED` 控制。关闭后新 Run 继续使用 `single_agent_v1`；单篇问答、上传解析、翻译、总结和写操作始终保持原确定性链路。
+
 ### 学术 MCP Gateway
 
 - `academic-search-mcp` 是 Compose 私网内的独立只读服务，只访问 OpenAlex 与 Semantic Scholar 固定官方 API；模型和普通用户不能提交 Server URL 或任意网页地址。

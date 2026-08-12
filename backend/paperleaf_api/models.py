@@ -496,6 +496,7 @@ class AgentRun(Base):
     selected_skill: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     skill_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     harness_trace: Mapped[dict] = mapped_column(JSON, default=dict)
+    orchestration_version: Mapped[str] = mapped_column(String(64), default="single_agent_v1")
     user_message_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey(
             "chat_messages.id",

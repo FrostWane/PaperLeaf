@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 import uuid
+from collections.abc import Awaitable
 from typing import Any
 
 from .agent.context import (
@@ -28,6 +30,15 @@ from .agent.memory import (
 )
 from .agent.provider_policy import build_provider_run_policy, provider_policy_snapshot
 from .agent.recommendation_quality import entity_keys
+from .agent.research_synthesis import (
+    ORCHESTRATION_VERSION,
+    ResearchLeaseLostError,
+    ResearchSynthesisResult,
+    ResearchTask,
+    ScoutResult,
+    build_deterministic_research_plan,
+    execute_research_plan,
+)
 from .agent.skills import SkillRegistry, route_verified_selection
 from .agent.tools import LibrarySearchInput
 from .config import settings
@@ -275,9 +286,19 @@ async def _invoke_with_cancel(
     run: Any,
     initial: dict[str, Any],
 ) -> dict[str, Any]:
+    orchestration_version = str(
+        getattr(run, "orchestration_version", "")
+        or (run.scope_snapshot or {}).get("orchestration_version")
+        or "single_agent_v1"
+    )
     graph_config = {
         "recursion_limit": 8,
-        "configurable": {"thread_id": run.thread_id},
+        # 同一父 Run 的 v1 回退与 v2 编排不能共享 Checkpoint 命名空间，
+        # 否则恢复时可能把不同状态形状的节点结果混在一起。
+        "configurable": {
+            "thread_id": run.thread_id,
+            "checkpoint_ns": orchestration_version,
+        },
     }
     resume_decision = (run.scope_snapshot or {}).get("resume_decision")
     if resume_decision:
@@ -344,6 +365,256 @@ async def _invoke_tools_with_cancel(
             except asyncio.CancelledError:
                 pass
         raise
+
+
+async def _invoke_parallel_compare_with_cancel(
+    repository: Any,
+    run: Any,
+    claim_token: str,
+    operation: Awaitable[ResearchSynthesisResult],
+) -> ResearchSynthesisResult:
+    """在并行分支运行期间轮询用户取消和 Worker 租约，避免后台空转。"""
+
+    task = asyncio.create_task(operation)
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=0.2)
+            if done:
+                return await task
+            current = await repository.get_agent_run(run.id)
+            claim_current = await repository.is_agent_claim_current(run.id, claim_token)
+            if (
+                not current
+                or current.cancel_requested
+                or current.status == "cancelled"
+                or not claim_current
+            ):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise asyncio.CancelledError
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        raise
+
+
+def _parallel_compare_trace(
+    result: ResearchSynthesisResult | None,
+    *,
+    fallback_reason: str | None = None,
+) -> dict[str, Any]:
+    """生成不包含用户、论文或证据标识符的低基数编排轨迹。"""
+
+    if result is None:
+        return {
+            "orchestration_version": ORCHESTRATION_VERSION,
+            "compare_mode": "parallel_map_reduce",
+            "planned_subtasks": 0,
+            "succeeded_subtasks": 0,
+            "failed_subtasks": 0,
+            "timeout_subtasks": 0,
+            "partial_failure": False,
+            "fallback_to_v1": True,
+            "fallback_reason": fallback_reason or "internal_error",
+            "subtask_durations_ms": [],
+            "merge_duration_ms": 0,
+            "merge_dedup_count": 0,
+            "merge_conflict_count": 0,
+            "finding_count": 0,
+        }
+    findings = list(result.report.findings)
+    succeeded = sum(item.status == "succeeded" for item in findings)
+    timed_out = sum(item.status == "timeout" for item in findings)
+    failed = len(findings) - succeeded
+    fallback = result.fallback_required
+    return {
+        "orchestration_version": ORCHESTRATION_VERSION,
+        "compare_mode": "parallel_map_reduce",
+        "planned_subtasks": len(result.plan.tasks),
+        "succeeded_subtasks": succeeded,
+        "failed_subtasks": failed,
+        "timeout_subtasks": timed_out,
+        "partial_failure": result.report.status == "partial",
+        "fallback_to_v1": fallback,
+        "fallback_reason": (fallback_reason if fallback else None),
+        "subtask_durations_ms": [item.duration_ms for item in findings],
+        "merge_duration_ms": result.report.merge_duration_ms,
+        "merge_dedup_count": result.report.dedup_count,
+        "merge_conflict_count": result.report.conflict_count,
+        "finding_count": len(result.evidence),
+    }
+
+
+async def _execute_parallel_compare(
+    repository: Any,
+    run: Any,
+    claim_token: str,
+    *,
+    query: str,
+    paper_ids: list[str],
+    retriever: Any,
+    harness_flags: dict[str, Any],
+    event_epoch: str,
+) -> ResearchSynthesisResult:
+    """在父 Run 内执行有界只读 Map-Reduce，并发活动通过安全事件公开。"""
+
+    await repository.append_agent_run_event(
+        run.id,
+        "node_started",
+        {
+            "node": "plan_comparison",
+            "public_stage": "comparison_planning",
+            "orchestration_version": ORCHESTRATION_VERSION,
+        },
+        event_key=f"stage:compare:{event_epoch}:plan:start",
+        claim_token=claim_token,
+    )
+    plan = build_deterministic_research_plan(
+        query,
+        paper_ids,
+        ("研究问题", "核心方法", "实验设置", "主要结果", "局限"),
+        max_branches=int(harness_flags.get("multi_agent_max_branches", 3)),
+        total_token_budget=int(harness_flags.get("multi_agent_token_budget", 12000)),
+    )
+    await repository.append_agent_run_event(
+        run.id,
+        "node_finished",
+        {
+            "node": "plan_comparison",
+            "public_stage": "comparison_planning",
+            "subtask_total": len(plan.tasks),
+            "orchestration_version": ORCHESTRATION_VERSION,
+        },
+        event_key=f"stage:compare:{event_epoch}:plan:finish",
+        claim_token=claim_token,
+    )
+    ordinal_by_id = {task.subtask_id: index + 1 for index, task in enumerate(plan.tasks)}
+
+    async def lease_guard() -> bool:
+        return await repository.is_agent_claim_current(run.id, claim_token)
+
+    async def scout(task: ResearchTask) -> ScoutResult:
+        # Scout 只能访问 Coordinator 已冻结的论文子集；不提供联网、写入、Memory
+        # 或审批工具。最终事实仍由可信 Evidence 与现有回答 Graph 组织。
+        evidence = await retriever(
+            LibrarySearchInput(
+                user_id=run.user_id,
+                query=(f"{query}\n比较维度：{'、'.join(task.dimensions)}"),
+                paper_ids=list(task.paper_ids),
+                limit=min(18, max(8, len(task.paper_ids) * 5)),
+            )
+        )
+        return ScoutResult(evidence=tuple(evidence))
+
+    async def event_sink(event: str, data: dict[str, Any]) -> None:
+        subtask_id = str(data.get("subtask_id", ""))
+        ordinal = ordinal_by_id.get(subtask_id)
+        total = len(plan.tasks)
+        if event == "subtask_started" and ordinal is not None:
+            await repository.append_agent_run_event(
+                run.id,
+                "node_started",
+                {
+                    "node": "compare_subtask",
+                    "public_stage": "comparison_subtask",
+                    "subtask_id": f"s{ordinal}",
+                    "ordinal": ordinal,
+                    "total": total,
+                    "paper_count": int(data.get("paper_count", 0)),
+                    "dimensions": ["研究问题", "核心方法", "实验设置", "主要结果", "局限"],
+                    "orchestration_version": ORCHESTRATION_VERSION,
+                },
+                event_key=f"stage:compare:{event_epoch}:subtask:s{ordinal}:start",
+                claim_token=claim_token,
+            )
+        elif event == "subtask_finished" and ordinal is not None:
+            raw_status = str(data.get("status", "failed"))
+            error_category = (
+                "timeout"
+                if raw_status == "timeout"
+                else "retrieval"
+                if raw_status == "failed"
+                else None
+            )
+            await repository.append_agent_run_event(
+                run.id,
+                "node_finished",
+                {
+                    "node": "compare_subtask",
+                    "public_stage": "comparison_subtask",
+                    "subtask_id": f"s{ordinal}",
+                    "ordinal": ordinal,
+                    "total": total,
+                    "status": "completed" if raw_status == "succeeded" else raw_status,
+                    "finding_count": int(data.get("evidence_count", 0)),
+                    "duration_ms": int(data.get("duration_ms", 0)),
+                    **({"error_category": error_category} if error_category else {}),
+                    "orchestration_version": ORCHESTRATION_VERSION,
+                },
+                event_key=f"stage:compare:{event_epoch}:subtask:s{ordinal}:finish",
+                claim_token=claim_token,
+            )
+        elif event == "merge_started":
+            await repository.append_agent_run_event(
+                run.id,
+                "node_started",
+                {
+                    "node": "merge_comparison",
+                    "public_stage": "comparison_merge",
+                    "orchestration_version": ORCHESTRATION_VERSION,
+                },
+                event_key=f"stage:compare:{event_epoch}:merge:start",
+                claim_token=claim_token,
+            )
+        elif event == "merge_finished":
+            raw_status = str(data.get("status", "failed"))
+            status = "completed" if raw_status == "succeeded" else raw_status
+            await repository.append_agent_run_event(
+                run.id,
+                "node_finished",
+                {
+                    "node": "merge_comparison",
+                    "public_stage": "comparison_merge",
+                    "status": status,
+                    "succeeded_subtasks": int(data.get("succeeded_subtask_count", 0)),
+                    "failed_subtasks": int(data.get("failed_subtask_count", 0)),
+                    "timeout_subtasks": int(data.get("timeout_subtask_count", 0)),
+                    "finding_count": int(data.get("evidence_count", 0)),
+                    "dedup_count": int(data.get("dedup_count", 0)),
+                    "conflict_count": int(data.get("conflict_count", 0)),
+                    "duration_ms": int(data.get("duration_ms", 0)),
+                    "partial_failure": raw_status == "partial",
+                    "fallback_to_v1": raw_status == "failed",
+                    **(
+                        {"fallback_reason": "all_subtasks_failed"} if raw_status == "failed" else {}
+                    ),
+                    "orchestration_version": ORCHESTRATION_VERSION,
+                },
+                event_key=f"stage:compare:{event_epoch}:merge:finish",
+                claim_token=claim_token,
+            )
+
+    return await asyncio.wait_for(
+        execute_research_plan(
+            plan,
+            scout,
+            allowed_paper_ids=paper_ids,
+            branch_timeout_seconds=float(
+                harness_flags.get("multi_agent_branch_timeout_seconds", 20)
+            ),
+            lease_guard=lease_guard,
+            event_sink=event_sink,
+            max_concurrency=int(harness_flags.get("multi_agent_max_branches", 3)),
+        ),
+        timeout=float(harness_flags.get("multi_agent_total_timeout_seconds", 45)),
+    )
 
 
 async def _finish_observed_run(
@@ -792,12 +1063,8 @@ async def execute_agent_run(
         else {}
     )
     if selected_skill == "find_related_papers":
-        discovery_task.setdefault(
-            "requested_count", requested_paper_count(query, default=5) or 5
-        )
-        years = [
-            int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", query)
-        ]
+        discovery_task.setdefault("requested_count", requested_paper_count(query, default=5) or 5)
+        years = [int(value) for value in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", query)]
         if years:
             discovery_task["year_from"] = min(years)
             discovery_task["year_to"] = max(years)
@@ -877,11 +1144,129 @@ async def execute_agent_run(
             except Exception:
                 harness_trace["selection_evidence_count"] = 0
                 harness_trace["selection_evidence_fallback_reason"] = "selection_retrieval_failed"
+
+        compare_result: ResearchSynthesisResult | None = None
+        compare_v2_used = False
+        compare_fallback_reason: str | None = None
+        compare_event_epoch = hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:10]
+        compare_requested = (
+            str(snapshot.get("orchestration_version", "single_agent_v1")) == ORCHESTRATION_VERSION
+            and bool(harness_flags.get("multi_agent_enabled", False))
+            and scope in {"collection", "library"}
+            and 3 <= len(snapshot.get("paper_ids", [])) <= 10
+        )
+        if compare_requested and not resolution.needs_clarification:
+            compare_started_at = time.perf_counter()
+            if selected_skill != "compare_papers":
+                compare_fallback_reason = "skill_not_supported"
+            elif function_tool_harness is None:
+                compare_fallback_reason = "internal_error"
+            else:
+                try:
+                    compare_result = await _invoke_parallel_compare_with_cancel(
+                        repository,
+                        run,
+                        claim_token,
+                        _execute_parallel_compare(
+                            repository,
+                            run,
+                            claim_token,
+                            query=resolution.resolved_query,
+                            paper_ids=[str(value) for value in snapshot.get("paper_ids", [])],
+                            retriever=function_tool_harness.retriever,
+                            harness_flags=harness_flags,
+                            event_epoch=compare_event_epoch,
+                        ),
+                    )
+                    if compare_result.fallback_required:
+                        compare_fallback_reason = "all_subtasks_failed"
+                    else:
+                        compare_v2_used = True
+                except ResearchLeaseLostError as error:
+                    raise asyncio.CancelledError from error
+                except TimeoutError:
+                    compare_fallback_reason = "timeout"
+                except (ValueError, TypeError):
+                    compare_fallback_reason = "invalid_plan"
+                except asyncio.CancelledError:
+                    current = await repository.get_agent_run(run.id)
+                    if current and (current.cancel_requested or current.status == "cancelled"):
+                        return
+                    raise
+                except Exception:
+                    compare_fallback_reason = "internal_error"
+
+            harness_trace.update(
+                _parallel_compare_trace(
+                    compare_result,
+                    fallback_reason=compare_fallback_reason,
+                )
+            )
+            if compare_v2_used and compare_result is not None:
+                tool_mode_active = True
+                initial["tool_mode_active"] = True
+                initial["pre_retrieved_evidence"] = list(compare_result.evidence)
+                initial["tool_steps"] = len(compare_result.plan.tasks)
+                initial["stage_timings_ms"]["retrieval"] = round(
+                    (time.perf_counter() - compare_started_at) * 1000
+                )
+                if compare_result.report.coverage_notice:
+                    initial["tool_context_entries"] = [
+                        {
+                            "kind": "parallel_compare_coverage",
+                            "status": compare_result.report.status,
+                            "summary": compare_result.report.coverage_notice,
+                        }
+                    ]
+                harness_trace["tool_mode_active"] = True
+                harness_trace["tool_output_used"] = True
+                harness_trace["tool_activation_reason"] = "parallel_compare_evidence"
+                harness_trace["function_calling"] = "parallel_map_reduce"
+            else:
+                # v2 未获得合法证据时保留安全事件和聚合轨迹，随后进入原有
+                # Function Tool/legacy retrieval，而不是空回答或重复创建子 Run。
+                harness_trace["function_calling"] = "legacy_fallback"
+                harness_trace["function_fallback_reason"] = (
+                    compare_fallback_reason or "no_merged_evidence"
+                )
+                await repository.append_agent_run_event(
+                    run.id,
+                    "node_started",
+                    {
+                        "node": "merge_comparison",
+                        "public_stage": "comparison_merge",
+                        "orchestration_version": ORCHESTRATION_VERSION,
+                    },
+                    event_key=f"stage:compare:{compare_event_epoch}:merge:start",
+                    claim_token=claim_token,
+                )
+                await repository.append_agent_run_event(
+                    run.id,
+                    "node_finished",
+                    {
+                        "node": "merge_comparison",
+                        "public_stage": "comparison_merge",
+                        "status": "failed",
+                        "fallback_to_v1": True,
+                        "fallback_reason": compare_fallback_reason or "no_merged_evidence",
+                        "orchestration_version": ORCHESTRATION_VERSION,
+                    },
+                    event_key=f"stage:compare:{compare_event_epoch}:merge:finish",
+                    claim_token=claim_token,
+                )
+            await repository.update_agent_skill(
+                run.id,
+                claim_token,
+                selected_skill=selected_skill,
+                skill_version=skill_version,
+                harness_trace=harness_trace,
+            )
         if (
             not resolution.needs_clarification
             and harness_flags.get("function_tools_enabled")
             and definition is not None
             and function_tool_harness is not None
+            and not compare_v2_used
         ):
             tool_started_at = time.perf_counter()
             scope_paper_titles = list(initial.get("scope_paper_titles", []))
@@ -1113,9 +1498,7 @@ async def execute_agent_run(
     model_attempts = [item.as_dict() for item in attempts]
     stage_timings = dict(result.get("stage_timings_ms", {}))
     if result.get("provider_policy"):
-        harness_trace["provider_policy"] = provider_policy_snapshot(
-            result.get("provider_policy")
-        )
+        harness_trace["provider_policy"] = provider_policy_snapshot(result.get("provider_policy"))
         await repository.update_agent_skill(
             run.id,
             claim_token,
@@ -1391,9 +1774,7 @@ async def execute_agent_run(
             "evidence_quality": quality,
             "model_attempts": model_attempts,
             "dropped_paragraph_count": dropped_paragraphs,
-            "displayed_recommendations": list(
-                result.get("displayed_recommendations", []) or []
-            ),
+            "displayed_recommendations": list(result.get("displayed_recommendations", []) or []),
         },
     )
     exposed_entities_for_state = [

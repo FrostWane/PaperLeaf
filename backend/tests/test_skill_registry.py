@@ -42,6 +42,8 @@ def test_default_skill_registry_is_versioned_and_loads_only_catalog_on_start() -
         ("这个主张有证据支持吗？", "fact_lookup", "paper", False, "verify_claim"),
         ("画研究脑图", "structure", "paper", False, "build_research_map"),
         ("概括这篇论文", "summary", "paper", False, "summarize_paper"),
+        ("总结这三篇论文的方法和实验", "summary", "library", False, "compare_papers"),
+        ("分析当前集合中论文的共同点", "fact_lookup", "collection", False, "compare_papers"),
         ("搜索相关论文", "discovery", "library", True, "find_related_papers"),
         (
             "请通过 OpenAlex 查找与集合主题相关的近期公开论文",

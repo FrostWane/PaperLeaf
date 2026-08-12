@@ -72,6 +72,17 @@ class CapturingResultGraph(ResultGraph):
         return self.result
 
 
+class ConfigCapturingResultGraph(CapturingResultGraph):
+    def __init__(self, result: dict | None = None) -> None:
+        super().__init__(result)
+        self.config: dict | None = None
+
+    async def ainvoke(self, initial: dict, config: dict) -> dict:
+        self.initial = initial
+        self.config = config
+        return self.result
+
+
 class RejectingToolPlanner:
     def __init__(self) -> None:
         self.calls = 0
@@ -86,6 +97,63 @@ class RejectingToolPlanner:
 class EmptyToolRetriever:
     async def __call__(self, _payload):
         return []
+
+
+class ScopedCompareRetriever:
+    def __init__(self, *, fail_all: bool = False) -> None:
+        self.fail_all = fail_all
+        self.calls: list[tuple[str, ...]] = []
+
+    async def __call__(self, payload):
+        paper_ids = tuple(payload.paper_ids)
+        self.calls.append(paper_ids)
+        if self.fail_all:
+            raise RuntimeError("scout unavailable")
+        return [
+            Evidence(
+                f"{paper_id}:c1",
+                paper_id,
+                f"论文 {paper_id}",
+                1,
+                f"{paper_id} 的方法与实验结果。",
+            )
+            for paper_id in paper_ids
+        ]
+
+
+class BlockingCompareRetriever:
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.cancelled = 0
+
+    async def __call__(self, _payload):
+        self.entered.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        return []
+
+
+class CompareHarnessStub:
+    def __init__(self, retriever) -> None:
+        self.retriever = retriever
+
+
+class CompareSkillManifest:
+    name = "compare_papers"
+    version = 1
+
+
+class CompareSkillDefinition:
+    manifest = CompareSkillManifest()
+    instructions = "比较多篇论文的方法、实验、结果与局限。"
+
+
+class CompareSkillRegistry:
+    def route(self, *_args, **_kwargs):
+        return CompareSkillDefinition()
 
 
 class ModelTaskFrameHarness:
@@ -159,9 +227,7 @@ def test_rejected_function_tool_is_visible_then_legacy_retrieval_runs() -> None:
 
     async def scenario() -> None:
         repository = MemoryRepository("secret")
-        chat_session = await repository.create_chat_session(
-            "u1", "工具降级", "library", None, None
-        )
+        chat_session = await repository.create_chat_session("u1", "工具降级", "library", None, None)
         submission = await repository.submit_chat_message(
             chat_session.id,
             "u1",
@@ -204,15 +270,280 @@ def test_rejected_function_tool_is_visible_then_legacy_retrieval_runs() -> None:
         assert run is not None and run.status == "completed"
         assert run.harness_trace["tool_mode_active"] is False
         assert run.harness_trace["function_fallback_reason"] == "tool_outputs_not_usable"
-        assert run.harness_trace["tool_calls"] == [
-            {"tool": "unknown_tool", "status": "rejected"}
-        ]
+        assert run.harness_trace["tool_calls"] == [{"tool": "unknown_tool", "status": "rejected"}]
         events = await repository.list_owned_agent_run_events(run.id, "u1")
         assert events is not None
         event_pairs = [(item.event, item.data.get("tool")) for item in events]
         assert ("tool_finished", "unknown_tool") in event_pairs
         assert ("tool_started", "search_library") in event_pairs
         assert ("tool_finished", "search_library") in event_pairs
+
+    asyncio.run(scenario())
+
+
+def test_parallel_compare_uses_one_parent_run_and_safe_branch_events() -> None:
+    """确定性集成：3 篇比较走并行 Map-Reduce，Graph 仍负责最终回答门禁。"""
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "跨文献比较", "collection", None, "collection-1"
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "比较三篇论文的方法和实验",
+            "compare-v2-client",
+            "compare-v2-hash",
+            {
+                "type": "collection",
+                "collection_id": "collection-1",
+                "paper_ids": ["p1", "p2", "p3"],
+                "web_enabled": False,
+                "orchestration_version": "compare_map_reduce_v2",
+                "harness": {
+                    "context_engine_enabled": True,
+                    "memory_enabled": False,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                    "mcp_enabled": False,
+                    "multi_agent_enabled": True,
+                    "multi_agent_max_branches": 3,
+                    "multi_agent_branch_timeout_seconds": 1,
+                    "multi_agent_total_timeout_seconds": 3,
+                    "multi_agent_token_budget": 3072,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token
+        retriever = ScopedCompareRetriever()
+        graph = CapturingResultGraph()
+
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+            function_tool_harness=CompareHarnessStub(retriever),  # type: ignore[arg-type]
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert run.orchestration_version == "compare_map_reduce_v2"
+        assert len(repository.agent_runs) == 1
+        assert graph.initial is not None
+        assert graph.initial["tool_mode_active"] is True
+        assert len(graph.initial["pre_retrieved_evidence"]) == 3
+        assert sorted(retriever.calls) == [("p1",), ("p2",), ("p3",)]
+        trace = run.harness_trace
+        assert trace["planned_subtasks"] == 3
+        assert trace["succeeded_subtasks"] == 3
+        assert trace["fallback_to_v1"] is False
+
+        events = await repository.list_owned_agent_run_events(run.id, "u1")
+        assert events is not None
+        subtask_events = [event for event in events if event.data.get("node") == "compare_subtask"]
+        assert len(subtask_events) == 6
+        assert {event.data.get("subtask_id") for event in subtask_events} == {
+            "s1",
+            "s2",
+            "s3",
+        }
+        assert all("paper_id" not in event.data for event in subtask_events)
+        assert all("objective" not in event.data for event in subtask_events)
+
+    asyncio.run(scenario())
+
+
+def test_parallel_compare_all_failures_fall_back_to_legacy_retrieval() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "比较回退", "collection", None, "collection-1"
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "比较三篇论文的方法",
+            "compare-fallback-client",
+            "compare-fallback-hash",
+            {
+                "type": "collection",
+                "collection_id": "collection-1",
+                "paper_ids": ["p1", "p2", "p3"],
+                "web_enabled": False,
+                "orchestration_version": "compare_map_reduce_v2",
+                "harness": {
+                    "context_engine_enabled": True,
+                    "memory_enabled": False,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                    "mcp_enabled": False,
+                    "multi_agent_enabled": True,
+                    "multi_agent_max_branches": 3,
+                    "multi_agent_branch_timeout_seconds": 1,
+                    "multi_agent_total_timeout_seconds": 3,
+                    "multi_agent_token_budget": 3072,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token
+        graph = CapturingResultGraph()
+
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+            function_tool_harness=CompareHarnessStub(ScopedCompareRetriever(fail_all=True)),  # type: ignore[arg-type]
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert graph.initial is not None
+        assert not graph.initial.get("tool_mode_active", False)
+        trace = run.harness_trace
+        assert trace["fallback_to_v1"] is True
+        assert trace["fallback_reason"] == "all_subtasks_failed"
+        events = await repository.list_owned_agent_run_events(run.id, "u1")
+        assert events is not None
+        assert any(
+            item.event == "tool_started" and item.data.get("tool") == "search_library"
+            for item in events
+        )
+
+    asyncio.run(scenario())
+
+
+def test_parallel_compare_retry_uses_new_event_epoch_and_checkpoint_namespace() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "重试编排", "collection", None, "collection-1"
+        )
+        snapshot = {
+            "type": "collection",
+            "collection_id": "collection-1",
+            "paper_ids": ["p1", "p2", "p3"],
+            "web_enabled": False,
+            "orchestration_version": "compare_map_reduce_v2",
+            "harness": {
+                "context_engine_enabled": True,
+                "memory_enabled": False,
+                "skills_enabled": True,
+                "function_tools_enabled": False,
+                "mcp_enabled": False,
+                "multi_agent_enabled": True,
+                "multi_agent_max_branches": 3,
+                "multi_agent_branch_timeout_seconds": 1,
+                "multi_agent_total_timeout_seconds": 3,
+                "multi_agent_token_budget": 3072,
+            },
+        }
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "比较三篇论文",
+            "compare-retry-client",
+            "compare-retry-hash",
+            snapshot,
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token
+        first_events: list[str] = []
+        original_append = repository.append_agent_run_event
+
+        async def capturing_append(*args, **kwargs):
+            if kwargs.get("event_key"):
+                first_events.append(str(kwargs["event_key"]))
+            return await original_append(*args, **kwargs)
+
+        repository.append_agent_run_event = capturing_append  # type: ignore[method-assign]
+        graph = ConfigCapturingResultGraph()
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+            function_tool_harness=CompareHarnessStub(ScopedCompareRetriever()),  # type: ignore[arg-type]
+        )
+        assert graph.config is not None
+        assert graph.config["configurable"]["checkpoint_ns"] == "compare_map_reduce_v2"
+        compare_keys = [key for key in first_events if key.startswith("stage:compare:")]
+        assert compare_keys
+        epochs = {key.split(":")[2] for key in compare_keys}
+        assert len(epochs) == 1
+        assert token not in " ".join(compare_keys)
+
+    asyncio.run(scenario())
+
+
+def test_parallel_compare_user_cancel_stops_active_scouts_without_merge() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "取消比较", "collection", None, "collection-1"
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "比较三篇论文",
+            "compare-cancel-client",
+            "compare-cancel-hash",
+            {
+                "type": "collection",
+                "paper_ids": ["p1", "p2", "p3"],
+                "orchestration_version": "compare_map_reduce_v2",
+                "harness": {
+                    "context_engine_enabled": True,
+                    "memory_enabled": False,
+                    "skills_enabled": True,
+                    "function_tools_enabled": False,
+                    "mcp_enabled": False,
+                    "multi_agent_enabled": True,
+                    "multi_agent_max_branches": 3,
+                    "multi_agent_branch_timeout_seconds": 20,
+                    "multi_agent_total_timeout_seconds": 25,
+                    "multi_agent_token_budget": 3072,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token
+        retriever = BlockingCompareRetriever()
+        execution = asyncio.create_task(
+            execute_agent_run(
+                repository,
+                CapturingResultGraph(),
+                submission.run.id,
+                token,
+                answer_quality_policy=AnswerQualityPolicy(),
+                skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+                function_tool_harness=CompareHarnessStub(retriever),  # type: ignore[arg-type]
+            )
+        )
+        await asyncio.wait_for(retriever.entered.wait(), timeout=1)
+        await repository.cancel_owned_agent_run(submission.run.id, "u1")
+        await asyncio.wait_for(execution, timeout=2)
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "cancelled"
+        assert retriever.cancelled >= 1
+        events = await repository.list_owned_agent_run_events(run.id, "u1")
+        assert events is not None
+        assert not any(event.data.get("node") == "merge_comparison" for event in events)
 
     asyncio.run(scenario())
 
@@ -290,9 +621,7 @@ def test_completed_harness_run_extracts_only_explicit_user_memory() -> None:
             preferences={"memory_enabled": True},
             role=UserRole.user,
         )
-        chat_session = await repository.create_chat_session(
-            "u1", "记忆测试", "library", None, None
-        )
+        chat_session = await repository.create_chat_session("u1", "记忆测试", "library", None, None)
         submission = await repository.submit_chat_message(
             chat_session.id,
             "u1",
@@ -373,9 +702,7 @@ def test_model_timeout_is_reported_instead_of_publishing_raw_extract() -> None:
 def test_completed_discovery_task_is_inherited_by_recent_year_followup() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")
-        session = await repository.create_chat_session(
-            "u1", "多轮联网发现", "library", None, None
-        )
+        session = await repository.create_chat_session("u1", "多轮联网发现", "library", None, None)
         config = replace(
             settings,
             context_engine_enabled=True,
@@ -507,9 +834,7 @@ def test_model_task_frame_is_primary_context_path_for_source_only_followup() -> 
                 task_name="find_related_papers",
                 updated_fields=("requested_sources", "denied_sources"),
                 values={
-                    "requested_sources": [
-                        "mcp__academic__search_semantic_scholar"
-                    ],
+                    "requested_sources": ["mcp__academic__search_semantic_scholar"],
                     "denied_sources": [
                         "mcp__academic__search_openalex",
                         "search_arxiv",
@@ -549,9 +874,7 @@ def test_model_task_frame_is_primary_context_path_for_source_only_followup() -> 
         assert task["year_from"] == 2026
         assert task["exclude_library"] is True
         assert task["shown_entities"] == ["doi:10.1/seen"]
-        assert task["requested_sources"] == [
-            "mcp__academic__search_semantic_scholar"
-        ]
+        assert task["requested_sources"] == ["mcp__academic__search_semantic_scholar"]
         assert graph.initial["provider_policy"]["denied"] == [
             "arxiv",
             "openalex",
@@ -581,9 +904,7 @@ def test_discovery_run_loads_all_authorized_scope_titles_not_only_first_eight() 
                 sha256=f"scope-{index}",
                 page_count=1,
             )
-        session = await repository.create_chat_session(
-            "u1", "完整集合去重", "library", None, None
-        )
+        session = await repository.create_chat_session("u1", "完整集合去重", "library", None, None)
         submission = await repository.submit_chat_message(
             session.id,
             "u1",
