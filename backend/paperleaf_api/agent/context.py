@@ -64,6 +64,12 @@ _NEEDS_SUBJECT_MARKERS = (
     "验证一下",
 )
 _PAIR_MARKERS = ("前者", "后者")
+_SCOPED_PAPER_REFERENCE_RE = re.compile(
+    r"(?:当前(?:文献库|论文库|集合)(?:中|内)?|(?:文献库|论文库|集合)(?:中|内)|"
+    r"这些(?:论文|文献|研究)|上述(?:论文|文献|研究)|全部(?:论文|文献|研究)|"
+    r"多篇(?:论文|文献|研究))",
+    re.IGNORECASE,
+)
 _FOLLOWUP_ENTITY = re.compile(r"^那\s*([^？?呢]{1,40})\s*呢?[？?]?$")
 _DISCOVERY_CONTINUATION_RE = re.compile(
     r"更近|更新|最新|近期|近年|今年|换一批|再(?:找|搜|推荐)|还有|"
@@ -136,9 +142,7 @@ def validate_task_frame_decision(value: dict[str, Any], *, source: str) -> TaskF
         raise ValueError("未知任务类型")
     updated_fields = tuple(
         dict.fromkeys(
-            str(item)
-            for item in value.get("updated_fields", [])
-            if str(item) in _TASK_FRAME_FIELDS
+            str(item) for item in value.get("updated_fields", []) if str(item) in _TASK_FRAME_FIELDS
         )
     )
     confidence = min(1.0, max(0.0, float(value.get("confidence", 0.0) or 0.0)))
@@ -160,11 +164,7 @@ def merge_task_frame(
 
     if decision.operation in {"clear", "unrelated"}:
         return None
-    task = (
-        {}
-        if decision.operation == "replace"
-        else dict(existing or {})
-    )
+    task = {} if decision.operation == "replace" else dict(existing or {})
     task["name"] = decision.task_name or str(task.get("name") or "find_related_papers")
     if task["name"] != "find_related_papers":
         return None
@@ -441,9 +441,7 @@ def resolve_context(
             1.0,
             ("explicit_query",),
             task_frame_source=(task_frame_decision.source if task_frame_decision else None),
-            task_frame_confidence=(
-                task_frame_decision.confidence if task_frame_decision else None
-            ),
+            task_frame_confidence=(task_frame_decision.confidence if task_frame_decision else None),
         )
 
     paper_title = str(context.get("paper_title", "")).strip()
@@ -452,6 +450,9 @@ def resolve_context(
     collection_title = str(context.get("collection_title", "")).strip()
     page = context.get("physical_page")
     summary_anchor = _summary_anchor(cached, original)
+    scoped_paper_reference = bool(
+        session_type in {"collection", "library"} and _SCOPED_PAPER_REFERENCE_RE.search(original)
+    )
     references: dict[str, Any] = {}
     sources: list[str] = []
 
@@ -482,6 +483,9 @@ def resolve_context(
     if active_task:
         references["active_task"] = active_task
         sources.append("active_task")
+    if scoped_paper_reference:
+        references["scope_type"] = session_type
+        sources.append("current_collection" if session_type == "collection" else "current_library")
 
     requires_selection = any(marker in original for marker in _SELECTION_MARKERS)
     requires_subject = any(marker in original for marker in _NEEDS_SUBJECT_MARKERS)
@@ -495,6 +499,7 @@ def resolve_context(
         and not selected
         and not previous
         and not summary_anchor
+        and not scoped_paper_reference
     )
     ambiguous = (
         lacks_anchor
@@ -517,9 +522,7 @@ def resolve_context(
             "我还不能确定你指的是哪篇论文、哪一页或哪个方法。请补充论文名称，"
             "或在阅读器中选中对应原文后再提问。",
             task_frame_source=(task_frame_decision.source if task_frame_decision else None),
-            task_frame_confidence=(
-                task_frame_decision.confidence if task_frame_decision else None
-            ),
+            task_frame_confidence=(task_frame_decision.confidence if task_frame_decision else None),
         )
 
     qualifiers: list[str] = []
@@ -570,6 +573,12 @@ def resolve_context(
         if denied_sources:
             constraints.append("排除数据源：" + "、".join(denied_sources))
         qualifiers.append("延续上一轮任务：" + "；".join(constraints))
+    if scoped_paper_reference:
+        qualifiers.append(
+            "当前会话范围：当前集合内全部文献"
+            if session_type == "collection"
+            else "当前会话范围：当前文献库内全部文献"
+        )
     resolved = original + ("\n\n[已验证阅读上下文]\n" + "\n".join(qualifiers) if qualifiers else "")
     confidence = (
         0.97
@@ -577,7 +586,7 @@ def resolve_context(
         else 0.9
         if paper_id and previous
         else 0.84
-        if paper_id or collection_id
+        if paper_id or collection_id or scoped_paper_reference
         else 0.72
     )
     return ContextResolution(

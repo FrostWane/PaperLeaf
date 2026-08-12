@@ -67,8 +67,7 @@ def test_followup_entity_uses_structured_conversation_state() -> None:
             {
                 "role": "context",
                 "content": (
-                    '{"entity_state":{"discussion_entity":"蛋白质序列",'
-                    '"physical_page":4}}'
+                    '{"entity_state":{"discussion_entity":"蛋白质序列","physical_page":4}}'
                 ),
             }
         ],
@@ -94,6 +93,25 @@ def test_explicit_query_does_not_require_context_resolution() -> None:
     assert result.needs_clarification is False
     assert result.resolved_query == result.original_query
     assert result.sources == ("explicit_query",)
+
+
+def test_scoped_multi_paper_reference_uses_bound_library_scope() -> None:
+    result = resolve_context(
+        "请比较当前文献库中这些论文的核心方法与实验差异",
+        {},
+        [],
+        session_type="library",
+    )
+
+    assert result.needs_clarification is False
+    assert result.references["scope_type"] == "library"
+    assert "当前会话范围：当前文献库内全部文献" in result.resolved_query
+
+
+def test_bare_demonstrative_without_paper_noun_still_requires_clarification() -> None:
+    result = resolve_context("这些讲了什么？", {}, [], session_type="library")
+
+    assert result.needs_clarification is True
 
 
 def test_collection_pronoun_uses_server_verified_collection_scope() -> None:
@@ -215,9 +233,7 @@ def test_model_task_frame_updates_only_source_and_preserves_other_slots() -> Non
     assert merged["year_from"] == 2026
     assert merged["exclude_library"] is True
     assert merged["shown_entities"] == ["doi:10.1/already-shown"]
-    assert merged["requested_sources"] == [
-        "mcp__academic__search_semantic_scholar"
-    ]
+    assert merged["requested_sources"] == ["mcp__academic__search_semantic_scholar"]
 
 
 def test_model_task_frame_understands_count_only_followup_without_phrase_whitelist() -> None:
