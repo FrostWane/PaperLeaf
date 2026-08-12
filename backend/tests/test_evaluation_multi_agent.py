@@ -15,6 +15,7 @@ from paperleaf_api.evaluation_multi_agent import (
     query_hash,
     read_jsonl,
     scope_hash,
+    sha256_file,
     validate_dataset,
     validate_source_hashes,
 )
@@ -155,6 +156,15 @@ def test_draft_dataset_locks_source_manifest_and_cases_hashes(tmp_path: Path) ->
             source_manifest_path=SOURCE_MANIFEST,
             source_cases_path=drifted,
         )
+
+
+def test_source_hash_is_stable_across_lf_and_crlf_checkouts(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.jsonl"
+    crlf = tmp_path / "crlf.jsonl"
+    lf.write_bytes(b'{"id":"one"}\n{"id":"two"}\n')
+    crlf.write_bytes(b'{"id":"one"}\r\n{"id":"two"}\r\n')
+
+    assert sha256_file(lf) == sha256_file(crlf)
 
 
 def test_ceiling_aware_gate_uses_non_regression_near_ceiling() -> None:

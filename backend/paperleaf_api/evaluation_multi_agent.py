@@ -197,11 +197,10 @@ def _sha256_json(value: Any) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    # Git 在 Windows 与 Linux checkout 时可能分别写入 CRLF/LF。冻结集锁定的是
+    # 逻辑文本内容，而不是工作树的换行表示；其他任何字节变化仍会改变摘要。
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def validate_source_hashes(
