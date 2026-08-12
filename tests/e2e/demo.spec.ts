@@ -28,7 +28,7 @@ test("跨文献提问持久化运行状态并跳到引用物理页", async ({ pa
   const trace = page.getByLabel("问答处理阶段");
   await expect(trace).toBeVisible();
   await expect(trace).toContainText("检索");
-  await expect(page.getByText(/离开页面不会中断|回答已完成并持久化/)).toBeVisible();
+  await expect(page.getByText(/离开页面不会中断|回答已完成/)).toBeVisible();
   await page.getByRole("button", { name: /Attention Is All You Need.*PDF 第 2 页/ }).first().click();
 
   await expect(page).toHaveURL(/\/library\/attention\?page=2/);

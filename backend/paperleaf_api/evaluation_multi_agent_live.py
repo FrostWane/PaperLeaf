@@ -269,6 +269,76 @@ def build_not_executed_variant(label: Literal["v1", "v2"], reason: str) -> dict[
     }
 
 
+def build_case_readiness_matrix(
+    cases: Sequence[MultiAgentCase],
+    logical_to_local: dict[str, str],
+    *,
+    missing_paper_ids: Sequence[str] = (),
+    invalid_paper_ids: Sequence[str] = (),
+    skills_enabled: bool,
+    multi_agent_enabled: bool,
+    answer_model_configured: bool,
+) -> dict[str, Any]:
+    """逐题说明 live A/B 是否具备真实执行条件。
+
+    该矩阵只是基础设施门禁，不代表答案质量；越权题需要独立 HTTP fixture，
+    因此即使论文齐全也不能由普通生产 Run 适配器执行。
+    """
+
+    missing = set(missing_paper_ids)
+    invalid = set(invalid_paper_ids)
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        reasons: list[str] = []
+        missing_for_case = sorted(
+            paper_id
+            for paper_id in case.scope_paper_ids
+            if paper_id in missing
+            or (paper_id not in logical_to_local and paper_id not in invalid)
+        )
+        invalid_for_case = sorted(
+            paper_id for paper_id in case.scope_paper_ids if paper_id in invalid
+        )
+        if case.expected_path == "pregraph_reject":
+            reasons.append("requires_http_pregraph_fixture")
+        else:
+            if missing_for_case:
+                reasons.append("required_papers_missing")
+            if invalid_for_case:
+                reasons.append("required_papers_not_ready_or_ambiguous")
+            if case.expected_path == "v2" and not skills_enabled:
+                reasons.append("skills_feature_disabled")
+            if case.expected_path == "v2" and not multi_agent_enabled:
+                reasons.append("multi_agent_feature_disabled")
+            if not answer_model_configured:
+                reasons.append("answer_model_not_configured")
+        rows.append(
+            {
+                "case_id": case.id,
+                "split": case.split,
+                "expected_path": case.expected_path,
+                "ready": not reasons,
+                "missing_paper_ids": missing_for_case,
+                "invalid_paper_ids": invalid_for_case,
+                "reasons": reasons,
+            }
+        )
+    return {
+        "case_count": len(rows),
+        "ready_case_count": sum(bool(row["ready"]) for row in rows),
+        "ready_v1_case_count": sum(
+            bool(row["ready"]) and row["expected_path"] == "v1" for row in rows
+        ),
+        "ready_v2_case_count": sum(
+            bool(row["ready"]) and row["expected_path"] == "v2" for row in rows
+        ),
+        "fixture_required_case_count": sum(
+            row["expected_path"] == "pregraph_reject" for row in rows
+        ),
+        "cases": rows,
+    }
+
+
 def _model_config_hash(config: Settings) -> str:
     return _sha256_json(
         {
@@ -694,6 +764,9 @@ async def _preflight(
     executable = [case for case in cases if case.expected_path != "pregraph_reject"]
     required_ids = [paper_id for case in executable for paper_id in case.scope_paper_ids]
     mapping, missing, invalid = await _paper_mapping(user.id, required_ids)
+    answer_model_configured = bool(config.openai_api_key) or bool(
+        config.fallback_openai_api_key and config.fallback_chat_model
+    )
     reasons: list[str] = []
     if missing:
         reasons.append("required_papers_missing")
@@ -704,9 +777,7 @@ async def _preflight(
             reasons.append("multi_agent_feature_disabled")
         if not config.skills_enabled:
             reasons.append("skills_feature_disabled")
-    if not config.openai_api_key and not (
-        config.fallback_openai_api_key and config.fallback_chat_model
-    ):
+    if not answer_model_configured:
         reasons.append("answer_model_not_configured")
     snapshot_hash = None
     if not missing and not invalid and mapping:
@@ -721,6 +792,15 @@ async def _preflight(
         "corpus_snapshot_hash": snapshot_hash,
         "missing_paper_ids": missing,
         "invalid_paper_ids": invalid,
+        "case_readiness": build_case_readiness_matrix(
+            cases,
+            mapping,
+            missing_paper_ids=missing,
+            invalid_paper_ids=invalid,
+            skills_enabled=config.skills_enabled,
+            multi_agent_enabled=config.multi_agent_enabled,
+            answer_model_configured=answer_model_configured,
+        ),
         "feature_flags": {
             "skills_enabled": config.skills_enabled,
             "multi_agent_enabled": config.multi_agent_enabled,

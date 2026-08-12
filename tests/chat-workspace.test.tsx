@@ -142,7 +142,7 @@ describe("ChatWorkspace", () => {
 
     render(<ChatWorkspace binding={{ type: "paper", paperId: "paper-1" }} scopeLabel="测试论文" dataSource={source} />);
 
-    expect(await screen.findByText("本次回答未通过证据核验，未向你展示未经验证的内容。")).toBeInTheDocument();
+    expect(await screen.findByText("本次回答未完成，请重试。")).toBeInTheDocument();
     expect(screen.getAllByText("这篇文章讲了什么")).toHaveLength(1);
   });
 
@@ -195,6 +195,23 @@ describe("ChatWorkspace", () => {
     fireEvent.click(within(history).getByRole("button", { name: "下一页" }));
     expect(await within(history).findByText("会话 16")).toBeInTheDocument();
     expect(within(history).getByText("第 2 / 2 页")).toBeInTheDocument();
+  });
+
+  it("切换集合时忽略其他范围的本地恢复记录，并打开当前集合最近会话", async () => {
+    localStorage.setItem("paperleaf:chat:library", "session-other-scope");
+    const sessions: ChatSession[] = [
+      { id: "session-old", title: "旧集合会话", type: "collection", collectionId: "collection-current", createdAt, updatedAt: "2026-08-10T10:00:00Z" },
+      { id: "session-new", title: "最新集合会话", type: "collection", collectionId: "collection-current", createdAt, updatedAt: "2026-08-13T10:00:00Z" },
+      { id: "session-other-scope", title: "其他范围会话", type: "library", createdAt, updatedAt: "2026-08-14T10:00:00Z" },
+    ];
+    const listMessages = vi.fn().mockResolvedValue([]);
+    const source = { ...demoDataSource, listChatSessions: vi.fn().mockResolvedValue(sessions), listChatMessages: listMessages };
+
+    render(<ChatWorkspace binding={{ type: "collection", collectionId: "collection-current" }} scopeLabel="当前集合" dataSource={source} />);
+
+    await waitFor(() => expect(listMessages).toHaveBeenCalledWith("session-new"));
+    expect(screen.getAllByText("最新集合会话").length).toBeGreaterThan(0);
+    expect(screen.queryByText("其他范围会话")).toBeInTheDocument();
   });
 
   it("已核验段落在界面中逐字呈现，而不是整段瞬间出现", async () => {
@@ -253,19 +270,41 @@ describe("ChatWorkspace", () => {
       streamHandlers?.onActivity?.({ key: "comparison:plan", node: "plan_comparison", label: "拆分跨文献比较", step: 9, status: "completed", kind: "comparison_plan", total: 2 });
       streamHandlers?.onActivity?.({ key: "subtask:s1", node: "compare_subtask", label: "并行整理论文证据", step: 11, status: "completed", kind: "comparison_subtask", subtaskId: "s1", ordinal: 1, total: 2, findingCount: 4 });
       streamHandlers?.onActivity?.({ key: "subtask:s2", node: "compare_subtask", label: "并行整理论文证据", step: 12, status: "failed", kind: "comparison_subtask", rawStatus: "timeout", subtaskId: "s2", ordinal: 2, total: 2 });
-      streamHandlers?.onActivity?.({ key: "comparison:merge", node: "merge_comparison", label: "合并并去重证据", step: 14, status: "completed", kind: "comparison_merge", partialFailure: true });
     });
 
     const status = await screen.findByRole("region", { name: "并行跨文献比较状态" });
-    expect(within(status).getByText("已拆分为 2 个只读分析任务")).toBeInTheDocument();
+    expect(within(status).getByText("已分为 2 组分析")).toBeInTheDocument();
     expect(within(status).getByText("第 1/2 组已整理 4 条候选证据")).toBeInTheDocument();
     expect(within(status).getByText("第 2/2 组分析超时，将基于其余证据继续")).toBeInTheDocument();
-    expect(within(status).getByText("部分分析未完成，回答仅使用已完成并核验的证据")).toBeInTheDocument();
-    expect(status).toHaveTextContent("进度摘要");
+    expect(status).toHaveTextContent("分析进度");
     expect(status).not.toHaveTextContent("chunk");
+
+    act(() => streamHandlers?.onActivity?.({ key: "comparison:merge", node: "merge_comparison", label: "合并并去重证据", step: 14, status: "completed", kind: "comparison_merge", partialFailure: true }));
+    expect(await within(status).findByText("部分分析未完成，回答仅使用已完成并核验的证据")).toBeInTheDocument();
+    expect(within(status).queryByText("第 1/2 组已整理 4 条候选证据")).not.toBeInTheDocument();
+    expect(status).toHaveTextContent("证据已整理");
 
     act(() => streamHandlers?.onActivity?.({ key: "comparison:merge", node: "merge_comparison", label: "合并并去重证据", step: 14, status: "completed", kind: "comparison_merge", fallbackToV1: true, fallbackReason: "all_subtasks_failed" }));
     expect(await within(status).findByText("并行分析均未完成，已切换为标准检索")).toBeInTheDocument();
+  });
+
+  it("恢复跨文献比较运行时先给出稳定占位，不暴露编排版本", async () => {
+    const session = activeSession();
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn().mockResolvedValue([session]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      getAgentRun: vi.fn().mockResolvedValue({ ...activeRun(""), orchestrationVersion: "specialist_subgraph_v3" }),
+      subscribeAgentRun: vi.fn(async (_runId, _handlers, options) => {
+        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      }),
+    };
+
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+
+    const status = await screen.findByRole("region", { name: "并行跨文献比较状态" });
+    expect(within(status).getByText("正在恢复比较进度…")).toBeInTheDocument();
+    expect(status).not.toHaveTextContent("specialist_subgraph_v3");
   });
 
   it("普通单篇问答不展示并行比较状态", async () => {
@@ -382,7 +421,7 @@ describe("ChatWorkspace", () => {
     render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
     expect(await screen.findByText("运行已暂停，正在等待恢复")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送问题" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "取消运行" }));
+    fireEvent.click(screen.getByRole("button", { name: "停止回答" }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith("r-active"));
     expect(subscribe).not.toHaveBeenCalled();
   });
@@ -405,7 +444,7 @@ describe("ChatWorkspace", () => {
     render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
     const input = await screen.findByPlaceholderText(/输入问题/);
     fireEvent.change(input, { target: { value: "取消后继续编辑" } });
-    fireEvent.click(await screen.findByRole("button", { name: "取消运行" }));
+    fireEvent.click(await screen.findByRole("button", { name: "停止回答" }));
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
     expect(listMessages.mock.calls.length).toBeGreaterThanOrEqual(2);
     await waitFor(() => expect(screen.getByRole("button", { name: "发送问题" })).toBeEnabled());
@@ -474,7 +513,7 @@ describe("ChatWorkspace", () => {
     fireEvent.change(input, { target: { value: "已受理问题" } });
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/状态(?:正在|暂时无法)恢复/);
-    expect(await screen.findByRole("button", { name: "取消运行" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "停止回答" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送问题" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     expect(submit).toHaveBeenCalledTimes(1);

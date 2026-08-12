@@ -35,7 +35,7 @@ pytest
 
 ```bash
 docker compose --env-file .env.example config --quiet
-docker compose --env-file .env.example build web api worker
+docker compose --env-file .env.example build web api worker migrate
 # 服务启动后，从环境变量读取管理员凭证并执行临时数据闭环
 python scripts/smoke_compose.py
 ```
@@ -318,3 +318,17 @@ Go/No-Go 采用预冻结门槛：所有安全计数必须为 0；复杂任务完
 v2 的 p95 和估算 Token 不超过 v1 的 2 倍。质量指标使用接近天花板时不回退、否则至少
 提升 5 个百分点的 ceiling-aware 规则，同时要求人工盲评完成。没有完整人工盲评时，
 即使结构、安全和成本门通过，也只能输出 `quality_pending`。
+
+## 2026-08-13 有界 Specialist 多 Agent 验证
+
+新增 `specialist_subgraph_v3` 的测试分为三层：
+
+- 确定性：任务上限、论文范围、独立上下文、未知证据别名、预算、超时、部分失败、全失败、reducer 幂等和 Checkpoint 恢复。
+- 持久链路：同一父 Run、三个 Specialist、零 Function Tool 二次规划、安全事件、独立综合上下文、引用与支持门禁。
+- 真实模型：Docker Compose 中用 ResNet、ViT、CLIP 三篇开放论文和 DeepSeek 完成跨论文方法比较，保留四个迭代 Run。
+
+本轮最终全量门禁：后端共收集 511 项，503 项通过、8 项外部基础设施用例按配置跳过，Ruff 全绿；前端 21 个文件、120 项 Vitest 全部通过，TypeScript 与生产构建通过，ESLint 0 错误（保留两条 TanStack Table 编译器兼容提示）。
+
+真实 Run 中，首个版本因回答模型连续超时失败；后续三个完成。最新 `682ab92d-a602-4e95-b7e6-c438e1783cc8` 用时 150880 ms，返回 7 个合法引用并覆盖三篇论文，支持状态为 supported/partial。相对前一次同问题运行少 25.66%，但这不是受控 A/B，不作为稳定性能结论。完整记录见 [开发与真实验证报告](reports/2026-08-13-bounded-specialists.md)。
+
+完整 48 例评测目前仍为 `quality_pending`：草案要求 20 篇冻结论文，而本地语料不足以覆盖全部范围；在补齐语料和人工盲评之前，不生成质量 Go 结论。

@@ -29,6 +29,7 @@ PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保�
 - 阅读器提问会携带服务端复核后的当前论文、物理页和选中文字；长会话按模型窗口保留最近原话并生成不可作为引用的结构化摘要
 - 可选长期记忆只保存用户明确表达的偏好、研究方向和固定背景；用户可在设置中查看、修改、固定、停用、删除或彻底清空
 - 科研任务按需加载版本化 Skill：常规问答、原文定位、跨论文比较、相关论文发现、主张核验、总结与研究脑图互不混用工具权限
+- 可选的有界 Specialist 子图会把 3～10 篇论文的复杂比较拆成最多三个隔离分支，经过确定性合并后再生成带页码引用的综合回答；默认关闭，普通问答不增加额外模型调用
 - 支持原生 Function Calling 的模型可在 Skill 白名单内选择强类型工具；多轮论文发现使用结构化 TaskFrame 继承数量、年份、来源和已展示候选，整个 Run 共享 Provider 权限与限次；参数、用户作用域、步骤、超时和写操作确认均由服务端 Harness 校验
 - 可选学术 MCP 只开放 OpenAlex、Semantic Scholar 公开元数据工具；相关论文发现未指定数据源时至少尝试一次 OpenAlex，其他问答仅在本地证据不足或用户明确要求时联网，外部结果不能冒充已读论文证据
 - 联网候选会过滤数据集、附件和其他非论文条目，按当前集合的标题与摘要重排，并在连续推荐时排除整库论文和此前实际展示的结果
@@ -135,6 +136,9 @@ PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可
 | `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务最多尝试次数，范围 1~3 |
 | `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败多少次后打开熔断器 |
 | `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断后的冷却时间 |
+| `PAPERLEAF_SPECIALIST_AGENTS_ENABLED` | 是否为复杂跨论文比较启用有界 Specialist 子图；默认关闭 |
+| `PAPERLEAF_SPECIALIST_AGENT_TIMEOUT_SECONDS` | 单个 Specialist 的模型调用上限，默认 45 秒 |
+| `PAPERLEAF_SPECIALIST_TOTAL_TIMEOUT_SECONDS` | 整个 Specialist 研究子图的总上限，默认 150 秒 |
 
 修改嵌入模型或维度后，需要对既有文献重新建立索引。未配置 API Key 时，生产环境不会把文献发送给任何模型：系统保留全文检索、引用校验和提取式产物，但不会生成向量、调用模型回答或执行视觉 OCR。
 

@@ -157,7 +157,7 @@ const comparisonFallbackLabels: Record<string, string> = {
   no_merged_evidence: "未合并出可用证据",
   cancelled: "并行分析已取消",
   timeout: "并行分析超时",
-  lease_lost: "后台任务已由其他工作进程接管",
+  lease_lost: "并行分析已中断",
   internal_error: "并行分析暂时不可用",
   other: "并行分析暂时不可用",
 };
@@ -166,7 +166,7 @@ function comparisonActivityText(activity: AgentActivity): string {
   if (activity.kind === "comparison_plan") {
     if (activity.status === "running") return "正在拆分跨文献比较";
     if (activity.status === "failed") return "比较计划未完成，将使用标准检索";
-    return activity.total ? `已拆分为 ${activity.total} 个只读分析任务` : "跨文献比较计划已完成";
+    return activity.total ? `已分为 ${activity.total} 组分析` : "比较范围已确定";
   }
   if (activity.kind === "comparison_subtask") {
     const ordinal = activity.ordinal ?? 0;
@@ -195,11 +195,11 @@ function runStatusText(run: AgentRunSnapshot | null, connection: "connected" | "
   if (connection === "reconnecting" && isActiveRun(run)) return "正在恢复连接…";
   if (!run) return "";
   if (run.error?.includes("暂时无法恢复")) return run.error;
-  if (run.cancelRequested && isActiveRun(run)) return "正在取消后台问答…";
+  if (run.cancelRequested && isActiveRun(run)) return "正在停止回答…";
   if (run.status === "pending") return "正在等待处理，可离开页面";
   if (run.status === "running") return "正在回答，可离开页面";
   if (run.status === "interrupted") return "运行已暂停，正在等待恢复";
-  if (run.status === "completed") return "回答已完成并持久化";
+  if (run.status === "completed") return "回答已完成";
   if (run.status === "cancelled") return "问答已取消";
   return run.error ? `问答失败：${run.error}` : "问答运行失败";
 }
@@ -335,10 +335,11 @@ export function ChatWorkspace({
     setSessions(next);
     const stored = typeof window === "undefined" ? null : window.localStorage.getItem(`paperleaf:chat:${workspaceKey}`);
     const preferred = preferredId ?? selectedId ?? stored;
-    const candidate = next.find((item) => item.id === preferred && belongsToWorkspace(item, stableBinding))
-      ?? next.find((item) => belongsToWorkspace(item, stableBinding) && matchesBinding(item, stableBinding));
+    const sorted = sortedWorkspaceSessions(next, stableBinding);
+    const candidate = next.find((item) => item.id === preferred && matchesBinding(item, stableBinding))
+      ?? sorted.find((item) => matchesBinding(item, stableBinding));
     setSelectedId(candidate?.id ?? null);
-    if (!compact) setHistoryPage(historyPageForSession(sortedWorkspaceSessions(next, stableBinding), candidate?.id ?? null));
+    if (!compact) setHistoryPage(historyPageForSession(sorted, candidate?.id ?? null));
     return next;
   }, [compact, dataSource, selectedId, stableBinding, workspaceKey]);
 
@@ -348,10 +349,11 @@ export function ChatWorkspace({
       if (stopped) return;
       setSessions(next);
       const stored = window.localStorage.getItem(`paperleaf:chat:${workspaceKey}`);
-      const candidate = next.find((item) => item.id === stored && belongsToWorkspace(item, stableBinding))
-        ?? next.find((item) => belongsToWorkspace(item, stableBinding) && matchesBinding(item, stableBinding));
+      const sorted = sortedWorkspaceSessions(next, stableBinding);
+      const candidate = next.find((item) => item.id === stored && matchesBinding(item, stableBinding))
+        ?? sorted.find((item) => matchesBinding(item, stableBinding));
       setSelectedId(candidate?.id ?? null);
-      if (!compact) setHistoryPage(historyPageForSession(sortedWorkspaceSessions(next, stableBinding), candidate?.id ?? null));
+      if (!compact) setHistoryPage(historyPageForSession(sorted, candidate?.id ?? null));
     }).catch((reason: unknown) => {
       if (!stopped) setError(reason instanceof Error ? reason.message : "对话历史读取失败");
     }).finally(() => {
@@ -595,6 +597,14 @@ export function ChatWorkspace({
   const comparisonActivities = activities
     .filter((item) => item.kind?.startsWith("comparison_"))
     .sort((left, right) => left.step - right.step);
+  const comparisonMerge = comparisonActivities.find((item) => item.kind === "comparison_merge");
+  const comparisonMergeFinished = Boolean(comparisonMerge && comparisonMerge.status !== "running");
+  const visibleComparisonActivities = comparisonMergeFinished && comparisonMerge
+    ? [comparisonMerge]
+    : comparisonActivities;
+  const comparisonRun = currentRun?.orchestrationVersion === "compare_map_reduce_v2"
+    || currentRun?.orchestrationVersion === "specialist_subgraph_v3";
+  const showComparisonStatus = comparisonActivities.length > 0 || Boolean(comparisonRun && shouldSubscribeRun(currentRun));
 
   return (
     <div className={compact ? "chat-workspace compact" : "chat-workspace"} data-active-run={active || creatingSession ? "true" : "false"}>
@@ -613,7 +623,7 @@ export function ChatWorkspace({
           <div className="chat-session-list">
             {pagedSessions.map((session) => <div className={session.id === selectedId ? "chat-session active" : "chat-session"} key={session.id}>
               {renamingId === session.id ? <form onSubmit={(event) => { event.preventDefault(); void saveRename(session.id); }}><input autoFocus aria-label="对话标题" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} maxLength={80} /><button type="submit" className="icon-button" aria-label="保存标题"><Check size={14} /></button><button type="button" className="icon-button" aria-label="取消重命名" onClick={() => setRenamingId(null)}><X size={14} /></button></form> : <>
-                <button type="button" className="chat-session-select" onClick={() => selectSession(session)}><span>{session.title}</span><small>{session.currentRunStatus && activeStatuses.has(session.currentRunStatus) ? "后台运行中" : new Date(session.updatedAt).toLocaleDateString("zh-CN")}</small></button>
+                <button type="button" className="chat-session-select" onClick={() => selectSession(session)}><span>{session.title}</span><small>{session.currentRunStatus && activeStatuses.has(session.currentRunStatus) ? "回答中" : new Date(session.updatedAt).toLocaleDateString("zh-CN")}</small></button>
                 <button type="button" className="icon-button" aria-label={`重命名对话 ${session.title}`} disabled={isActiveSession(session)} onClick={() => { setRenamingId(session.id); setRenameDraft(session.title); }}><Pencil size={13} /></button>
                 <button type="button" className="icon-button" aria-label={`删除对话 ${session.title}`} disabled={isActiveSession(session)} onClick={() => void deleteSession(session)}><Trash2 size={13} /></button>
               </>}
@@ -631,26 +641,26 @@ export function ChatWorkspace({
           {!loading && visibleMessages.length === 0 && !liveAnswer && <div className="chat-empty"><strong>向文献提问</strong><div className="chat-prompts"><span>可以这样问</span>{exampleQuestions.map((prompt) => <button type="button" key={prompt} onClick={() => fillPrompt(prompt)}>{prompt}<ChevronRight size={14} /></button>)}</div></div>}
           {visibleMessages.map((message) => <article key={message.id} className={`chat-message ${message.role}`} aria-label={message.role === "user" ? "你的消息" : "PaperLeaf 回复"}>
             <span className="chat-message-author">{message.role === "user" ? "你" : "PaperLeaf"}{message.role === "assistant" && message.status !== "completed" ? ` · ${message.status === "failed" ? "回答失败，已保留核验段落" : message.status === "cancelled" ? "已取消，已保留核验段落" : "正在写入"}` : ""}</span>
-            {message.role === "assistant" ? message.content.trim() ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p className="chat-message-fallback">{message.status === "cancelled" ? "本次回答已取消。" : "本次回答未通过证据核验，未向你展示未经验证的内容。"}</p> : <p>{message.content}</p>}
+            {message.role === "assistant" ? message.content.trim() ? <SafeMarkdown content={message.content} citations={message.citations} onOpenCitation={onOpenCitation} /> : <p className="chat-message-fallback">{message.status === "cancelled" ? "本次回答已取消。" : "本次回答未完成，请重试。"}</p> : <p>{message.content}</p>}
             {message.role === "assistant" && <ChatCitations citations={message.citations} onOpenCitation={onOpenCitation} />}
           </article>)}
           {currentRun && liveAnswer && <article className="chat-message assistant live" aria-label="PaperLeaf 正在呈现回答"><span className="chat-message-author">PaperLeaf</span><div className={progressiveAnswer === liveAnswer ? "progressive-answer" : "progressive-answer typing"}><SafeMarkdown content={progressiveAnswer} citations={liveCitations} onOpenCitation={onOpenCitation} /></div><ChatCitations citations={liveCitations} onOpenCitation={onOpenCitation} /></article>}
           {currentRun && <div className={`chat-run-state ${currentRun.status}`} role="status">
-            <div><span>{runStatusText(currentRun, connection)}</span>{isActiveRun(currentRun) && <button type="button" className="secondary-button" disabled={currentRun.cancelRequested} onClick={() => void cancelRun()}><Square size={13} />{currentRun.cancelRequested ? "正在取消" : "取消运行"}</button>}</div>
+            <div><span>{runStatusText(currentRun, connection)}</span>{isActiveRun(currentRun) && <button type="button" className="secondary-button" disabled={currentRun.cancelRequested} onClick={() => void cancelRun()}><Square size={13} />{currentRun.cancelRequested ? "正在停止" : "停止回答"}</button>}</div>
             {currentRun.pendingAction && <div className="chat-pending-action"><strong>需要你的确认</strong><p>{currentRun.pendingAction.riskMessage}</p>{currentRun.pendingAction.candidates.slice(0, 3).map((candidate) => <span key={candidate.arxivId ?? candidate.title}>{candidate.title ?? candidate.arxivId}</span>)}<div>{currentRun.pendingAction.allowedDecisions.includes("approve") && <button type="button" className="primary-button" onClick={() => void resumeRun("approve")}>确认导入并继续</button>}{currentRun.pendingAction.allowedDecisions.includes("reject") && <button type="button" className="secondary-button" onClick={() => void resumeRun("reject")}>不导入，继续回答</button>}</div></div>}
-            {shouldSubscribeRun(currentRun) && <ol aria-label="问答处理阶段">
+            {shouldSubscribeRun(currentRun) && (comparisonActivities.length === 0 || comparisonMergeFinished) && <ol aria-label="问答处理阶段">
               <li data-status={phaseNodes.retrieval ?? (currentRun.status === "pending" ? "pending" : undefined)}><span>1</span>检索 <small>{phaseLabel(phaseNodes.retrieval)}</small></li>
               <li data-status={phaseNodes.generation}><span>2</span>生成 <small>{phaseLabel(phaseNodes.generation)}</small></li>
               <li data-status={phaseNodes.validation}><span>3</span>核验 <small>{phaseLabel(phaseNodes.validation)}</small></li>
             </ol>}
-            {comparisonActivities.length > 0 && <section className="chat-parallel-status" aria-label="并行跨文献比较状态">
-              <div><strong>并行跨文献比较</strong><small>进度摘要</small></div>
-              <ol aria-live="off">
-                {comparisonActivities.map((activity) => <li key={activity.key} data-status={activity.status}>
+            {showComparisonStatus && <section className="chat-parallel-status" aria-label="并行跨文献比较状态">
+              <div><strong>跨文献比较</strong><small>{comparisonMergeFinished ? "证据已整理" : "分析进度"}</small></div>
+              {visibleComparisonActivities.length === 0 ? <p>正在恢复比较进度…</p> : <ol aria-live="off">
+                {visibleComparisonActivities.map((activity) => <li key={activity.key} data-status={activity.status}>
                   <span aria-hidden="true">{activity.status === "completed" ? "✓" : activity.status === "failed" ? "!" : "·"}</span>
                   <span>{comparisonActivityText(activity)}</span>
                 </li>)}
-              </ol>
+              </ol>}
             </section>}
             {currentRun.error?.includes("暂时无法恢复") && <button type="button" className="text-button" onClick={() => void recoverRun()}><RotateCw size={13} />重新连接运行状态</button>}
             {currentRun.status === "failed" && <button type="button" className="text-button" onClick={() => { setRun(null); textareaRef.current?.focus(); }}><RotateCw size={13} />重新编辑问题</button>}

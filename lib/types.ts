@@ -569,6 +569,7 @@ export interface AgentRunSnapshot {
   sessionId: string;
   status: AgentRunStatus;
   cancelRequested: boolean;
+  orchestrationVersion?: string;
   pendingAction?: {
     actionId: string;
     type: string;

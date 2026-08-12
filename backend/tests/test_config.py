@@ -88,6 +88,15 @@ def test_answer_quality_thresholds_must_be_probabilities() -> None:
         ({"agent_rate_limit_window_seconds": 3601}, "限流窗口"),
         ({"redis_key_prefix": "   "}, "Key 前缀"),
         ({"model_context_tokens": 2048}, "上下文窗口"),
+        (
+            {
+                "multi_agent_enabled": False,
+                "specialist_agents_enabled": True,
+                "multi_agent_token_budget": 5000,
+                "model_context_tokens": 4096,
+            },
+            "Token 预算不能超过模型上下文窗口",
+        ),
         ({"context_safety_ratio": 0}, "上下文预算比例"),
         (
             {"context_compact_ratio": 0.9, "context_hard_limit_ratio": 0.85},

@@ -379,6 +379,7 @@ function mapAgentRun(item: Record<string, unknown>): AgentRunSnapshot {
     sessionId: String(item.session_id ?? ""),
     status,
     cancelRequested: item.cancel_requested === true,
+    orchestrationVersion: item.orchestration_version ? String(item.orchestration_version) : undefined,
     pendingAction: pendingAction ? {
       actionId: String(pendingAction.action_id ?? ""),
       type: String(pendingAction.type ?? ""),

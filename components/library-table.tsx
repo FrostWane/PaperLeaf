@@ -202,7 +202,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
   return (
     <>
       <div className="page-lead library-lead">
-        <div><h2>你的研究文献</h2><p>用层级集合建立研究主题边界；父集合会包含全部子集合中的文献。</p></div>
+        <div><h2>你的研究文献</h2></div>
         <div className="collection-tabs" role="tablist" aria-label="文献范围">
           {([ ["all", "全部文献"], ["recent", "最近阅读"], ["unorganized", "待整理"], ["archived", "已归档"] ] as const).map(([id, label]) => <button role="tab" aria-selected={scope === id} className={scope === id ? "active" : ""} key={id} onClick={() => setScope(id)}>{label}<span>{scopeCounts[id]}</span></button>)}
         </div>
@@ -235,7 +235,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
           <Dialog.Content className="dialog-content" aria-describedby="bulk-reindex-description">
-            <div className="dialog-head"><div><Dialog.Title>重新识别并索引 {selectedIds.size} 篇文献</Dialog.Title><Dialog.Description id="bulk-reindex-description">系统会复用已保存的原始 PDF，重新提取元数据、页文本、Chunk、全文索引和向量，不会新增重复文献。</Dialog.Description></div><Dialog.Close className="icon-button" aria-label="关闭" disabled={busy}><X size={17} /></Dialog.Close></div>
+            <div className="dialog-head"><div><Dialog.Title>重新处理 {selectedIds.size} 篇文献</Dialog.Title><Dialog.Description id="bulk-reindex-description">将从已保存的 PDF 重新识别文献信息并更新检索内容，不会产生重复文献。</Dialog.Description></div><Dialog.Close className="icon-button" aria-label="关闭" disabled={busy}><X size={17} /></Dialog.Close></div>
             <p className="bulk-reindex-warning">已有译文将失效，概览和研究脑图会在下次使用时重新生成；问答历史不会被删除。</p>
             <div className="dialog-actions"><Dialog.Close asChild><button type="button" className="secondary-button" disabled={busy}>取消</button></Dialog.Close><button type="button" className="primary-button" disabled={busy || selectedIds.size === 0} onClick={() => void confirmBulkReindex()}><RotateCcw size={15} />{busy ? "正在加入队列…" : "确认重新处理"}</button></div>
           </Dialog.Content>

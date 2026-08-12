@@ -30,6 +30,12 @@ from .agent.memory import (
 )
 from .agent.provider_policy import build_provider_run_policy, provider_policy_snapshot
 from .agent.recommendation_quality import entity_keys
+from .agent.research_specialist_graph import (
+    SPECIALIST_ORCHESTRATION_VERSION,
+    ResearchGraphContext,
+    specialist_result_from_state,
+)
+from .agent.research_specialists import EvidenceSpecialist
 from .agent.research_synthesis import (
     ORCHESTRATION_VERSION,
     ResearchLeaseLostError,
@@ -285,6 +291,8 @@ async def _invoke_with_cancel(
     graph: Any,
     run: Any,
     initial: dict[str, Any],
+    *,
+    checkpoint_namespace: str | None = None,
 ) -> dict[str, Any]:
     orchestration_version = str(
         getattr(run, "orchestration_version", "")
@@ -297,7 +305,7 @@ async def _invoke_with_cancel(
         # 否则恢复时可能把不同状态形状的节点结果混在一起。
         "configurable": {
             "thread_id": run.thread_id,
-            "checkpoint_ns": orchestration_version,
+            "checkpoint_ns": checkpoint_namespace or f"{orchestration_version}/final",
         },
     }
     resume_decision = (run.scope_snapshot or {}).get("resume_decision")
@@ -381,6 +389,79 @@ async def _invoke_parallel_compare_with_cancel(
             done, _pending = await asyncio.wait({task}, timeout=0.2)
             if done:
                 return await task
+            current = await repository.get_agent_run(run.id)
+            claim_current = await repository.is_agent_claim_current(run.id, claim_token)
+            if (
+                not current
+                or current.cancel_requested
+                or current.status == "cancelled"
+                or not claim_current
+            ):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise asyncio.CancelledError
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        raise
+
+
+async def _invoke_specialist_graph_with_cancel(
+    repository: Any,
+    run: Any,
+    claim_token: str,
+    graph: Any,
+    initial: dict[str, Any],
+    context: ResearchGraphContext,
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """恢复或启动同一父 Run 的 Specialist Research Graph。"""
+
+    graph_config = {
+        "recursion_limit": 8,
+        "configurable": {
+            "thread_id": run.thread_id,
+            "checkpoint_ns": f"{SPECIALIST_ORCHESTRATION_VERSION}/research",
+        },
+    }
+    invocation: Any = initial
+    try:
+        snapshot = await graph.aget_state(graph_config)
+        if getattr(snapshot, "values", None):
+            if getattr(snapshot, "next", ()):
+                invocation = None
+            elif str(snapshot.values.get("status", "")) in {
+                "succeeded",
+                "partial",
+                "failed",
+            }:
+                return dict(snapshot.values)
+    except ValueError:
+        # 无 Checkpointer 的测试/演示图从初始输入启动；生产图始终使用 PostgreSQL。
+        invocation = initial
+
+    task = asyncio.create_task(graph.ainvoke(invocation, graph_config, context=context))
+    started_at = time.monotonic()
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=0.2)
+            if done:
+                return await task
+            if time.monotonic() - started_at >= timeout_seconds:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise TimeoutError("SPECIALIST_GRAPH_TIMEOUT")
             current = await repository.get_agent_run(run.id)
             claim_current = await repository.is_agent_claim_current(run.id, claim_token)
             if (
@@ -674,6 +755,8 @@ async def execute_agent_run(
     harness_config: Any = settings,
     skill_registry: SkillRegistry | None = None,
     function_tool_harness: FunctionToolHarness | None = None,
+    research_graph: Any | None = None,
+    evidence_specialist: EvidenceSpecialist | None = None,
 ) -> None:
     """执行 Graph；只把通过 citation + support 的完整段落写入持久层。"""
 
@@ -1147,15 +1230,268 @@ async def execute_agent_run(
 
         compare_result: ResearchSynthesisResult | None = None
         compare_v2_used = False
+        specialist_v3_used = False
+        research_orchestration_attempted = False
+        research_fallback_to_v1 = False
         compare_fallback_reason: str | None = None
         compare_event_epoch = hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:10]
+        requested_orchestration = str(
+            snapshot.get("orchestration_version", "single_agent_v1")
+        )
+        specialist_requested = (
+            requested_orchestration == SPECIALIST_ORCHESTRATION_VERSION
+            and bool(harness_flags.get("specialist_agents_enabled", False))
+            and scope in {"collection", "library"}
+            and 3 <= len(snapshot.get("paper_ids", [])) <= 10
+        )
         compare_requested = (
-            str(snapshot.get("orchestration_version", "single_agent_v1")) == ORCHESTRATION_VERSION
+            requested_orchestration == ORCHESTRATION_VERSION
             and bool(harness_flags.get("multi_agent_enabled", False))
             and scope in {"collection", "library"}
             and 3 <= len(snapshot.get("paper_ids", [])) <= 10
         )
+        if specialist_requested and not resolution.needs_clarification:
+            research_orchestration_attempted = True
+            specialist_started_at = time.perf_counter()
+            if selected_skill != "compare_papers":
+                compare_fallback_reason = "skill_not_supported"
+            elif (
+                function_tool_harness is None
+                or research_graph is None
+                or evidence_specialist is None
+            ):
+                compare_fallback_reason = "internal_error"
+            else:
+                paper_ids = [str(value) for value in snapshot.get("paper_ids", [])]
+
+                async def specialist_retriever(task: ResearchTask) -> list[Evidence]:
+                    return await function_tool_harness.retriever(
+                        LibrarySearchInput(
+                            user_id=run.user_id,
+                            query=(
+                                f"{resolution.resolved_query}\n"
+                                f"比较维度：{'、'.join(task.dimensions)}"
+                            ),
+                            paper_ids=list(task.paper_ids),
+                            limit=min(18, max(8, len(task.paper_ids) * 5)),
+                        )
+                    )
+
+                async def specialist_lease_guard() -> bool:
+                    return await repository.is_agent_claim_current(run.id, claim_token)
+
+                async def specialist_event_sink(event: str, data: dict[str, Any]) -> None:
+                    event_map = {
+                        "plan_started": ("node_started", "plan_comparison", "plan:start"),
+                        "plan_finished": ("node_finished", "plan_comparison", "plan:finish"),
+                        "subtask_started": ("node_started", "compare_subtask", "subtask:start"),
+                        "subtask_finished": ("node_finished", "compare_subtask", "subtask:finish"),
+                        "merge_started": ("node_started", "merge_comparison", "merge:start"),
+                        "merge_finished": ("node_finished", "merge_comparison", "merge:finish"),
+                    }
+                    event_type, node, suffix = event_map[event]
+                    ordinal = int(data.get("ordinal", 0))
+                    public: dict[str, Any] = {
+                        "node": node,
+                        "public_stage": (
+                            "comparison_planning"
+                            if node == "plan_comparison"
+                            else "comparison_subtask"
+                            if node == "compare_subtask"
+                            else "comparison_merge"
+                        ),
+                        "orchestration_version": SPECIALIST_ORCHESTRATION_VERSION,
+                    }
+                    for key in (
+                        "ordinal",
+                        "total",
+                        "paper_count",
+                        "subtask_total",
+                        "status",
+                        "finding_count",
+                        "succeeded_subtasks",
+                        "failed_subtasks",
+                        "timeout_subtasks",
+                        "dedup_count",
+                        "conflict_count",
+                        "duration_ms",
+                    ):
+                        if key in data:
+                            public[key] = data[key]
+                    if ordinal:
+                        public["subtask_id"] = f"s{ordinal}"
+                    if event == "subtask_finished" and data.get("status") != "succeeded":
+                        public["error_category"] = (
+                            "timeout" if data.get("status") == "timeout" else "invalid_output"
+                        )
+                    if event == "merge_finished":
+                        raw_status = str(data.get("status", "failed"))
+                        public["status"] = "completed" if raw_status == "succeeded" else raw_status
+                        public["partial_failure"] = raw_status == "partial"
+                        public["fallback_to_v1"] = raw_status == "failed"
+                    key_part = f":s{ordinal}" if ordinal else ""
+                    await repository.append_agent_run_event(
+                        run.id,
+                        event_type,
+                        public,
+                        event_key=(
+                            f"stage:compare:{compare_event_epoch}:{suffix}{key_part}"
+                        ),
+                        claim_token=claim_token,
+                    )
+
+                specialist_initial = {
+                    "run_id": run.id,
+                    "user_id": run.user_id,
+                    "objective": resolution.resolved_query,
+                    "paper_ids": paper_ids,
+                    "dimensions": ["研究问题", "核心方法", "实验设置", "主要结果", "局限"],
+                    "max_branches": int(harness_flags.get("multi_agent_max_branches", 3)),
+                    "total_token_budget": int(
+                        harness_flags.get("multi_agent_token_budget", 12000)
+                    ),
+                    "branch_results": {},
+                }
+                try:
+                    specialist_state = await _invoke_specialist_graph_with_cancel(
+                        repository,
+                        run,
+                        claim_token,
+                        research_graph,
+                        specialist_initial,
+                        ResearchGraphContext(
+                            retriever=specialist_retriever,
+                            specialist=evidence_specialist,
+                            lease_guard=specialist_lease_guard,
+                            event_sink=specialist_event_sink,
+                            branch_timeout_seconds=float(
+                                harness_flags.get("specialist_agent_timeout_seconds", 45)
+                            ),
+                        ),
+                        timeout_seconds=float(
+                            harness_flags.get("specialist_total_timeout_seconds", 150)
+                        ),
+                    )
+                    if str(specialist_state.get("status", "")) in {"succeeded", "partial"}:
+                        compare_result = specialist_result_from_state(specialist_state)
+                        specialist_v3_used = not compare_result.fallback_required
+                    else:
+                        compare_fallback_reason = str(
+                            specialist_state.get("fallback_reason") or "all_subtasks_failed"
+                        )
+                except asyncio.CancelledError:
+                    current = await repository.get_agent_run(run.id)
+                    if current and (current.cancel_requested or current.status == "cancelled"):
+                        return
+                    raise
+                except TimeoutError:
+                    compare_fallback_reason = "timeout"
+                except Exception:
+                    compare_fallback_reason = "internal_error"
+
+            if specialist_v3_used and compare_result is not None:
+                evidence_per_paper: dict[str, int] = {}
+                bounded_specialist_evidence: list[Evidence] = []
+                for item in compare_result.evidence:
+                    count = evidence_per_paper.get(item.paper_id, 0)
+                    if count >= 3 or len(bounded_specialist_evidence) >= 9:
+                        continue
+                    evidence_per_paper[item.paper_id] = count + 1
+                    bounded_specialist_evidence.append(item)
+                tasks_by_id = {
+                    task.subtask_id: task for task in compare_result.plan.tasks
+                }
+                synthesis_findings = []
+                for item in compare_result.report.findings:
+                    if item.status != "succeeded" or not item.claim.strip():
+                        continue
+                    task = tasks_by_id.get(item.subtask_id)
+                    task_paper_ids = set(task.paper_ids) if task is not None else set()
+                    synthesis_findings.append(
+                        {
+                            "papers": sorted(
+                                {
+                                    evidence.paper_title
+                                    for evidence in bounded_specialist_evidence
+                                    if evidence.paper_id in task_paper_ids
+                                }
+                            ),
+                            "claim": item.claim[:1500],
+                            "stance": item.stance,
+                            "confidence": round(float(item.confidence), 3),
+                        }
+                    )
+                tool_mode_active = True
+                initial["tool_mode_active"] = True
+                initial["pre_retrieved_evidence"] = bounded_specialist_evidence
+                initial["tool_steps"] = len(compare_result.plan.tasks)
+                # v3 的最终综合器使用 fresh context：只接收已解析的问题、当前
+                # Skill 与服务端复验后的合并证据，不继承聊天历史、Memory 或兄弟
+                # Specialist 的自由文本。会话约束已经固化进 resolved_query。
+                initial["messages"] = []
+                if skill_instructions:
+                    initial["messages"].append(
+                        {"role": "skill", "content": skill_instructions}
+                    )
+                if synthesis_findings:
+                    initial["messages"].append(
+                        {
+                            "role": "research_synthesis",
+                            "content": json.dumps(
+                                {
+                                    "findings": synthesis_findings,
+                                    "coverage_notice": (
+                                        compare_result.report.coverage_notice or ""
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    )
+                initial["memory_ids"] = []
+                initial["stage_timings_ms"]["retrieval"] = round(
+                    (time.perf_counter() - specialist_started_at) * 1000
+                )
+                if compare_result.report.coverage_notice:
+                    initial["tool_context_entries"] = [{
+                        "kind": "specialist_coverage",
+                        "status": compare_result.report.status,
+                        "summary": compare_result.report.coverage_notice,
+                    }]
+                harness_trace.update(
+                    _parallel_compare_trace(compare_result, fallback_reason=None)
+                )
+                harness_trace["orchestration_version"] = SPECIALIST_ORCHESTRATION_VERSION
+                harness_trace["compare_mode"] = "bounded_specialists"
+                harness_trace["tool_mode_active"] = True
+                harness_trace["tool_output_used"] = True
+                harness_trace["tool_activation_reason"] = "specialist_evidence"
+                harness_trace["function_calling"] = "specialist_subgraph"
+                harness_trace["synthesis_context"] = "fresh"
+                harness_trace["synthesis_evidence_count"] = len(
+                    bounded_specialist_evidence
+                )
+            else:
+                research_fallback_to_v1 = True
+                harness_trace.update(
+                    _parallel_compare_trace(None, fallback_reason=compare_fallback_reason)
+                )
+                harness_trace["orchestration_version"] = SPECIALIST_ORCHESTRATION_VERSION
+                harness_trace["compare_mode"] = "bounded_specialists"
+                harness_trace["function_calling"] = "legacy_fallback"
+                harness_trace["function_fallback_reason"] = (
+                    compare_fallback_reason or "no_merged_evidence"
+                )
+            await repository.update_agent_skill(
+                run.id,
+                claim_token,
+                selected_skill=selected_skill,
+                skill_version=skill_version,
+                harness_trace=harness_trace,
+            )
+
         if compare_requested and not resolution.needs_clarification:
+            research_orchestration_attempted = True
             compare_started_at = time.perf_counter()
             if selected_skill != "compare_papers":
                 compare_fallback_reason = "skill_not_supported"
@@ -1266,7 +1602,7 @@ async def execute_agent_run(
             and harness_flags.get("function_tools_enabled")
             and definition is not None
             and function_tool_harness is not None
-            and not compare_v2_used
+            and not research_orchestration_attempted
         ):
             tool_started_at = time.perf_counter()
             scope_paper_titles = list(initial.get("scope_paper_titles", []))
@@ -1451,7 +1787,17 @@ async def execute_agent_run(
             )
             return
         try:
-            result = await _invoke_with_cancel(repository, graph, run, initial)
+            result = await _invoke_with_cancel(
+                repository,
+                graph,
+                run,
+                initial,
+                checkpoint_namespace=(
+                    "single_agent_v1/fallback"
+                    if research_fallback_to_v1
+                    else f"{requested_orchestration}/final"
+                ),
+            )
         except asyncio.CancelledError:
             # 用户取消由 cancel API 在数据库中原子落终态。租约丢失、进程退出等
             # 外部取消不能由旧 Worker 无 token 改写 Run，否则会取消新 Worker。

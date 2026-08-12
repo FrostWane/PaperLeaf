@@ -67,7 +67,7 @@ pytest
 
 ```bash
 docker compose --env-file .env.example config --quiet
-docker compose --env-file .env.example build web api worker
+docker compose --env-file .env.example build web api worker migrate
 ```
 
 新增行为应包含成功、失败、权限与边界测试。前端交互同时测试键盘与移动视口。检索改进须提交原始计数和可复现协议，不只提交汇总百分比。

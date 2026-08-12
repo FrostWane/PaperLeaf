@@ -97,6 +97,20 @@ describe("持久化对话真实 API", () => {
     expect(connections).toEqual(["connected"]);
   });
 
+  it("读取运行时保留编排版本，供页面恢复比较进度", async () => {
+    server.use(
+      http.get(`${API_BASE_URL}/agent/runs/r1`, () => HttpResponse.json({
+        ...runPayload("running"),
+        orchestration_version: "compare_map_reduce_v2",
+      })),
+    );
+
+    await expect(realDataSource.getAgentRun("r1")).resolves.toMatchObject({
+      runId: "r1",
+      orchestrationVersion: "compare_map_reduce_v2",
+    });
+  });
+
   it("将并行比较子任务映射为隔离活动，并把超时标记为未完成", async () => {
     server.use(
       http.get(`${API_BASE_URL}/agent/runs/r1/events`, () => new HttpResponse(

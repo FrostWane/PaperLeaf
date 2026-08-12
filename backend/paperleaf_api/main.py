@@ -36,6 +36,11 @@ from .agent.graph import (
     build_configured_evidence_support_grader,
 )
 from .agent.memory import MEMORY_TYPES, memory_hash, normalize_memory_value
+from .agent.research_specialist_graph import (
+    SPECIALIST_ORCHESTRATION_VERSION,
+    build_research_specialist_graph,
+)
+from .agent.research_specialists import build_configured_evidence_specialist
 from .agent.skills import SkillRegistry
 from .agent.tools import DemoLibrarySearch, SQLLibrarySearch
 from .agent_execution import execute_agent_run
@@ -169,6 +174,11 @@ class AppServices:
             DemoLibrarySearch() if config.is_demo else SQLLibrarySearch(config, self.model_router)
         )
         self.agent_graph = self.build_agent_graph()
+        self.research_graph = build_research_specialist_graph()
+        self.evidence_specialist = build_configured_evidence_specialist(
+            self.model_router,
+            timeout_seconds=self.config.specialist_agent_timeout_seconds,
+        )
         self.skill_registry = SkillRegistry.default()
         self.mcp_gateway = McpGateway(self.repository, self.runtime_store, config)
 
@@ -249,6 +259,8 @@ class AppServices:
                     harness_config=self.config,
                     skill_registry=self.skill_registry,
                     function_tool_harness=self.function_tool_harness,
+                    research_graph=self.research_graph,
+                    evidence_specialist=self.evidence_specialist,
                 )
             finally:
                 task = asyncio.current_task()
@@ -492,6 +504,7 @@ def create_app(
             await checkpointer.setup()
             services.checkpointer = checkpointer
             services.agent_graph = services.build_agent_graph(checkpointer)
+            services.research_graph = build_research_specialist_graph(checkpointer)
             try:
                 yield
             finally:
@@ -2049,10 +2062,13 @@ def create_app(
                 "function_tools_enabled": config.function_tools_enabled,
                 "mcp_enabled": config.mcp_enabled,
                 "multi_agent_enabled": config.multi_agent_enabled,
+                "specialist_agents_enabled": config.specialist_agents_enabled,
                 "multi_agent_max_branches": config.multi_agent_max_branches,
                 "multi_agent_branch_timeout_seconds": (config.multi_agent_branch_timeout_seconds),
                 "multi_agent_total_timeout_seconds": (config.multi_agent_total_timeout_seconds),
                 "multi_agent_token_budget": config.multi_agent_token_budget,
+                "specialist_agent_timeout_seconds": config.specialist_agent_timeout_seconds,
+                "specialist_total_timeout_seconds": config.specialist_total_timeout_seconds,
             },
         }
         frozen_intent = classify_intent(
@@ -2067,13 +2083,18 @@ def create_app(
             scope=chat_session.type,
             web_enabled=bool(scope_snapshot["web_enabled"]),
         ).manifest.name
-        scope_snapshot["orchestration_version"] = (
-            "compare_map_reduce_v2"
-            if config.multi_agent_enabled
-            and config.skills_enabled
+        compare_scope = (
+            config.skills_enabled
             and frozen_skill == "compare_papers"
             and chat_session.type in {"collection", "library"}
             and 3 <= len(paper_ids) <= 10
+        )
+        scope_snapshot["orchestration_version"] = (
+            SPECIALIST_ORCHESTRATION_VERSION
+            if config.specialist_agents_enabled and compare_scope
+            else "compare_map_reduce_v2"
+            if config.multi_agent_enabled
+            and compare_scope
             else "single_agent_v1"
         )
         rate_limit = await services.runtime_store.acquire_rate_limit(

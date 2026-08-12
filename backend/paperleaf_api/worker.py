@@ -24,6 +24,8 @@ from .agent.graph import (
     build_configured_answerer,
     build_configured_evidence_support_grader,
 )
+from .agent.research_specialist_graph import build_research_specialist_graph
+from .agent.research_specialists import build_configured_evidence_specialist
 from .agent.skills import SkillRegistry
 from .agent.tools import SQLLibrarySearch
 from .agent_execution import execute_agent_run
@@ -90,6 +92,7 @@ async def confirmed_agent_import(user_id: str, candidate: dict) -> object:
 
 
 agent_graph: object | None = None
+agent_research_graph: object | None = None
 skill_registry = SkillRegistry.default()
 agent_repository = SQLAlchemyRepository(settings.session_secret)
 agent_runtime_store = create_runtime_store(settings)
@@ -100,6 +103,10 @@ function_tool_harness = FunctionToolHarness(
     model_router,
     mcp_gateway=agent_mcp_gateway if settings.mcp_enabled else None,
     confirmed_importer=confirmed_agent_import,
+)
+evidence_specialist = build_configured_evidence_specialist(
+    model_router,
+    timeout_seconds=settings.specialist_agent_timeout_seconds,
 )
 JOB_LEASE = timedelta(minutes=30)
 MAX_TRANSLATION_PAGE_CHARS = 48_000
@@ -1293,6 +1300,10 @@ def build_worker_agent_graph(checkpointer: object | None = None) -> object:
     )
 
 
+def build_worker_research_graph(checkpointer: object | None = None) -> object:
+    return build_research_specialist_graph(checkpointer)
+
+
 async def _heartbeat_agent_job(job_id: str, claim_token: str) -> bool:
     async with get_session_factory()() as session:
         heartbeat_at = utcnow()
@@ -1318,6 +1329,7 @@ async def process_agent_run_job(
     *,
     graph: object | None = None,
     repository: object | None = None,
+    research_graph: object | None = None,
 ) -> None:
     async with get_session_factory()() as session:
         job = await session.scalar(
@@ -1335,6 +1347,7 @@ async def process_agent_run_job(
         run_id = job.agent_run_id
     runtime_repository = repository or SQLAlchemyRepository(settings.session_secret)
     runtime_graph = graph or agent_graph or build_worker_agent_graph()
+    runtime_research_graph = research_graph or agent_research_graph or build_worker_research_graph()
     execution = asyncio.create_task(
         execute_agent_run(
             runtime_repository,
@@ -1349,6 +1362,8 @@ async def process_agent_run_job(
             harness_config=settings,
             skill_registry=skill_registry,
             function_tool_harness=function_tool_harness,
+            research_graph=runtime_research_graph,
+            evidence_specialist=evidence_specialist,
         )
     )
     while True:
@@ -1636,7 +1651,7 @@ async def fail_job(claimed_job: ClaimedJob, exc: Exception) -> None:
 
 
 async def run_worker() -> None:
-    global agent_graph
+    global agent_graph, agent_research_graph
     settings.validate_production()
     logging.basicConfig(level=logging.INFO)
     from prometheus_client import start_http_server
@@ -1654,6 +1669,7 @@ async def run_worker() -> None:
         async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
             await checkpointer.setup()
             agent_graph = build_worker_agent_graph(checkpointer)
+            agent_research_graph = build_worker_research_graph(checkpointer)
             while True:
                 claimed_job = await claim_job()
                 if not claimed_job:

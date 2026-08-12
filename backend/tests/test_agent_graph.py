@@ -474,6 +474,66 @@ def test_configured_answerer_retries_transient_failure_once_with_compact_context
     assert "[chunk:E11" not in prompt
 
 
+def test_configured_answerer_uses_compact_specialist_synthesis_context(monkeypatch) -> None:
+    captured_prompts: list[list[tuple[str, str]]] = []
+    captured_timeouts: list[float] = []
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            assert kwargs["max_tokens"] == 500
+
+        async def astream(self, prompt_messages):
+            captured_prompts.append(prompt_messages)
+            yield SimpleNamespace(content="三篇论文采用不同视觉表示 [chunk:E1]。")
+
+    class SuccessRouter:
+        def has_provider(self, purpose):
+            return purpose == "answer"
+
+        async def execute(self, _purpose, operation, *, timeout_seconds=None):
+            captured_timeouts.append(timeout_seconds)
+            provider = SimpleNamespace(
+                chat_model="deepseek-chat",
+                api_key="test-key",
+                base_url="http://model.invalid/v1",
+            )
+            return await operation(provider)
+
+    fake_langchain = ModuleType("langchain_openai")
+    fake_langchain.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake_langchain)
+    config = SimpleNamespace(
+        evidence_min_confidence=0.35,
+        evidence_min_vector_score=0.35,
+        evidence_min_lexical_coverage=0.18,
+        agent_answer_timeout_seconds=90.0,
+        agent_answer_retry_timeout_seconds=60.0,
+    )
+    evidence = [Evidence("c1", "p1", "论文一", 1, "卷积网络学习视觉表示。")]
+
+    text, citations = asyncio.run(
+        build_configured_answerer(config, SuccessRouter())(
+            "比较三篇论文",
+            evidence,
+            [
+                {
+                    "role": "research_synthesis",
+                    "content": '{"findings":[{"claim":"ResNet 使用卷积残差结构"}]}',
+                }
+            ],
+        )
+    )
+
+    assert text == "三篇论文采用不同视觉表示 [chunk:c1]。"
+    assert citations[0].chunk_id == "c1"
+    assert captured_timeouts == [60.0]
+    prompt = "\n".join(content for _, content in captured_prompts[0])
+    assert "多个只读 Specialist" in prompt
+    assert "不是引用源" in prompt
+    assert "ResNet 使用卷积残差结构" in prompt
+    assert "首次回答因模型响应超时" not in prompt
+
+
 def test_configured_answerer_treats_openalex_results_as_metadata_not_pdf_evidence(
     monkeypatch,
 ) -> None:
@@ -958,7 +1018,7 @@ def test_graph_returns_supported_claim_subset_instead_of_suppressing_entire_answ
     assert "模型通过检索证据回答" in result["answer"]
     assert "前瞻性实验" not in result["answer"]
     assert "不返回结论" not in result["answer"]
-    assert "已隐藏 1 条" in result["answer"]
+    assert "仅保留了能够直接回读原文的结论" in result["answer"]
     assert result["evidence_quality"]["reason_code"] == "partial_answer_supported"
     assert result["evidence_quality"]["answer_support_grade"] == "supported"
 

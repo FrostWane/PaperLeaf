@@ -58,7 +58,7 @@ export function AskView() {
   return (
     <div className="ask-layout persistent-ask-layout" data-client-ready={clientReady}>
       <aside className="scope-panel">
-        <span className="eyebrow">回答范围</span><h2>选择要检索的内容</h2>
+        <h2>提问范围</h2>
         <CollectionTree collections={collections} selectedId={scopeKey} onSelect={setScopeKey} allCount={allReadyCount} disabled={scopesLoading} label="问答集合范围" />
         {scopesError && <p className="field-error" role="alert">{scopesError}</p>}
       </aside>

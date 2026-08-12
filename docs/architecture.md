@@ -241,6 +241,20 @@ sequenceDiagram
 
 该能力通过 `PAPERLEAF_MULTI_AGENT_ENABLED` 控制。关闭后新 Run 继续使用 `single_agent_v1`；单篇问答、上传解析、翻译、总结和写操作始终保持原确定性链路。
 
+### 有界 Specialist 多 Agent 子图
+
+`specialist_subgraph_v3` 在 Phase 1 的分组检索之上增加真正隔离的模型 Specialist。它仍只服务于 3～10 篇论文的复杂跨文献比较，并与普通 Agent 主链分开：
+
+- 唯一 Coordinator 只根据可信论文描述拆分最多三个任务，不读取正文；进入 v3 后不再调用 Function Tool planner。
+- LangGraph `Send` 为每个 Specialist 创建独立输入；分支只含自己的任务、论文别名和 `E1…En` 证据，不含会话历史、Memory 或兄弟结果。
+- 自定义字典 reducer 可交换、结合且幂等，分支完成顺序和同代重放不会改变确定性合并结果。
+- Research Graph、最终回答和标准回退分别使用 `specialist_subgraph_v3/research`、`specialist_subgraph_v3/final` 与 `single_agent_v1/fallback` Checkpoint 命名空间。
+- Specialist 主张不能直接成为 Citation。Merger 只接收服务端 Retriever 返回的 Evidence，并再次复核 Chunk、论文范围和物理页，再以论文轮转方式限制最终证据。
+- Synthesizer 使用不含聊天历史和长期记忆的独立综合上下文；回答仍通过既有引用合法性和分批语义支持核验。
+- 单支失败可形成带覆盖说明的部分结果；全部失败、计划非法、综合失败或预算不足时直接走标准检索。
+
+该能力通过默认关闭的 `PAPERLEAF_SPECIALIST_AGENTS_ENABLED` 灰度。它是有界多 Specialist 协作，不是自由通信的 Agent Swarm；完整冻结集 A/B 与人工盲评通过前不声明优于 v1/v2。详细取舍见 [ADR 0021](decisions/0021-bounded-specialist-subgraph.md)。
+
 ### 学术 MCP Gateway
 
 - `academic-search-mcp` 是 Compose 私网内的独立只读服务，只访问 OpenAlex 与 Semantic Scholar 固定官方 API；模型和普通用户不能提交 Server URL 或任意网页地址。

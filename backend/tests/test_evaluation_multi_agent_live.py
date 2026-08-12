@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from paperleaf_api.evaluation_multi_agent import MultiAgentManifest
+from paperleaf_api.evaluation_multi_agent import MultiAgentCase, MultiAgentManifest
 from paperleaf_api.evaluation_multi_agent_live import (
     RAW_V1,
     RAW_V2,
     audit_citation_records,
+    build_case_readiness_matrix,
     build_not_executed_variant,
     normalize_arxiv_id,
     normalize_branch_counts,
@@ -184,6 +185,59 @@ def test_not_executed_variant_never_fabricates_run_id() -> None:
     assert result["measurements"]["covered_dimensions"]["status"] == "not_measured"
     assert result["measurements"]["presented_conflicts"]["status"] == "not_measured"
     assert result["measurements"]["partial_failure_notice"]["status"] == "not_measured"
+
+
+def test_case_readiness_matrix_separates_papers_flags_and_http_fixtures() -> None:
+    cases = [
+        MultiAgentCase(
+            id="single",
+            category="single_paper_control",
+            split="test",
+            query="单篇问题",
+            scope_paper_ids=["paper-a"],
+            answerable=True,
+            expected_path="v1",
+        ),
+        MultiAgentCase(
+            id="complex",
+            category="systematic_compare",
+            split="test",
+            query="复杂问题",
+            scope_paper_ids=["paper-a", "paper-b", "paper-c"],
+            source_case_ids=["source-a"],
+            answerable=True,
+            expected_path="v2",
+            dimensions=["方法"],
+        ),
+        MultiAgentCase(
+            id="scope",
+            category="scope_violation_control",
+            split="test",
+            query="越权问题",
+            scope_paper_ids=["paper-a"],
+            answerable=False,
+            expected_path="pregraph_reject",
+        ),
+    ]
+
+    matrix = build_case_readiness_matrix(
+        cases,
+        {"paper-a": "local-a", "paper-b": "local-b"},
+        missing_paper_ids=["paper-c"],
+        skills_enabled=True,
+        multi_agent_enabled=False,
+        answer_model_configured=True,
+    )
+
+    assert matrix["ready_case_count"] == 1
+    assert matrix["ready_v1_case_count"] == 1
+    assert matrix["ready_v2_case_count"] == 0
+    assert matrix["fixture_required_case_count"] == 1
+    assert matrix["cases"][1]["reasons"] == [
+        "required_papers_missing",
+        "multi_agent_feature_disabled",
+    ]
+    assert matrix["cases"][2]["reasons"] == ["requires_http_pregraph_fixture"]
 
 
 def test_draft_manifest_is_always_quality_pending() -> None:

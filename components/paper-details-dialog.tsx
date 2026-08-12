@@ -98,7 +98,7 @@ function OpenPaperDetailsDialog({ paper, open, onOpenChange, onSave, onDelete, o
           </div>
           {message && <p className="form-note" role="status">{message}</p>}
           <div className="paper-management">
-            <div><strong>处理与删除</strong><p>重新识别会保留 PDF 原件，并重建文本索引和缺失的内置元数据；删除会进入后台幂等清理队列。</p></div>
+            <div><strong>处理与删除</strong><p>重新识别会保留 PDF 原件；删除后，论文及其生成内容将一并移除。</p></div>
             {paper.status !== "indexing" && paper.status !== "deleting" && <button className="secondary-button" disabled={Boolean(busy)} onClick={retry}><RotateCcw size={14} />{busy === "retry" ? "正在加入" : "重新识别并索引"}</button>}
             <button className={confirmDelete ? "danger-button confirmed" : "danger-button"} disabled={Boolean(busy)} onClick={remove}>{confirmDelete ? <AlertTriangle size={14} /> : <Trash2 size={14} />}{busy === "delete" ? "正在删除" : confirmDelete ? "确认删除" : "删除文献"}</button>
           </div>

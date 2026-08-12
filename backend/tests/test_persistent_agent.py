@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from paperleaf_api.agent.context import TaskFrameDecision
 from paperleaf_api.agent.function_tools import (
@@ -11,6 +12,11 @@ from paperleaf_api.agent.function_tools import (
     PlannerDecision,
     ToolCallRequest,
 )
+from paperleaf_api.agent.research_specialist_graph import (
+    SPECIALIST_ORCHESTRATION_VERSION,
+    build_research_specialist_graph,
+)
+from paperleaf_api.agent.research_specialists import EvidenceSpecialist
 from paperleaf_api.agent_execution import execute_agent_run
 from paperleaf_api.config import settings
 from paperleaf_api.model_runtime import ModelRuntimeError
@@ -139,6 +145,9 @@ class BlockingCompareRetriever:
 class CompareHarnessStub:
     def __init__(self, retriever) -> None:
         self.retriever = retriever
+
+    async def run(self, *_args, **_kwargs):
+        raise AssertionError("Specialist 编排已接管时不得再次运行 Function Tool planner")
 
 
 class CompareSkillManifest:
@@ -359,6 +368,118 @@ def test_parallel_compare_uses_one_parent_run_and_safe_branch_events() -> None:
     asyncio.run(scenario())
 
 
+def test_specialist_subgraph_uses_independent_agents_and_skips_second_planner() -> None:
+    """生产接线回归：v3 只使用一个研究编排器，最终仍交给原回答 Graph。"""
+
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "Specialist 比较", "collection", None, "collection-1"
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "总结这三篇论文的方法和实验",
+            "specialist-v3-client",
+            "specialist-v3-hash",
+            {
+                "type": "collection",
+                "collection_id": "collection-1",
+                "paper_ids": ["p1", "p2", "p3"],
+                "web_enabled": False,
+                "orchestration_version": SPECIALIST_ORCHESTRATION_VERSION,
+                "harness": {
+                    "context_engine_enabled": True,
+                    "memory_enabled": False,
+                    "skills_enabled": True,
+                    "function_tools_enabled": True,
+                    "mcp_enabled": False,
+                    "multi_agent_enabled": True,
+                    "specialist_agents_enabled": True,
+                    "multi_agent_max_branches": 3,
+                    "multi_agent_token_budget": 3072,
+                    "specialist_agent_timeout_seconds": 1,
+                    "specialist_total_timeout_seconds": 3,
+                },
+            },
+        )
+        assert submission is not None
+        token = await repository.claim_agent_run_job(submission.run.id)
+        assert token
+        retriever = ScopedCompareRetriever()
+
+        async def specialist_model(messages, *, max_output_tokens):
+            assert len(messages) == 2
+            assert max_output_tokens > 0
+            assert "会话" not in messages[1]["content"]
+            return {
+                "claims": [
+                    {
+                        "dimension": "核心方法",
+                        "claim": "该分支论文给出了可比较的方法证据。",
+                        "evidence_aliases": ["E1"],
+                        "stance": "support",
+                        "confidence": 0.9,
+                    }
+                ]
+            }
+
+        graph = ConfigCapturingResultGraph()
+        research_graph = build_research_specialist_graph(InMemorySaver())
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            token,
+            answer_quality_policy=AnswerQualityPolicy(),
+            skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+            function_tool_harness=CompareHarnessStub(retriever),  # type: ignore[arg-type]
+            research_graph=research_graph,
+            evidence_specialist=EvidenceSpecialist(specialist_model, timeout_seconds=1),
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert run.orchestration_version == SPECIALIST_ORCHESTRATION_VERSION
+        assert graph.initial is not None
+        assert graph.initial["tool_mode_active"] is True
+        assert len(graph.initial["pre_retrieved_evidence"]) == 3
+        assert graph.initial["memory_ids"] == []
+        assert graph.initial["messages"][0] == {
+            "role": "skill",
+            "content": "比较多篇论文的方法、实验、结果与局限。",
+        }
+        assert graph.initial["messages"][1]["role"] == "research_synthesis"
+        assert "该分支论文给出了可比较的方法证据" in graph.initial["messages"][1][
+            "content"
+        ]
+        assert sorted(retriever.calls) == [("p1",), ("p2",), ("p3",)]
+        assert graph.config is not None
+        assert graph.config["configurable"]["checkpoint_ns"] == (
+            f"{SPECIALIST_ORCHESTRATION_VERSION}/final"
+        )
+        assert run.harness_trace["compare_mode"] == "bounded_specialists"
+        assert run.harness_trace["function_calling"] == "specialist_subgraph"
+        assert run.harness_trace["synthesis_context"] == "fresh"
+        assert run.harness_trace["synthesis_evidence_count"] == 3
+
+        events = await repository.list_owned_agent_run_events(run.id, "u1")
+        assert events is not None
+        subtask_events = [
+            event for event in events if event.data.get("node") == "compare_subtask"
+        ]
+        assert len(subtask_events) == 6
+        assert {event.data.get("subtask_id") for event in subtask_events} == {
+            "s1",
+            "s2",
+            "s3",
+        }
+        assert all("paper_id" not in event.data for event in subtask_events)
+        assert all("claim" not in event.data for event in subtask_events)
+
+    asyncio.run(scenario())
+
+
 def test_parallel_compare_all_failures_fall_back_to_legacy_retrieval() -> None:
     async def scenario() -> None:
         repository = MemoryRepository("secret")
@@ -479,7 +600,7 @@ def test_parallel_compare_retry_uses_new_event_epoch_and_checkpoint_namespace() 
             function_tool_harness=CompareHarnessStub(ScopedCompareRetriever()),  # type: ignore[arg-type]
         )
         assert graph.config is not None
-        assert graph.config["configurable"]["checkpoint_ns"] == "compare_map_reduce_v2"
+        assert graph.config["configurable"]["checkpoint_ns"] == "compare_map_reduce_v2/final"
         compare_keys = [key for key in first_events if key.startswith("stage:compare:")]
         assert compare_keys
         epochs = {key.split(":")[2] for key in compare_keys}

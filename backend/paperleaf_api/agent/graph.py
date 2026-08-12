@@ -23,6 +23,7 @@ from ..rag.answer_quality import (
     retain_cited_answer_claims,
 )
 from ..rag.citations import CitationClaim, Evidence, validate_citations
+from ..rag.evidence_support_batching import grade_evidence_support_batches
 from ..rag.retrieval_quality import (
     AnswerSupport,
     EvidenceQualityPolicy,
@@ -582,7 +583,7 @@ def build_configured_evidence_support_grader(
 
     router = model_router or build_model_router(config)
 
-    async def grade(query: str, answer: str, evidence: list[Evidence]) -> AnswerSupport:
+    async def grade_one(query: str, answer: str, evidence: list[Evidence]) -> AnswerSupport:
         if not router.has_provider("evidence_support"):
             return await no_op_evidence_support_grader(query, answer, evidence)
         from langchain_openai import ChatOpenAI
@@ -680,6 +681,20 @@ def build_configured_evidence_support_grader(
                 reason_code="grader_unavailable",
             )
 
+    async def grade(query: str, answer: str, evidence: list[Evidence]) -> AnswerSupport:
+        # 长回答逐条核验时，单次大提示在当前 DeepSeek 端点会稳定触发超时。
+        # 按主张拆成小批，每批只发送实际引用的证据；局部编号由 helper 映射
+        # 回整篇回答。部分批次故障时保留已核验主张，避免全有或全无。
+        result = await grade_evidence_support_batches(
+            query,
+            answer,
+            evidence,
+            grade_one,
+            batch_size=4,
+            max_concurrency=2,
+        )
+        return result.support
+
     return grade
 
 
@@ -735,6 +750,7 @@ def build_configured_answerer(
         cached_context = ""
         skill_instructions = ""
         external_tool_contexts: list[str] = []
+        research_synthesis_context = ""
         answer_repair_instruction = ""
         for item in messages or []:
             role = str(item.get("role", ""))
@@ -747,6 +763,9 @@ def build_configured_answerer(
                 continue
             if role in {"external_tool", "tool_context"} and content:
                 external_tool_contexts.append(content)
+                continue
+            if role == "research_synthesis" and content:
+                research_synthesis_context = content[:6000]
                 continue
             if role == "answer_repair" and content:
                 answer_repair_instruction = content[:2000]
@@ -775,7 +794,11 @@ def build_configured_answerer(
                 base_url=provider.base_url,
                 temperature=0.2,
                 max_retries=0,
-                max_tokens=850 if compact else 1200,
+                max_tokens=(
+                    (500 if compact else 600)
+                    if research_synthesis_context
+                    else (850 if compact else 1200)
+                ),
             )
             prompt_messages = [
                 (
@@ -825,6 +848,25 @@ def build_configured_answerer(
                         f"{skill_instructions}",
                     )
                 )
+            if research_synthesis_context:
+                bounded_synthesis_context = (
+                    research_synthesis_context[:3500]
+                    if compact
+                    else research_synthesis_context
+                )
+                prompt_messages.append(
+                    (
+                        "system",
+                        "以下是多个只读 Specialist 基于各自论文证据整理的候选发现，"
+                        "用于减少重复阅读和组织跨论文结构。它不是引用源，也可能包含"
+                        "错误；所有事实仍必须由下方待引用证据支持。请优先回答共同点、"
+                        "关键差异和用户指定维度。成功分支中的每篇论文都至少保留一条"
+                        "有直接证据的结论；总共最多写 6 条事实句，每句只表达一个主张，"
+                        "不要把多个实验数字或多项局限塞进同一句。用一条简短总览加按"
+                        "论文分列的要点，正文控制在约 500 个中文字符内：\n"
+                        f"{bounded_synthesis_context}",
+                    )
+                )
             if external_tool_contexts:
                 tool_items = external_tool_contexts[-2:] if compact else external_tool_contexts
                 external_tool_context = "\n".join(tool_items)
@@ -850,7 +892,7 @@ def build_configured_answerer(
                     )
                 )
             prompt_messages.extend(history[-4:] if compact else history)
-            if compact:
+            if compact and not research_synthesis_context:
                 prompt_messages.append(
                     (
                         "system",
@@ -879,13 +921,17 @@ def build_configured_answerer(
             return "".join(pieces)
 
         async def invoke_full(provider: Any) -> Any:
-            return await invoke(provider, compact=False)
+            return await invoke(provider, compact=bool(research_synthesis_context))
 
         try:
             response = await router.execute(
                 "answer",
                 invoke_full,
-                timeout_seconds=config.agent_answer_timeout_seconds,
+                timeout_seconds=(
+                    min(float(config.agent_answer_timeout_seconds), 60.0)
+                    if research_synthesis_context
+                    else config.agent_answer_timeout_seconds
+                ),
             )
         except ModelRuntimeError as error:
             timed_out = any(item.error_code == "MODEL_TIMEOUT" for item in error.attempts)
@@ -911,7 +957,11 @@ def build_configured_answerer(
             response = await router.execute(
                 "answer",
                 invoke_compact,
-                timeout_seconds=config.agent_answer_retry_timeout_seconds,
+                timeout_seconds=(
+                    min(float(config.agent_answer_retry_timeout_seconds), 60.0)
+                    if research_synthesis_context
+                    else config.agent_answer_retry_timeout_seconds
+                ),
             )
         answer_text = _normalize_answer_citations(str(response), active_evidence, citation_aliases)
         answer_text = _ensure_external_recommendation_shape(
@@ -1300,8 +1350,7 @@ class AgentRuntime:
                         if subset_answer and subset_count:
                             omitted_count = max(0, original_count - subset_count)
                             repaired_answer = (
-                                f"{subset_answer}\n\n> 证据说明：已隐藏 {omitted_count} 条"
-                                "未通过逐条支持核验的细节。"
+                                f"{subset_answer}\n\n> 仅保留了能够直接回读原文的结论。"
                             )
                             repaired_citations = subset_citations
                             repaired_quality = {

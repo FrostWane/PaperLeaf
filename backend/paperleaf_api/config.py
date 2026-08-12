@@ -39,6 +39,7 @@ class Settings:
     function_tools_enabled: bool = _bool("PAPERLEAF_FUNCTION_TOOLS_ENABLED", False)
     mcp_enabled: bool = _bool("PAPERLEAF_MCP_ENABLED", False)
     multi_agent_enabled: bool = _bool("PAPERLEAF_MULTI_AGENT_ENABLED", False)
+    specialist_agents_enabled: bool = _bool("PAPERLEAF_SPECIALIST_AGENTS_ENABLED", False)
     multi_agent_max_branches: int = int(os.getenv("PAPERLEAF_MULTI_AGENT_MAX_BRANCHES", "3"))
     multi_agent_branch_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_MULTI_AGENT_BRANCH_TIMEOUT_SECONDS", "20")
@@ -47,6 +48,12 @@ class Settings:
         os.getenv("PAPERLEAF_MULTI_AGENT_TOTAL_TIMEOUT_SECONDS", "45")
     )
     multi_agent_token_budget: int = int(os.getenv("PAPERLEAF_MULTI_AGENT_TOKEN_BUDGET", "12000"))
+    specialist_agent_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_SPECIALIST_AGENT_TIMEOUT_SECONDS", "45")
+    )
+    specialist_total_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_SPECIALIST_TOTAL_TIMEOUT_SECONDS", "150")
+    )
     academic_mcp_url: str = os.getenv(
         "PAPERLEAF_ACADEMIC_MCP_URL", "http://academic-search-mcp:8080/mcp"
     )
@@ -247,6 +254,14 @@ class Settings:
             raise RuntimeError("研究编排 Token 预算超过分支可分配上限")
         if self.multi_agent_total_timeout_seconds < self.multi_agent_branch_timeout_seconds + 2:
             raise RuntimeError("研究编排总超时必须至少预留 2 秒用于合并")
+        if not 1 <= self.specialist_agent_timeout_seconds <= 120:
+            raise RuntimeError("Specialist 单次超时必须位于 1 到 120 秒之间")
+        if not (
+            self.specialist_agent_timeout_seconds + 2
+            <= self.specialist_total_timeout_seconds
+            <= 240
+        ):
+            raise RuntimeError("Specialist 总超时必须预留合并时间且不超过 240 秒")
         if not 1 <= self.embedding_batch_size <= 64:
             raise RuntimeError("向量批次大小必须位于 1 到 64 之间")
         if not 1 <= self.embedding_timeout_seconds <= MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS:
@@ -267,7 +282,9 @@ class Settings:
             raise RuntimeError("Worker 指标端口必须位于 1024 到 65535 之间")
         if self.model_context_tokens < 4096:
             raise RuntimeError("模型上下文窗口必须至少为 4096 Token")
-        if self.multi_agent_enabled and self.multi_agent_token_budget > self.model_context_tokens:
+        if (
+            self.multi_agent_enabled or self.specialist_agents_enabled
+        ) and self.multi_agent_token_budget > self.model_context_tokens:
             raise RuntimeError("研究编排 Token 预算不能超过模型上下文窗口")
         ratios = (
             self.context_safety_ratio,
