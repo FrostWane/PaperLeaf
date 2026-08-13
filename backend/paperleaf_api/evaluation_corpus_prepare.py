@@ -44,6 +44,26 @@ class CorpusPreparer:
     def headers(self) -> dict[str, str]:
         return {"X-CSRF-Token": self.csrf}
 
+    async def post_with_retry(
+        self, path: str, *, payload: dict[str, Any], attempts: int = 3
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                response = await self.client.post(
+                    path,
+                    headers=self.headers(),
+                    json=payload,
+                )
+                if response.status_code not in {429, 502, 503, 504}:
+                    return response
+                last_error = RuntimeError(f"HTTP {response.status_code}")
+            except httpx.RequestError as exc:
+                last_error = exc
+            if attempt + 1 < attempts:
+                await asyncio.sleep(2**attempt)
+        raise RuntimeError(f"请求 {path} 连续 {attempts} 次失败") from last_error
+
     async def papers(self) -> list[dict[str, Any]]:
         response = await self.client.get("/api/v1/papers")
         response.raise_for_status()
@@ -60,17 +80,10 @@ class CorpusPreparer:
         for paper in manifest.papers:
             if paper.sha256 in existing_sha or paper.arxiv_id in existing_arxiv:
                 continue
-            response: httpx.Response | None = None
-            for attempt in range(3):
-                response = await self.client.post(
-                    "/api/v1/discover/arxiv/import",
-                    headers=self.headers(),
-                    json={"arxiv_id": paper.arxiv_id},
-                )
-                if response.status_code not in {429, 502, 503, 504}:
-                    break
-                await asyncio.sleep(2**attempt)
-            assert response is not None
+            response = await self.post_with_retry(
+                "/api/v1/discover/arxiv/import",
+                payload={"arxiv_id": paper.arxiv_id},
+            )
             if response.status_code not in {201, 409}:
                 raise RuntimeError(
                     f"导入 {paper.arxiv_id} 失败：HTTP {response.status_code}"
@@ -91,10 +104,9 @@ class CorpusPreparer:
                 raise RuntimeError("强制重索引前必须确保清单论文全部已 ready")
             for start in range(0, len(targets), 100):
                 batch = targets[start : start + 100]
-                response = await self.client.post(
+                response = await self.post_with_retry(
                     "/api/v1/papers/bulk",
-                    headers=self.headers(),
-                    json={"paper_ids": batch, "action": "reindex"},
+                    payload={"paper_ids": batch, "action": "reindex"},
                 )
                 response.raise_for_status()
                 reindexed += int(response.json().get("affected", 0))
