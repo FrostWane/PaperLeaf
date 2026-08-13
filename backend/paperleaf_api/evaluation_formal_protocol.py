@@ -175,17 +175,30 @@ def verify_formal_lock(
         exclusion_manifest_paths=exclusion_manifest_paths,
         locked_at=lock.locked_at,
     )
-    for field in (
-        "dataset_id",
-        "manifest_sha256",
-        "questions_sha256",
-        "oracle_sha256",
-        "excluded_datasets",
-        "candidate_variants",
-        "protocol",
-    ):
+    for field in ("dataset_id", "candidate_variants", "protocol"):
         if getattr(current, field) != getattr(lock, field):
             raise ValueError(f"正式评测冻结协议发生漂移：{field}")
+    for field, path in (
+        ("manifest_sha256", manifest_path),
+        ("questions_sha256", questions_path),
+        ("oracle_sha256", oracle_path),
+    ):
+        if not matches_locked_text_sha(path, getattr(lock, field)):
+            raise ValueError(f"正式评测冻结协议发生漂移：{field}")
+    locked_exclusions = {item.dataset_id: item for item in lock.excluded_datasets}
+    if len(exclusion_manifest_paths) != len(locked_exclusions):
+        raise ValueError("正式评测冻结协议发生漂移：excluded_datasets")
+    for path in exclusion_manifest_paths:
+        manifest = read_manifest(path)
+        expected = locked_exclusions.get(manifest.dataset_id)
+        ids = {_base_id(paper.id) for paper in manifest.papers}
+        if (
+            expected is None
+            or not matches_locked_text_sha(path, expected.manifest_sha256)
+            or _paper_ids_sha256(ids) != expected.paper_ids_sha256
+            or len(ids) != expected.paper_count
+        ):
+            raise ValueError("正式评测冻结协议发生漂移：excluded_datasets")
     return {
         "status": "verified",
         "dataset_id": lock.dataset_id,

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "dataset_id": "paperleaf-formal-hidden-v1",
-  "dataset_lock_sha256": "c8b88dd48c8a08612762f1764fad1c60af14b0012f4ba292f39543b67563217a",
+  "dataset_lock_sha256": "6895b6b508048db8dee118e1dfb8c981312285195dec36ab5f647c81a62e8418",
   "status": "frozen_before_first_answer_run",
   "locked_at": "2026-08-14T01:58:36.9048037+08:00",
   "case_count": 100,
