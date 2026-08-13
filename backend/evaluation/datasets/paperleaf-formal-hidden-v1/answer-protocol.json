@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-formal-hidden-v1",
+  "dataset_lock_sha256": "bde8a31c100dc188ab16f5d3cdecfc507421b42cbac9b8d01f6d36e09440a26b",
+  "status": "frozen_before_first_answer_run",
+  "locked_at": "2026-08-14T00:00:00+08:00",
+  "case_count": 100,
+  "orchestration_version": "single_agent_v1",
+  "retrieval_variant": "final_combined",
+  "model_policy": "configured_production_router",
+  "timeout_seconds_per_run": 300,
+  "max_concurrency": 3,
+  "human_review": {
+    "minimum_cases": 30,
+    "selection": "sha256_case_id_lowest",
+    "dimensions": [
+      "factuality",
+      "completeness",
+      "citation_usefulness",
+      "overall"
+    ],
+    "llm_judge_is_human": false
+  },
+  "failure_policy": "any_missing_case_or_corpus_drift_fails_whole_run"
+}
