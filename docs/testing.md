@@ -40,6 +40,13 @@ docker compose --env-file .env.example build web api worker migrate
 python scripts/smoke_compose.py
 ```
 
+生产 RAG 检索改动还要执行真实 PostgreSQL/pgvector/Ollama 同源评测。测试必须固定同一批
+问题、论文 scope、K、向量指纹和检索代码哈希，并分别报告统一查询与逐论文取证；命令见
+`backend/evaluation/README.md`。纯检索协议不得把空回答产生的拒答、引用或回答安全字段计入
+结果。2026-08-13 的 2 题烟测证明必需论文覆盖由 3/4 提到 4/4，但正确证据页仍为 1/4，
+所以当前只采用范围覆盖保护，不声称 Recall 达标。完整证据见
+`docs/reports/2026-08-13-rag-retrieval-upgrade.md`。
+
 GitHub Actions 对拉取请求执行上述检查并运行密钥扫描。后端任务会启动独立 pgvector PostgreSQL，依次验证全新 `upgrade head`、回退到 0.2.0 结构、再次升级和 `alembic check`，避免只在内存仓储上通过。
 
 当前仓库的里程碑 4 本地门禁为：Pytest 169 项通过、5 个需要测试数据库的用例明确跳过，Vitest 67 项通过，TypeScript、ESLint 和生产构建通过。另在隔离 PostgreSQL 中定向验证了持久会话的并发幂等与迁移往返。Playwright 首轮为 46 项通过、8 项按视口设计跳过、6 项失败；六个失败归为 Demo 重载持久化、旧字号选择器和滚动区焦点三类，修复后的对应定向用例 8/8 通过，2K 字号用例通过，390/768/384（200% 等效）布局门禁通过。为避免重复消耗，本地未再次运行完整套件，提交后的 GitHub Actions 是第二层全量门禁。CI 的后端任务强制连接名为 `paperleaf_test` 的真实 pgvector PostgreSQL，并在 Pytest 前执行 `alembic upgrade head`。

@@ -131,3 +131,26 @@ python -m paperleaf_api.evaluation \
   --output metrics.json \
   -k 5
 ```
+
+## 生产同源检索评测
+
+离线哈希向量不能代表线上 pgvector。配置好 PostgreSQL 与 Ollama，并将冻结论文导入、按当前
+向量契约重新索引后，可直接调用生产 `SQLLibrarySearch`：
+
+```powershell
+docker compose run --rm -T --no-deps `
+  -v "${PWD}\backend\evaluation:/app/evaluation:ro" `
+  -v "${PWD}\backend\outputs:/app/outputs" `
+  api python -m paperleaf_api.evaluation_production `
+  --manifest /app/evaluation/datasets/paperleaf-rag-v1/manifest.json `
+  --cases /app/evaluation/datasets/paperleaf-rag-v1/cases.jsonl `
+  --user-email admin@example.com --split test -k 5 `
+  --retrieval-mode per_paper_specific `
+  --output /app/outputs/production-rag.json
+```
+
+`--retrieval-mode` 支持 `unified`、`per_paper_same` 和 `per_paper_specific` 三组消融。
+可以重复传入 `--case-id` 做小范围烟测。预检会核对论文版本、Chunk、切分策略和向量指纹；
+不满足时输出 `not_executed`，不会自动缩小 scope。该协议只测检索，回答与引用质量字段明确为
+`not_measured`。本轮实现与边界见
+[生产 RAG 检索升级报告](../../docs/reports/2026-08-13-rag-retrieval-upgrade.md)。

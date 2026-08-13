@@ -48,6 +48,24 @@ def test_page_dedup_and_scope_diversity_keep_both_papers() -> None:
     assert [hit.chunk.paper_id for hit in diversified[:2]] == ["p1", "p2"]
 
 
+def test_per_paper_fusion_builds_independent_rankings_before_merge(monkeypatch) -> None:
+    p1 = _chunk("p1-1", "p1", 1, "alpha")
+    p2 = _chunk("p2-1", "p2", 2, "beta")
+    index = OfflineRetrievalIndex([p1, p2], dimensions=256)
+    scopes: list[tuple[str, ...]] = []
+
+    def fused(_query, paper_ids, **_kwargs):
+        scopes.append(tuple(paper_ids))
+        chunk = p1 if paper_ids == ["p1"] else p2
+        return QueryRanking([ScoredChunk(chunk, 1.0)], 1.0)
+
+    monkeypatch.setattr(index, "fused", fused)
+    result = index.per_paper_fused("compare", ["p1", "p2"], limit=2)
+
+    assert scopes == [("p1",), ("p2",)]
+    assert [hit.chunk.paper_id for hit in result.hits] == ["p1", "p2"]
+
+
 def test_window_bm25_promotes_short_fact_inside_long_chunk() -> None:
     filler = "background " * 180
     chunks = [

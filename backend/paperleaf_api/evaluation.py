@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -116,7 +117,9 @@ def _evaluate_core(
         chunk_ids = _prediction_chunk_ids(prediction)
         expected_pairs = _expected_pairs(case)
         expected_groups = _expected_groups(case)
-        if expected_pairs and prediction.retrieved_evidence:
+        # 零召回同样必须进入分母；旧实现会在 retrieved_evidence 为空时跳过
+        # expected_pairs，导致完全漏检样本不计入 Recall。
+        if expected_pairs:
             ranked_pairs = _retrieved_pairs(prediction, k=k)
             top_k_pairs = set(ranked_pairs)
             retrieved_expected += len(top_k_pairs & expected_pairs)
@@ -206,7 +209,11 @@ def _evaluate_core(
             unsafe_answered += int(answered)
 
     sorted_latency = sorted(latencies)
-    p95_index = max(0, min(len(sorted_latency) - 1, int(len(sorted_latency) * 0.95) - 1))
+    # nearest-rank p95；两个样本时应取较慢值，不能落到第一个样本。
+    p95_index = max(
+        0,
+        min(len(sorted_latency) - 1, math.ceil(len(sorted_latency) * 0.95) - 1),
+    )
     return {
         "case_count": len(cases),
         "answerable_count": answerable_count,

@@ -479,6 +479,46 @@ class OfflineRetrievalIndex:
             keyword_ranking=lexical,
         )
 
+    def per_paper_fused(
+        self,
+        query: str,
+        paper_ids: list[str],
+        *,
+        limit: int,
+        per_paper_limit: int = 5,
+    ) -> QueryRanking:
+        """对每篇论文独立建立候选排名，再按论文轮转合并。"""
+
+        if not paper_ids:
+            return QueryRanking([], 0.0)
+        if len(paper_ids) == 1:
+            return self.fused(query, paper_ids, limit=limit, page_dedup=True)
+        rankings = {
+            paper_id: self.fused(
+                query,
+                [paper_id],
+                limit=max(limit, per_paper_limit),
+                page_dedup=True,
+            )
+            for paper_id in paper_ids
+        }
+        hits: list[ScoredChunk] = []
+        rank = 0
+        while len(hits) < limit:
+            added = False
+            for paper_id in paper_ids:
+                paper_hits = rankings[paper_id].hits
+                if rank < min(len(paper_hits), per_paper_limit):
+                    hits.append(paper_hits[rank])
+                    added = True
+                    if len(hits) == limit:
+                        break
+            if not added:
+                break
+            rank += 1
+        confidence = max((ranking.confidence for ranking in rankings.values()), default=0.0)
+        return QueryRanking(hits, confidence)
+
     @staticmethod
     def _lexical_confidence(query_terms: Counter[str], hits: list[ScoredChunk]) -> float:
         if not hits or not query_terms:
@@ -723,6 +763,11 @@ def run_variants(
             limit=k,
             page_dedup=True,
             scope_diversity=True,
+        ),
+        "rrf_page_per_paper": lambda case: index.per_paper_fused(
+            case.query,
+            case.paper_ids,
+            limit=k,
         ),
         "window_bm25": lambda case: index.window_bm25(case.query, case.paper_ids, limit=k),
         "rrf_page_window": lambda case: index.fused(

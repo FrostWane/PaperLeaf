@@ -60,6 +60,7 @@ def test_evaluation_reports_raw_counts_and_illegal_citations() -> None:
     assert selective["selective_citation_precision"]["value"] == 0.5
     assert selective["selective_risk"]["value"] == 0.5
     assert selective["balanced_safety_accuracy"]["value"] == 0.5
+    assert metrics["latency_ms"] == {"median": 200, "p95": 200}
 
 
 def test_selective_metrics_expose_over_refusal_instead_of_hiding_it() -> None:

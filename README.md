@@ -30,6 +30,8 @@ PaperLeaf 是一个可自托管的科研文献管理与阅读系统。它将 PDF
 
 - 按物理页解析 PDF，Chunk 不跨页，引用可以跳回对应 PDF 页。
 - 结合 PostgreSQL 全文检索、pgvector 向量检索和 RRF 融合召回。
+- 多论文问题按论文独立取证并轮转合并，避免单篇论文占满 Top-5。
+- 弱结果才触发补充查询；向量索引使用论文标题、章节、物理页和原始 Chunk 正文。
 - Embedding 不可用或索引契约不匹配时自动降级为关键词检索。
 - 单篇、集合和全库问答共用持久化会话，页面关闭或 SSE 断线不会取消后台任务。
 - 服务端校验引用的论文、Chunk 和物理页，并对事实主张执行分批证据支持核验。
@@ -444,6 +446,7 @@ pytest
 - [容量与扩展](docs/scaling.md)
 - [RAG 可观测性](docs/observability.md)
 - [RAG 离线评测](backend/evaluation/README.md)
+- [生产 RAG 检索升级报告](docs/reports/2026-08-13-rag-retrieval-upgrade.md)
 - [安全说明](docs/security.md)
 - [贡献指南](docs/contributing.md)
 - [更新记录](docs/changelog.md)
