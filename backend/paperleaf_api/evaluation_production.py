@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from .agent.tools import LibrarySearchInput, SQLLibrarySearch
 from .config import settings
@@ -478,7 +478,12 @@ async def preflight_production_corpus(
                 await session.execute(
                     select(Paper).where(
                         Paper.owner_id == user.id,
-                        Paper.arxiv_id.in_([paper.arxiv_id for paper in expected_papers]),
+                        or_(
+                            Paper.arxiv_id.in_(
+                                [paper.arxiv_id for paper in expected_papers]
+                            ),
+                            Paper.sha256.in_([paper.sha256 for paper in expected_papers]),
+                        ),
                     )
                 )
             ).scalars()
