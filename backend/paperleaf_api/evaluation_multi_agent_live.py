@@ -3,7 +3,7 @@
 这个模块只做三件事：
 
 1. 在提交任何模型请求前，核对冻结数据集、本地论文映射和 Chunk 快照；
-2. 使用同一输入与快照依次提交 v1/v2 生产 Run，并从 PostgreSQL 读取事实记录；
+2. 使用同一输入与快照依次提交 v1/v2/v3 生产 Run，并从 PostgreSQL 读取事实记录；
 3. 将能够证明的指标标为 ``measured``，无法从生产轨迹证明的指标标为
    ``not_measured``。
 
@@ -32,7 +32,6 @@ from .db import get_session_factory
 from .evaluation_multi_agent import (
     MultiAgentCase,
     MultiAgentManifest,
-    expected_ab_order,
     query_hash,
     read_jsonl,
     scope_hash,
@@ -45,6 +44,7 @@ from .repository import SQLAlchemyRepository
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 RAW_V1 = "single_agent_v1"
 RAW_V2 = "compare_map_reduce_v2"
+RAW_V3 = "specialist_subgraph_v3"
 DEFAULT_OUTPUT_ROOT = Path("outputs/private")
 _ARXIV_VERSION_RE = re.compile(r"v\d+$", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
@@ -88,11 +88,13 @@ def normalize_anchor_text(value: str) -> str:
     return _SPACE_RE.sub(" ", value.casefold().replace("\u00ad", "")).strip()
 
 
-def normalize_production_version(raw: str) -> Literal["v1", "v2"] | None:
+def normalize_production_version(raw: str) -> Literal["v1", "v2", "v3"] | None:
     if raw in {RAW_V1, "v1"}:
         return "v1"
     if raw in {RAW_V2, "v2"}:
         return "v2"
+    if raw in {RAW_V3, "v3"}:
+        return "v3"
     return None
 
 
@@ -102,11 +104,17 @@ def normalize_execution_path(raw_version: str, trace: dict[str, Any]) -> str:
     normalized = normalize_production_version(raw_version)
     if normalized == "v1":
         return "v1"
-    if normalized != "v2":
+    if normalized not in {"v2", "v3"}:
         return "not_measured"
     if bool(trace.get("fallback_to_v1")):
         return "v1"
-    if (
+    if normalized == "v3" and (
+        trace.get("compare_mode") == "bounded_specialists"
+        and bool(trace.get("tool_output_used"))
+        and int(trace.get("planned_subtasks", 0) or 0) > 0
+    ):
+        return "v3"
+    if normalized == "v2" and (
         trace.get("compare_mode") == "parallel_map_reduce"
         and bool(trace.get("tool_output_used"))
         and int(trace.get("planned_subtasks", 0) or 0) > 0
@@ -143,6 +151,14 @@ def quality_decision(manifest: MultiAgentManifest) -> str:
     if manifest.annotation_status == "draft" or not manifest.quality_claims_allowed:
         return "quality_pending"
     return "not_evaluated"
+
+
+def expected_variant_order(case_id: str) -> tuple[str, str, str]:
+    """按 case 稳定轮转三个版本，降低 Provider 冷热状态造成的顺序偏差。"""
+
+    variants = ["v1", "v2", "v3"]
+    offset = int(hashlib.sha256(case_id.encode("utf-8")).hexdigest(), 16) % 3
+    return tuple(variants[offset:] + variants[:offset])  # type: ignore[return-value]
 
 
 def resolve_private_output_path(value: Path, *, now: datetime | None = None) -> Path:
@@ -253,7 +269,7 @@ def audit_citation_records(
     }
 
 
-def build_not_executed_variant(label: Literal["v1", "v2"], reason: str) -> dict[str, Any]:
+def build_not_executed_variant(label: Literal["v1", "v2", "v3"], reason: str) -> dict[str, Any]:
     """缺少运行条件时明确没有 Run ID，禁止创建伪 UUID。"""
 
     return {
@@ -277,6 +293,7 @@ def build_case_readiness_matrix(
     invalid_paper_ids: Sequence[str] = (),
     skills_enabled: bool,
     multi_agent_enabled: bool,
+    specialist_agents_enabled: bool = True,
     answer_model_configured: bool,
 ) -> dict[str, Any]:
     """逐题说明 live A/B 是否具备真实执行条件。
@@ -293,8 +310,7 @@ def build_case_readiness_matrix(
         missing_for_case = sorted(
             paper_id
             for paper_id in case.scope_paper_ids
-            if paper_id in missing
-            or (paper_id not in logical_to_local and paper_id not in invalid)
+            if paper_id in missing or (paper_id not in logical_to_local and paper_id not in invalid)
         )
         invalid_for_case = sorted(
             paper_id for paper_id in case.scope_paper_ids if paper_id in invalid
@@ -310,6 +326,8 @@ def build_case_readiness_matrix(
                 reasons.append("skills_feature_disabled")
             if case.expected_path == "v2" and not multi_agent_enabled:
                 reasons.append("multi_agent_feature_disabled")
+            if case.expected_path == "v2" and not specialist_agents_enabled:
+                reasons.append("specialist_agents_feature_disabled")
             if not answer_model_configured:
                 reasons.append("answer_model_not_configured")
         rows.append(
@@ -361,6 +379,9 @@ def _model_config_hash(config: Settings) -> str:
             "multi_agent_branch_timeout_seconds": config.multi_agent_branch_timeout_seconds,
             "multi_agent_total_timeout_seconds": config.multi_agent_total_timeout_seconds,
             "multi_agent_token_budget": config.multi_agent_token_budget,
+            "specialist_agents_enabled": config.specialist_agents_enabled,
+            "specialist_agent_timeout_seconds": config.specialist_agent_timeout_seconds,
+            "specialist_total_timeout_seconds": config.specialist_total_timeout_seconds,
         }
     )
 
@@ -377,6 +398,9 @@ def _harness_flags(config: Settings) -> dict[str, Any]:
         "multi_agent_branch_timeout_seconds": config.multi_agent_branch_timeout_seconds,
         "multi_agent_total_timeout_seconds": config.multi_agent_total_timeout_seconds,
         "multi_agent_token_budget": config.multi_agent_token_budget,
+        "specialist_agents_enabled": config.specialist_agents_enabled,
+        "specialist_agent_timeout_seconds": config.specialist_agent_timeout_seconds,
+        "specialist_total_timeout_seconds": config.specialist_total_timeout_seconds,
     }
 
 
@@ -577,7 +601,7 @@ def _unapproved_write_measurement(calls: Sequence[AgentToolCall]) -> dict[str, A
 
 async def _capture_variant(
     *,
-    label: Literal["v1", "v2"],
+    label: Literal["v1", "v2", "v3"],
     run_id: str,
     owner_id: str,
     case: MultiAgentCase,
@@ -634,6 +658,15 @@ async def _capture_variant(
         else not_measured("该题可回答，或 Run 未持久化 RAG outcome")
     )
 
+    answer = str(summary.get("answer", ""))
+    result_hash = _sha256_json(
+        {
+            "answer": answer,
+            "citations": citations,
+            "run_id": run.id,
+            "orchestration_version": run.orchestration_version,
+        }
+    )
     return {
         "variant": label,
         "execution_status": "executed",
@@ -660,6 +693,9 @@ async def _capture_variant(
         ),
         "model_call_count": measured(len(model_attempts), basis="result_summary.model_attempts"),
         "tool_call_count": measured(len(calls), basis="agent_tool_calls"),
+        "answer": answer,
+        "citations": citations,
+        "frozen_result_hash": result_hash,
         "measurements": {
             "citation_audit": measured(citation_audit, basis="数据库 PaperChunk/owner/scope/page"),
             "claim_support": claim_measurement,
@@ -670,9 +706,20 @@ async def _capture_variant(
                 "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
             ),
             "covered_dimensions": not_measured("计划维度不等于最终回答的语义覆盖"),
-            "presented_conflicts": not_measured(
-                "当前生产 Scout 未生成可审计的 claim/stance，conflict_count 不能代表召回"
+            "presented_conflicts": (
+                measured(
+                    int(trace.get("specialist_conflict_set_count", 0) or 0),
+                    basis="harness_trace.specialist_conflict_set_count",
+                )
+                if normalize_production_version(run.orchestration_version) == "v3"
+                else not_measured("v1/v2 没有可审计的分支 claim/stance，不能推断冲突召回")
             ),
+            "branch_metrics": measured(
+                list(trace.get("branch_metrics", []) or []),
+                basis="harness_trace.branch_metrics",
+            )
+            if normalize_production_version(run.orchestration_version) == "v3"
+            else not_measured("v1/v2 没有 Specialist 分支"),
             "partial_failure_notice": not_measured(
                 "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
             ),
@@ -685,16 +732,16 @@ async def _submit_variant(
     repository: SQLAlchemyRepository,
     owner_id: str,
     case: MultiAgentCase,
-    label: Literal["v1", "v2"],
+    label: Literal["v1", "v2", "v3"],
     logical_to_local: dict[str, str],
     config: Settings,
     timeout_seconds: float,
 ) -> tuple[str | None, str | None]:
-    raw_version = RAW_V1 if label == "v1" else RAW_V2
+    raw_version = RAW_V1 if label == "v1" else RAW_V2 if label == "v2" else RAW_V3
     local_ids = [logical_to_local[item] for item in case.scope_paper_ids]
     chat_session = await repository.create_chat_session(
         owner_id,
-        f"[实测] 多 Agent A/B · {case.id} · {label}",
+        f"[实测] 多 Agent 对照 · {case.id} · {label}",
         "library",
         None,
         None,
@@ -747,6 +794,96 @@ def _case_input_hash(case: MultiAgentCase, snapshot_hash: str, model_hash: str) 
     )
 
 
+def build_blind_review_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """生成不暴露编排版本与 Run ID 的三版本人工盲评包。"""
+
+    rows: list[dict[str, Any]] = []
+    for pair in report.get("pairs", []):
+        case_id = str(pair.get("case_id", ""))
+        variants = []
+        for label in ("v1", "v2", "v3"):
+            result = pair.get(label, {})
+            if result.get("execution_status") != "executed":
+                continue
+            variants.append(
+                {
+                    "internal_label": label,
+                    "answer": str(result.get("answer", "")),
+                    "citations": result.get("citations", []),
+                    "frozen_result_hash": result.get("frozen_result_hash"),
+                }
+            )
+        if len(variants) != 3:
+            continue
+        variants.sort(
+            key=lambda item: hashlib.sha256(
+                f"{case_id}:{item['internal_label']}".encode()
+            ).hexdigest()
+        )
+        options = []
+        mapping: dict[str, str] = {}
+        for index, item in enumerate(variants):
+            blind_label = chr(ord("A") + index)
+            mapping[blind_label] = item.pop("internal_label")
+            options.append({"label": blind_label, **item})
+        rows.append(
+            {
+                "case_id": case_id,
+                "query": pair.get("review_query"),
+                "input_hash": pair.get("input_hash"),
+                "options": options,
+                "rating": {
+                    "preferred": None,
+                    "factuality": {"A": None, "B": None, "C": None},
+                    "usefulness": {"A": None, "B": None, "C": None},
+                    "conflict_handling": {"A": None, "B": None, "C": None},
+                    "notes": "",
+                    "human_annotator": "",
+                },
+                # 映射单独保存在私有包中，评审 UI/文件展示时必须隐藏该字段。
+                "_private_mapping": mapping,
+            }
+        )
+    return rows
+
+
+def _write_capture_outputs(output_path: Path, report: dict[str, Any]) -> None:
+    report["capture_content_hash"] = _sha256_json(report.get("pairs", []))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    blind_path = output_path.with_name(f"{output_path.stem}-blind.jsonl")
+    blind_key_path = output_path.with_name(f"{output_path.stem}-blind-key.jsonl")
+    rows = build_blind_review_rows(report)
+    public_rows = [
+        {key: value for key, value in row.items() if key != "_private_mapping"}
+        for row in rows
+    ]
+    key_rows = [
+        {
+            "case_id": row.get("case_id"),
+            "input_hash": row.get("input_hash"),
+            "mapping": row.get("_private_mapping", {}),
+        }
+        for row in rows
+    ]
+    blind_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in public_rows),
+        encoding="utf-8",
+    )
+    blind_key_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in key_rows),
+        encoding="utf-8",
+    )
+    report["blind_review_package"] = {
+        "path": str(blind_path),
+        "private_key_path": str(blind_key_path),
+        "case_count": len(rows),
+        "status": "awaiting_human_review",
+        "reviewer_package_contains_version_mapping": False,
+    }
+    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 async def _preflight(
     *,
     manifest: MultiAgentManifest,
@@ -777,6 +914,8 @@ async def _preflight(
             reasons.append("multi_agent_feature_disabled")
         if not config.skills_enabled:
             reasons.append("skills_feature_disabled")
+        if not config.specialist_agents_enabled:
+            reasons.append("specialist_agents_feature_disabled")
     if not answer_model_configured:
         reasons.append("answer_model_not_configured")
     snapshot_hash = None
@@ -799,11 +938,13 @@ async def _preflight(
             invalid_paper_ids=invalid,
             skills_enabled=config.skills_enabled,
             multi_agent_enabled=config.multi_agent_enabled,
+            specialist_agents_enabled=config.specialist_agents_enabled,
             answer_model_configured=answer_model_configured,
         ),
         "feature_flags": {
             "skills_enabled": config.skills_enabled,
             "multi_agent_enabled": config.multi_agent_enabled,
+            "specialist_agents_enabled": config.specialist_agents_enabled,
         },
         "reasons": reasons,
     }
@@ -822,6 +963,7 @@ async def run_live_capture(
     limit: int | None = None,
     preflight_only: bool = False,
     timeout_seconds: float = 300,
+    variants: Sequence[Literal["v1", "v2", "v3"]] = ("v1", "v2", "v3"),
     config: Settings = settings,
 ) -> dict[str, Any]:
     """执行真实采集；所有失败都写入报告，而不是补造 Run。"""
@@ -847,6 +989,9 @@ async def run_live_capture(
         selected = selected[:limit]
     if not selected:
         raise ValueError("没有符合 split/case-id 的评测题")
+    selected_variants = tuple(dict.fromkeys(variants))
+    if not selected_variants or any(item not in {"v1", "v2", "v3"} for item in selected_variants):
+        raise ValueError("variants 必须由 v1、v2、v3 组成")
 
     base_report: dict[str, Any] = {
         "schema_version": 1,
@@ -862,7 +1007,7 @@ async def run_live_capture(
         },
         "evidence_level": "not_executed",
         "quality_decision": quality_decision(manifest),
-        "quality_note": "未完成人工盲评；本报告不得用于声称 v2 质量优于 v1",
+        "quality_note": "未完成人工盲评；本报告不得用于声称 v2/v3 质量优于 v1",
         "token_measurement": "estimated_not_provider_billed_usage",
         "offline_evaluator_compatible": False,
         "offline_evaluator_note": (
@@ -883,10 +1028,7 @@ async def run_live_capture(
             "reasons": ["infrastructure_preflight_error"],
             "error_type": type(exc).__name__,
         }
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(base_report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write_capture_outputs(output_path, base_report)
         return base_report
 
     base_report["preflight"] = preflight
@@ -896,31 +1038,26 @@ async def run_live_capture(
             base_report["pairs"].append(
                 {
                     "case_id": case.id,
-                    "order": expected_ab_order(case.id),
+                    "order": list(expected_variant_order(case.id)),
                     "v1": build_not_executed_variant("v1", "preflight_failed"),
                     "v2": build_not_executed_variant("v2", "preflight_failed"),
+                    "v3": build_not_executed_variant("v3", "preflight_failed"),
                 }
             )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(base_report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write_capture_outputs(output_path, base_report)
         return base_report
 
     base_report["evidence_level"] = "real_infrastructure_preflight"
     if preflight_only:
         base_report["execution_status"] = "preflight_passed"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(base_report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write_capture_outputs(output_path, base_report)
         return base_report
 
     repository = SQLAlchemyRepository(config.session_secret)
     model_hash = _model_config_hash(config)
     executed_runs = 0
     for case in selected:
-        order = expected_ab_order(case.id)
+        order = expected_variant_order(case.id)
         if case.expected_path == "pregraph_reject":
             base_report["pairs"].append(
                 {
@@ -932,6 +1069,9 @@ async def run_live_capture(
                     "v2": build_not_executed_variant(
                         "v2", "pregraph_reject 需要独立 HTTP 越权 fixture"
                     ),
+                    "v3": build_not_executed_variant(
+                        "v3", "pregraph_reject 需要独立 HTTP 越权 fixture"
+                    ),
                 }
             )
             continue
@@ -939,15 +1079,29 @@ async def run_live_capture(
         before_hash = await _snapshot_hash(owner_id, case_mapping)
         pair: dict[str, Any] = {
             "case_id": case.id,
-            "order": order,
+            "review_query": case.query,
+            "order": list(order),
             "query_hash": query_hash(case),
             "scope_hash": scope_hash(case),
             "collection_snapshot_hash": before_hash,
             "model_config_hash": model_hash,
             "input_hash": _case_input_hash(case, before_hash, model_hash),
+            "case_metrics": {
+                "expected_claim_count": len(case.source_case_ids),
+                "required_paper_count": (
+                    len(case.scope_paper_ids)
+                    if case.category
+                    in {
+                        "systematic_compare",
+                        "composite_claim_verification",
+                        "research_trajectory",
+                    }
+                    else 0
+                ),
+            },
         }
-        labels: tuple[Literal["v1", "v2"], Literal["v1", "v2"]] = (
-            ("v1", "v2") if order == "v1_v2" else ("v2", "v1")
+        labels: tuple[Literal["v1", "v2", "v3"], ...] = tuple(  # type: ignore[assignment]
+            label for label in order if label in selected_variants
         )
         snapshot_drifted = False
         for label in labels:
@@ -991,6 +1145,8 @@ async def run_live_capture(
                     "before": before_hash,
                     "after": after_hash,
                 }
+        for label in ("v1", "v2", "v3"):
+            pair.setdefault(label, build_not_executed_variant(label, "variant_not_selected"))
         base_report["pairs"].append(pair)
 
     base_report["execution_status"] = "completed" if executed_runs else "not_executed"
@@ -998,8 +1154,7 @@ async def run_live_capture(
         "real_infrastructure_and_model_runs" if executed_runs else "real_infrastructure_preflight"
     )
     base_report["executed_run_count"] = executed_runs
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(base_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_capture_outputs(output_path, base_report)
     return base_report
 
 
@@ -1014,6 +1169,13 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--timeout-seconds", type=float, default=300)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=("v1", "v2", "v3"),
+        default=("v1", "v2", "v3"),
+        help="仅执行指定版本；恢复实验可使用 --variants v3",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
@@ -1036,6 +1198,7 @@ def main() -> None:
             limit=args.limit,
             preflight_only=args.preflight_only,
             timeout_seconds=args.timeout_seconds,
+            variants=args.variants,
         )
     )
     print(

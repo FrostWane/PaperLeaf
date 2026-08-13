@@ -273,7 +273,7 @@ docker compose run --rm api python -m paperleaf_api.evaluation_harness_live \
 - 重启 API/Worker 后未完成任务与 Agent 中断可恢复。
 - 备份文件可在隔离环境恢复。
 
-## 并行 Map-Reduce 跨论文 A/B
+## v1 / v2 / v3 跨论文对照
 
 `backend/evaluation/multi-agent-compare-v1/` 提供独立于既有 RAG 数据集的跨论文
 A/B draft。当前包含 36 个 3～10 篇论文的复杂任务和 12 个单篇、安全及不可回答
@@ -302,7 +302,7 @@ python -m paperleaf_api.evaluation_multi_agent \
   --source-cases evaluation/datasets/paperleaf-rag-v1/cases.jsonl
 ```
 
-真实 A/B 必须对同一问题、授权论文范围、集合快照和模型配置交替执行 AB/BA。任一哈希
+真实对照必须对同一问题、授权论文范围、集合快照和模型配置轮换执行 v1/v2/v3。任一哈希
 不一致的 Pair 标记为 `protocol_invalid`，不得进入聚合结果。报告至少包含：
 
 - 预期主张证据覆盖与输出主张支持精度；
@@ -331,4 +331,46 @@ v2 的 p95 和估算 Token 不超过 v1 的 2 倍。质量指标使用接近天�
 
 真实 Run 中，首个版本因回答模型连续超时失败；后续三个完成。最新 `682ab92d-a602-4e95-b7e6-c438e1783cc8` 用时 150880 ms，返回 7 个合法引用并覆盖三篇论文，支持状态为 supported/partial。相对前一次同问题运行少 25.66%，但这不是受控 A/B，不作为稳定性能结论。完整记录见 [开发与真实验证报告](reports/2026-08-13-bounded-specialists.md)。
 
-完整 48 例评测目前仍为 `quality_pending`：草案要求 20 篇冻结论文，而本地语料不足以覆盖全部范围；在补齐语料和人工盲评之前，不生成质量 Go 结论。
+真实采集示例：
+
+```powershell
+docker compose run --rm -T --no-deps `
+  -v "${PWD}\backend\evaluation:/app/evaluation:ro" `
+  -v "${PWD}\backend\outputs:/app/outputs" `
+  api python -m paperleaf_api.evaluation_multi_agent_live `
+  --manifest /app/evaluation/multi-agent-compare-v1/manifest.json `
+  --cases /app/evaluation/multi-agent-compare-v1/cases.jsonl `
+  --source-manifest /app/evaluation/datasets/paperleaf-rag-v1/manifest.json `
+  --source-cases /app/evaluation/datasets/paperleaf-rag-v1/cases.jsonl `
+  --split test --case-id sys-11 --timeout-seconds 1200 `
+  --output /app/outputs/private/v123-sys-11.json
+```
+
+采集器为每题冻结 `input/scope/corpus/model/result` 哈希，并生成供评审者填写的
+`*-blind.jsonl` 与仅由评测负责人保管的 `*-blind-key.jsonl`。评审文件不包含版本映射；
+填写 `human_annotator`、1～5 分 factuality/usefulness/conflict_handling 和 preferred 后，再由
+负责人同时传入映射文件运行三版本汇总器。未填写人工评审时只能得到 `quality_pending`：
+
+```powershell
+cd backend
+python -m paperleaf_api.evaluation_multi_agent_three_way `
+  --capture outputs/private/v123-sys-11.json `
+  --blind outputs/private/v123-sys-11-blind.jsonl `
+  --blind-key outputs/private/v123-sys-11-blind-key.jsonl `
+  --output outputs/private/v123-report.json
+```
+
+2026-08-13 已真实运行 4 条当前语料可执行的冻结用例，共 12 个 DeepSeek Run。v1/v2/v3
+均完成 4/4，非法引用为 0，引用物理页准确率均为 100%；所需论文覆盖率分别为
+72.7% / 90.9% / 54.5%，p95 总耗时约为 93 / 96 / 132 秒。v3 出现 2 次分支超时和
+3 次 Schema 失败。由于人工盲评尚未填写，且完整 48 例尚未齐备，结论仍为
+`quality_pending`，不能声称 v3 优于 v1/v2。
+
+同日完成真实 Worker 强杀实验：3 个 Specialist 启动且 s2/s3 已完成、s1 运行中时停止
+Worker；将该测试 Job 的租约推进到过期后，新 Worker 使用同一父 Run、attempt 从 1 变 2、
+claim token 轮换，只继续 s1。旧 claim token 写事件探针返回拒绝且数据库行数保持 0。
+第一次实验也真实暴露过 `Send` superstep 屏障前完成分支会重跑，随后通过独立的父 Research
+与 s1/s2/s3 Checkpoint thread 修复；失败证据和修复后证据均保留在私有输出中。
+
+完整 48 例评测目前仍为 `quality_pending`：草案要求 20 篇冻结论文；在补齐语料、完成全部
+三版本运行和人工盲评之前，不生成质量 Go 结论。

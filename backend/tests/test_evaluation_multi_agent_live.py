@@ -10,9 +10,12 @@ from paperleaf_api.evaluation_multi_agent import MultiAgentCase, MultiAgentManif
 from paperleaf_api.evaluation_multi_agent_live import (
     RAW_V1,
     RAW_V2,
+    RAW_V3,
     audit_citation_records,
+    build_blind_review_rows,
     build_case_readiness_matrix,
     build_not_executed_variant,
+    expected_variant_order,
     normalize_arxiv_id,
     normalize_branch_counts,
     normalize_execution_path,
@@ -30,7 +33,8 @@ SOURCE_ROOT = EVALUATION_ROOT / "datasets" / "paperleaf-rag-v1"
 def test_normalizes_production_version_and_actual_execution_path() -> None:
     assert normalize_production_version(RAW_V1) == "v1"
     assert normalize_production_version(RAW_V2) == "v2"
-    assert normalize_production_version("future_v3") is None
+    assert normalize_production_version(RAW_V3) == "v3"
+    assert normalize_production_version("future_v4") is None
 
     assert normalize_execution_path(RAW_V1, {}) == "v1"
     assert normalize_execution_path(RAW_V2, {"fallback_to_v1": True}) == "v1"
@@ -46,7 +50,46 @@ def test_normalizes_production_version_and_actual_execution_path() -> None:
         == "v2"
     )
     assert normalize_execution_path(RAW_V2, {"planned_subtasks": 0}) == "v1"
-    assert normalize_execution_path("future_v3", {}) == "not_measured"
+    assert (
+        normalize_execution_path(
+            RAW_V3,
+            {
+                "compare_mode": "bounded_specialists",
+                "tool_output_used": True,
+                "planned_subtasks": 3,
+            },
+        )
+        == "v3"
+    )
+    assert normalize_execution_path("future_v4", {}) == "not_measured"
+
+
+def test_three_variant_order_and_blind_package_are_deterministic() -> None:
+    order = expected_variant_order("case-1")
+    assert set(order) == {"v1", "v2", "v3"}
+    report = {
+        "pairs": [
+            {
+                "case_id": "case-1",
+                "input_hash": "abc",
+                **{
+                    label: {
+                        "execution_status": "executed",
+                        "answer": f"答案 {label}",
+                        "citations": [],
+                        "frozen_result_hash": f"hash-{label}",
+                    }
+                    for label in ("v1", "v2", "v3")
+                },
+            }
+        ]
+    }
+    first = build_blind_review_rows(report)
+    second = build_blind_review_rows(report)
+
+    assert first == second
+    assert {item["label"] for item in first[0]["options"]} == {"A", "B", "C"}
+    assert set(first[0]["_private_mapping"].values()) == {"v1", "v2", "v3"}
 
 
 def test_normalizes_timeout_not_as_a_second_failed_branch() -> None:
@@ -248,6 +291,22 @@ def test_draft_manifest_is_always_quality_pending() -> None:
     assert quality_decision(manifest) == "quality_pending"
 
 
+def test_live_capture_rejects_empty_variant_selection(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="variants"):
+        asyncio.run(
+            run_live_capture(
+                manifest_path=DATASET_ROOT / "manifest.json",
+                cases_path=DATASET_ROOT / "cases.jsonl",
+                source_manifest_path=SOURCE_ROOT / "manifest.json",
+                source_cases_path=SOURCE_ROOT / "cases.jsonl",
+                output_path=tmp_path / "outputs" / "private" / "empty.json",
+                split="dev",
+                limit=1,
+                variants=(),
+            )
+        )
+
+
 def test_failed_preflight_writes_not_executed_without_run_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -276,7 +335,13 @@ def test_failed_preflight_writes_not_executed_without_run_ids(
     assert report["quality_decision"] == "quality_pending"
     assert report["pairs"][0]["v1"]["run_id"] is None
     assert report["pairs"][0]["v2"]["run_id"] is None
+    assert report["pairs"][0]["v3"]["run_id"] is None
     assert json_from(output)["evidence_level"] == "not_executed"
+    blind_path = output.with_name("not-executed-blind.jsonl")
+    blind_key_path = output.with_name("not-executed-blind-key.jsonl")
+    assert blind_path.exists()
+    assert blind_key_path.exists()
+    assert "_private_mapping" not in blind_path.read_text(encoding="utf-8")
 
 
 def test_preflight_only_never_submits_model_runs(
