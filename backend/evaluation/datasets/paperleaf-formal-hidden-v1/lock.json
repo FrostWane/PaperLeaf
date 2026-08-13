@@ -2,7 +2,7 @@
   "schema_version": 1,
   "dataset_id": "paperleaf-formal-hidden-v1",
   "manifest_sha256": "b13e5e18333117b3877f5d03ef2598e7b225692060b1a3d2604745dbe2839c91",
-  "questions_sha256": "ca630b46d757eeb2409f747426d67076bc1650f424da457d595f3c76187ac7a1",
+  "questions_sha256": "8f40cc630d01ce319f6b90d98c06615b109a9cf9d3845fcc8f713d2f20d1a30b",
   "oracle_sha256": "5aa635a0d9830e9853b96fa979c5fe93088a4f000f4d9ec81c048bd334fd90ea",
   "excluded_datasets": [
     {
@@ -57,6 +57,6 @@
     "legacy_minilm_reranker": "disabled",
     "human_review_minimum": 30
   },
-  "locked_at": "2026-08-13T16:28:09.153447+00:00",
+  "locked_at": "2026-08-14T01:58:36.9048037+08:00",
   "status": "frozen_before_first_run"
 }
