@@ -6,9 +6,11 @@ from pathlib import Path
 from paperleaf_api.evaluation_formal_answers import (
     aggregate_answer_metrics,
     audit_answer_citations,
+    build_evaluation_repository,
     build_human_review_packet,
     validate_answer_protocol,
 )
+from paperleaf_api.repository import SQLAlchemyRepository
 
 
 def test_audit_answer_citations_checks_scope_page_and_gold() -> None:
@@ -111,3 +113,9 @@ def test_repository_answer_protocol_is_frozen_against_dataset_lock() -> None:
     dataset = backend / "evaluation" / "datasets" / "paperleaf-formal-hidden-v1"
     protocol = json.loads((dataset / "answer-protocol.json").read_text(encoding="utf-8"))
     validate_answer_protocol(protocol, lock_path=dataset / "lock.json")
+
+
+def test_formal_answer_repository_uses_configured_session_secret() -> None:
+    repository = build_evaluation_repository()
+    assert isinstance(repository, SQLAlchemyRepository)
+    assert repository.session_secret

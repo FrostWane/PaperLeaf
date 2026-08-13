@@ -36,6 +36,12 @@ ANSWER_PROTOCOL_STATUS = "frozen_before_first_answer_run"
 ORCHESTRATION_VERSION = "single_agent_v1"
 
 
+def build_evaluation_repository() -> SQLAlchemyRepository:
+    """使用与 API/Worker 相同的会话密钥构造真实仓库。"""
+
+    return SQLAlchemyRepository(settings.session_secret)
+
+
 def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -450,7 +456,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"正式回答预检失败：{preflight['reason']}")
     paper_id_map = dict(preflight["paper_id_map"])
     snapshot_before = await _corpus_snapshot(paper_id_map)
-    repository = SQLAlchemyRepository()
+    repository = build_evaluation_repository()
     semaphore = asyncio.Semaphore(int(protocol["max_concurrency"]))
 
     async def run_bounded(case: Any) -> dict[str, Any]:
