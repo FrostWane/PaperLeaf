@@ -18,6 +18,40 @@ from .evaluation_dataset import read_manifest
 from .evaluation_production import preflight_production_corpus
 
 
+def select_reindex_targets(
+    manifest: Any,
+    papers: list[dict[str, Any]],
+    *,
+    force_reindex: bool,
+    repair_index: bool,
+    embedding_index_revision: int | None = None,
+) -> list[str]:
+    """返回需要重建索引的清单论文，不重复处理已满足当前契约的论文。"""
+
+    by_sha = {str(item.get("sha256")): item for item in papers}
+    if any(
+        paper.sha256 not in by_sha or by_sha[paper.sha256].get("status") != "ready"
+        for paper in manifest.papers
+    ):
+        raise RuntimeError("重索引前必须确保清单论文全部已 ready")
+    targets = [by_sha[paper.sha256] for paper in manifest.papers]
+    if repair_index:
+        expected_revision = (
+            settings.embedding_index_revision
+            if embedding_index_revision is None
+            else embedding_index_revision
+        )
+        targets = [
+            item
+            for item in targets
+            if item.get("embedding_status") != "ready"
+            or item.get("embedding_index_revision") != expected_revision
+        ]
+    elif not force_reindex:
+        return []
+    return [str(item["id"]) for item in targets]
+
+
 class CorpusPreparer:
     def __init__(self, base_url: str, timeout_seconds: int) -> None:
         self.client = httpx.AsyncClient(
@@ -97,6 +131,7 @@ class CorpusPreparer:
         manifest_path: Path,
         *,
         force_reindex: bool = False,
+        repair_index: bool = False,
         pdf_dirs: list[Path] | None = None,
     ) -> dict[str, Any]:
         manifest = read_manifest(manifest_path)
@@ -135,17 +170,14 @@ class CorpusPreparer:
             submitted += int(response.status_code == 201)
 
         reindexed = 0
-        if force_reindex:
+        if force_reindex or repair_index:
             refreshed = await self.papers()
-            by_sha = {str(item.get("sha256")): item for item in refreshed}
-            targets = [
-                str(by_sha[paper.sha256]["id"])
-                for paper in manifest.papers
-                if paper.sha256 in by_sha
-                and by_sha[paper.sha256].get("status") == "ready"
-            ]
-            if len(targets) != manifest.paper_count:
-                raise RuntimeError("强制重索引前必须确保清单论文全部已 ready")
+            targets = select_reindex_targets(
+                manifest,
+                refreshed,
+                force_reindex=force_reindex,
+                repair_index=repair_index,
+            )
             for start in range(0, len(targets), 100):
                 batch = targets[start : start + 100]
                 response = await self.post_with_retry(
@@ -210,6 +242,7 @@ async def _run(args: argparse.Namespace) -> list[dict[str, Any]]:
             await preparer.ensure_manifest(
                 path,
                 force_reindex=args.force_reindex,
+                repair_index=args.repair_index,
                 pdf_dirs=args.pdf_dir,
             )
             for path in args.manifest
@@ -225,6 +258,11 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=int, default=7200)
     parser.add_argument("--force-reindex", action="store_true")
     parser.add_argument(
+        "--repair-index",
+        action="store_true",
+        help="只重建 Embedding 状态或 revision 不符合当前契约的清单论文。",
+    )
+    parser.add_argument(
         "--pdf-dir",
         action="append",
         type=Path,
@@ -232,6 +270,8 @@ def main() -> None:
         help="优先从精确 PDF 缓存上传；可重复提供。缺失时回退 arXiv 导入。",
     )
     args = parser.parse_args()
+    if args.force_reindex and args.repair_index:
+        parser.error("--force-reindex 与 --repair-index 不能同时使用")
     print(json.dumps(asyncio.run(_run(args)), ensure_ascii=False, indent=2))
 
 

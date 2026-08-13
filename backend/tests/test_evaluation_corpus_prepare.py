@@ -2,7 +2,7 @@ import asyncio
 
 import httpx
 
-from paperleaf_api.evaluation_corpus_prepare import CorpusPreparer
+from paperleaf_api.evaluation_corpus_prepare import CorpusPreparer, select_reindex_targets
 
 
 class _RetryClient:
@@ -31,3 +31,46 @@ def test_corpus_prepare_retries_request_timeout(monkeypatch) -> None:
     )
     assert response.status_code == 201
     assert client.calls == 2
+
+
+def test_repair_index_only_selects_contract_mismatches() -> None:
+    class Paper:
+        def __init__(self, sha256: str) -> None:
+            self.sha256 = sha256
+
+    class Manifest:
+        papers = [Paper("a"), Paper("b"), Paper("c")]
+
+    papers = [
+        {
+            "id": "1",
+            "sha256": "a",
+            "status": "ready",
+            "embedding_status": "ready",
+            "embedding_index_revision": 2,
+        },
+        {
+            "id": "2",
+            "sha256": "b",
+            "status": "ready",
+            "embedding_status": "unavailable",
+            "embedding_index_revision": 2,
+        },
+        {
+            "id": "3",
+            "sha256": "c",
+            "status": "ready",
+            "embedding_status": "ready",
+            "embedding_index_revision": 1,
+        },
+    ]
+    assert select_reindex_targets(
+        Manifest(),
+        papers,
+        force_reindex=False,
+        repair_index=True,
+        embedding_index_revision=2,
+    ) == ["2", "3"]
+    assert select_reindex_targets(
+        Manifest(), papers, force_reindex=True, repair_index=False
+    ) == ["1", "2", "3"]
