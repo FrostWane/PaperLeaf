@@ -119,7 +119,6 @@ async def _corpus_snapshot(paper_id_map: dict[str, str]) -> dict[str, object]:
                         PaperChunk.id,
                         PaperChunk.physical_page,
                         PaperChunk.token_count,
-                        PaperChunk.embedding_fingerprint,
                     )
                     .where(PaperChunk.paper_id.in_(local_ids))
                     .order_by(PaperChunk.paper_id, PaperChunk.id)
@@ -127,11 +126,20 @@ async def _corpus_snapshot(paper_id_map: dict[str, str]) -> dict[str, object]:
             ).all()
         )
     chunk_digest = hashlib.sha256()
-    index_digest = hashlib.sha256()
     for row in rows:
-        structural = row[:4]
-        chunk_digest.update("\0".join(str(value) for value in structural).encode())
-        index_digest.update("\0".join(str(value) for value in row).encode())
+        chunk_digest.update("\0".join(str(value) for value in row).encode())
+    index_digest = hashlib.sha256()
+    index_digest.update(chunk_digest.digest())
+    for paper in papers:
+        index_digest.update(
+            "\0".join(
+                (
+                    paper.id,
+                    str(paper.embedding_fingerprint or ""),
+                    str(paper.embedding_status),
+                )
+            ).encode()
+        )
     return {
         "paper_count": len(papers),
         "chunk_count": len(rows),
