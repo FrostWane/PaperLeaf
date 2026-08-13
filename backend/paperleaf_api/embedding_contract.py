@@ -6,6 +6,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+EMBEDDING_INPUT_FORMAT = "paper_context_v2"
+
 
 @dataclass(frozen=True)
 class EmbeddingContract:
@@ -13,11 +15,20 @@ class EmbeddingContract:
     model: str
     dimensions: int
     revision: int
+    input_format: str
     fingerprint: str
 
 
-def contract_fingerprint(model: str, dimensions: int, revision: int) -> str:
-    raw = f"{model.strip()}|{int(dimensions)}|{int(revision)}"
+def contract_fingerprint(
+    model: str,
+    dimensions: int,
+    revision: int,
+    *,
+    input_format: str = EMBEDDING_INPUT_FORMAT,
+) -> str:
+    # 输入模板属于向量空间契约。即使旧部署仍显式配置 revision=1，升级后也不能
+    # 把“纯正文”旧向量与“标题+章节+页码+正文”新向量混在同一索引中。
+    raw = f"{model.strip()}|{int(dimensions)}|{int(revision)}|{input_format.strip()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -48,6 +59,7 @@ def configured_embedding_contract(config: Any, router: Any) -> EmbeddingContract
             model=model,
             dimensions=dimensions,
             revision=revision,
+            input_format=EMBEDDING_INPUT_FORMAT,
             fingerprint=contract_fingerprint(model, dimensions, revision),
         )
     return None

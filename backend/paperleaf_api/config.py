@@ -94,6 +94,29 @@ class Settings:
     chunk_target_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_TARGET_TOKENS", "700"))
     chunk_overlap_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_OVERLAP_TOKENS", "100"))
     chunk_semantic_unit_tokens: int = int(os.getenv("PAPERLEAF_CHUNK_SEMANTIC_UNIT_TOKENS", "220"))
+    rag_candidate_pool_size: int = int(os.getenv("PAPERLEAF_RAG_CANDIDATE_POOL_SIZE", "40"))
+    rag_per_paper_retrieval_enabled: bool = _bool(
+        "PAPERLEAF_RAG_PER_PAPER_RETRIEVAL_ENABLED", True
+    )
+    rag_per_paper_candidate_limit: int = int(
+        os.getenv("PAPERLEAF_RAG_PER_PAPER_CANDIDATE_LIMIT", "5")
+    )
+    rag_weak_query_rewrite_enabled: bool = _bool(
+        "PAPERLEAF_RAG_WEAK_QUERY_REWRITE_ENABLED", True
+    )
+    rag_query_rewrite_max_queries: int = int(
+        os.getenv("PAPERLEAF_RAG_QUERY_REWRITE_MAX_QUERIES", "2")
+    )
+    rag_reranker_enabled: bool = _bool("PAPERLEAF_RAG_RERANKER_ENABLED", False)
+    rag_reranker_model: str = os.getenv(
+        "PAPERLEAF_RAG_RERANKER_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2"
+    )
+    rag_reranker_candidate_limit: int = int(
+        os.getenv("PAPERLEAF_RAG_RERANKER_CANDIDATE_LIMIT", "40")
+    )
+    rag_reranker_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_RAG_RERANKER_TIMEOUT_SECONDS", "3")
+    )
     minio_endpoint: str = os.getenv("PAPERLEAF_MINIO_ENDPOINT", "minio:9000")
     minio_access_key: str = os.getenv("PAPERLEAF_MINIO_ACCESS_KEY", "paperleaf")
     minio_secret_key: str = os.getenv("PAPERLEAF_MINIO_SECRET_KEY", "paperleaf-local")
@@ -115,7 +138,7 @@ class Settings:
     embedding_batch_size: int = int(os.getenv("PAPERLEAF_EMBEDDING_BATCH_SIZE", "8"))
     embedding_timeout_seconds: float = float(os.getenv("PAPERLEAF_EMBEDDING_TIMEOUT_SECONDS", "90"))
     embedding_batch_attempts: int = int(os.getenv("PAPERLEAF_EMBEDDING_BATCH_ATTEMPTS", "2"))
-    embedding_index_revision: int = int(os.getenv("PAPERLEAF_EMBEDDING_INDEX_REVISION", "1"))
+    embedding_index_revision: int = int(os.getenv("PAPERLEAF_EMBEDDING_INDEX_REVISION", "2"))
     fallback_openai_api_key: str | None = os.getenv("PAPERLEAF_FALLBACK_OPENAI_API_KEY")
     fallback_openai_base_url: str = os.getenv(
         "PAPERLEAF_FALLBACK_OPENAI_BASE_URL", "https://api.openai.com/v1"
@@ -270,6 +293,18 @@ class Settings:
             raise RuntimeError("向量批次尝试次数必须位于 1 到 3 之间")
         if self.embedding_provider not in {"auto", "primary", "fallback"}:
             raise RuntimeError("向量 Provider 仅支持 auto、primary 或 fallback")
+        if not 10 <= self.rag_candidate_pool_size <= 200:
+            raise RuntimeError("RAG 候选池必须位于 10 到 200 之间")
+        if not 1 <= self.rag_per_paper_candidate_limit <= 20:
+            raise RuntimeError("逐论文候选数必须位于 1 到 20 之间")
+        if not 0 <= self.rag_query_rewrite_max_queries <= 2:
+            raise RuntimeError("补充查询数必须位于 0 到 2 之间")
+        if not 5 <= self.rag_reranker_candidate_limit <= 100:
+            raise RuntimeError("重排候选数必须位于 5 到 100 之间")
+        if not 0 < self.rag_reranker_timeout_seconds <= 30:
+            raise RuntimeError("重排超时必须位于 0 到 30 秒之间")
+        if self.rag_reranker_enabled and not self.rag_reranker_model.strip():
+            raise RuntimeError("启用重排时必须配置重排模型")
         if self.redis_timeout_seconds <= 0 or self.redis_timeout_seconds > 5:
             raise RuntimeError("Redis 超时必须位于 0 到 5 秒之间")
         if self.agent_rate_limit_requests < 1:

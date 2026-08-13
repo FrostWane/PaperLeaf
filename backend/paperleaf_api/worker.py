@@ -61,6 +61,7 @@ from .pdf_metadata import (
     extract_first_page_publication,
     extract_first_page_year,
     extract_pdf_metadata,
+    is_generated_title,
     normalize_doi,
 )
 from .rag.answer_quality import AnswerQualityPolicy
@@ -70,6 +71,7 @@ from .rag.chunking import (
     chunk_pages_fixed_window,
     sanitize_pdf_text,
 )
+from .rag.retrieval_enhancements import contextual_embedding_text
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .repository import SQLAlchemyRepository
 from .runtime_store import create_runtime_store
@@ -864,7 +866,22 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
     for chunk in chunks:
         chunks_by_page.setdefault(chunk.physical_page, []).append(chunk)
     embedding_contract = configured_embedding_contract(settings, model_router)
-    embeddings = await embed_texts([chunk.text for chunk in chunks])
+    # revision 2 只改变向量输入，不改变 Chunk 正文、稳定 ID 或引用页码。
+    embedding_title = (
+        pdf_metadata.title
+        if pdf_metadata.title
+        and is_generated_title(paper.title, paper.filename, paper.arxiv_id)
+        else paper.title
+    )
+    embedding_documents = [
+        contextual_embedding_text(
+            paper_title=embedding_title,
+            physical_page=chunk.physical_page,
+            chunk_text=chunk.text,
+        )
+        for chunk in chunks
+    ]
+    embeddings = await embed_texts(embedding_documents)
     if embedding_contract is None:
         embedding_status = "unavailable"
         embeddings = None

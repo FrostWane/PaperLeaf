@@ -775,6 +775,9 @@ export async function getAdminRagObservability(window: "24h" | "7d" | "30d" = "2
     intents: (Array.isArray(raw.intents) ? raw.intents : []).map((entry) => { const item = entry as Record<string, unknown>; return { intent: String(item.intent), label: String(item.label), runs: Number(item.runs ?? 0), citedAnswerRate: Number(item.cited_answer_rate ?? 0), sufficientEvidenceRate: Number(item.sufficient_evidence_rate ?? 0), p95Ms: optionalNumber(item.p95_ms) }; }),
     failures: (Array.isArray(raw.failures) ? raw.failures : []).map((entry) => { const item = entry as Record<string, unknown>; return { category: String(item.category), label: String(item.label), count: Number(item.count ?? 0), rate: Number(item.rate ?? 0) }; }),
     chunkingStrategies: (Array.isArray(raw.chunking_strategies) ? raw.chunking_strategies : []).map((entry) => { const item = entry as Record<string, unknown>; return { strategy: String(item.strategy), runs: Number(item.runs ?? 0) }; }),
+    retrievalProcessors: (Array.isArray(raw.retrieval_processors) ? raw.retrieval_processors : []).map((entry) => { const item = entry as Record<string, unknown>; return { processor: String(item.processor), label: String(item.label ?? item.processor), runs: Number(item.runs ?? 0) }; }),
+    queryRewriteReasons: (Array.isArray(raw.query_rewrite_reasons) ? raw.query_rewrite_reasons : []).map((entry) => { const item = entry as Record<string, unknown>; return { reason: String(item.reason), label: String(item.label ?? item.reason), runs: Number(item.runs ?? 0) }; }),
+    rerankerFallbackReasons: (Array.isArray(raw.reranker_fallback_reasons) ? raw.reranker_fallback_reasons : []).map((entry) => { const item = entry as Record<string, unknown>; return { reason: String(item.reason), label: String(item.label ?? item.reason), runs: Number(item.runs ?? 0) }; }),
     runtimeStore: {
       backend: String(runtimeStore.backend ?? "memory"),
       status: runtimeStore.status === "available" ? "available" : "degraded",
@@ -830,6 +833,7 @@ export async function getAdminHarnessMetrics(window: "24h" | "7d" | "30d" = "24h
       model: embedding.model ? String(embedding.model) : undefined,
       dimensions: optionalNumber(embedding.dimensions),
       revision: optionalNumber(embedding.revision),
+      inputFormat: embedding.input_format ? String(embedding.input_format) : undefined,
       total: Number(embedding.total ?? 0),
       ready: Number(embedding.ready ?? 0),
       readyCurrent: Number(embedding.ready_current ?? 0),

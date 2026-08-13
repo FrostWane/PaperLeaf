@@ -378,6 +378,9 @@ export interface AdminRagObservability {
   }>;
   failures: Array<{ category: string; label: string; count: number; rate: number }>;
   chunkingStrategies: Array<{ strategy: string; runs: number }>;
+  retrievalProcessors: Array<{ processor: string; label: string; runs: number }>;
+  queryRewriteReasons: Array<{ reason: string; label: string; runs: number }>;
+  rerankerFallbackReasons: Array<{ reason: string; label: string; runs: number }>;
   runtimeStore: {
     backend: string;
     status: "available" | "degraded";
@@ -458,6 +461,7 @@ export interface AdminHarnessMetrics {
     model?: string;
     dimensions?: number;
     revision?: number;
+    inputFormat?: string;
     total: number;
     ready: number;
     readyCurrent: number;

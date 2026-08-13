@@ -5,9 +5,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
-from dataclasses import dataclass
-from typing import Any, Protocol
+from collections.abc import Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
@@ -18,6 +22,12 @@ from ..embedding_contract import configured_embedding_contract
 from ..model_runtime import ModelRouter, ModelRuntimeError, build_model_router
 from ..models import Paper, PaperChunk
 from ..rag.citations import Evidence
+from ..rag.retrieval_enhancements import (
+    assess_rewrite_need,
+    balance_evidence_by_paper,
+    rerank_evidence_by_sentence_windows,
+    technical_tokens,
+)
 from ..rag.retrieval_quality import deduplicate_evidence_by_page
 from ..rag.rrf import RankedHit, reciprocal_rank_fusion
 from ..selection_context import match_selection_to_page
@@ -59,6 +69,16 @@ _QUERY_STOPWORDS = {
     "which",
     "with",
 }
+_COMPARISON_STOPWORDS = {
+    "compare",
+    "comparison",
+    "contrast",
+    "difference",
+    "differences",
+    "versus",
+    "vs",
+}
+_DIAGNOSTIC_UNSET = object()
 
 
 def _keyword_search_query(query: str, *, limit: int = 12) -> str:
@@ -72,6 +92,26 @@ def _keyword_search_query(query: str, *, limit: int = 12) -> str:
         if len(terms) == limit:
             break
     return " OR ".join(terms)
+
+
+def _deterministic_supplemental_query(query: str) -> str | None:
+    """去掉英文问句与比较框架词，保留实体、数字和主题词。"""
+
+    terms: list[str] = []
+    for raw in _LATIN_QUERY_TOKEN_RE.findall(query):
+        normalized = raw.casefold()
+        if (
+            normalized in _QUERY_STOPWORDS
+            or normalized in _COMPARISON_STOPWORDS
+            or len(normalized) < 2
+            or normalized in {item.casefold() for item in terms}
+        ):
+            continue
+        terms.append(raw)
+    rendered = " ".join(terms[:16]).strip()
+    if not rendered or rendered.casefold() == " ".join(query.split()).casefold():
+        return None
+    return rendered[:500]
 
 
 def _is_scoped_overview_query(query: str) -> bool:
@@ -89,6 +129,9 @@ class LibrarySearchInput(BaseModel):
     # 客户端显式选择仍由 API 限制为 50；集合范围由服务端递归解析，可能超过 50。
     paper_ids: list[str] = Field(default_factory=list)
     limit: int = Field(default=8, ge=1, le=20)
+    # 多论文比较由服务端显式开启。普通全库搜索不会对大量论文逐一查询。
+    ensure_paper_coverage: bool = False
+    per_paper_query_mode: Literal["same_query", "paper_specific"] = "same_query"
 
 
 class ArxivSearchInput(BaseModel):
@@ -108,6 +151,18 @@ class SearchLibraryTool(Protocol):
 
 class SearchArxivTool(Protocol):
     async def __call__(self, request: ArxivSearchInput) -> ToolResult: ...
+
+
+class _FastEmbedRerankScorer:
+    """可选本地 Cross-Encoder；未安装评测依赖时由调用方安全降级。"""
+
+    def __init__(self, model_name: str) -> None:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        self.model = TextCrossEncoder(model_name=model_name)
+
+    def score(self, query: str, documents: Sequence[str]) -> Sequence[float]:
+        return list(self.model.rerank(query, list(documents)))
 
 
 class EmptyLibrarySearch:
@@ -153,10 +208,69 @@ class SQLLibrarySearch:
         self,
         config: Any = settings,
         model_router: ModelRouter[Any] | None = None,
+        reranker: Any | None = None,
     ) -> None:
         self.config = config
         self.model_router = model_router or build_model_router(config)
-        self.last_vector_fallback_reason: str | None = None
+        self.reranker = reranker
+        # SQLLibrarySearch 由 API/Worker 复用。检索诊断必须按 async Task 隔离，
+        # 否则两个并发请求会互相覆盖改写原因和降级状态。
+        self._vector_fallback_reason: ContextVar[object] = ContextVar(
+            f"rag_vector_fallback_{id(self)}", default=_DIAGNOSTIC_UNSET
+        )
+        self._rewrite_reasons: ContextVar[object] = ContextVar(
+            f"rag_rewrite_reasons_{id(self)}", default=_DIAGNOSTIC_UNSET
+        )
+        self._reranker_fallback_reason: ContextVar[object] = ContextVar(
+            f"rag_reranker_fallback_{id(self)}", default=_DIAGNOSTIC_UNSET
+        )
+        self._last_vector_fallback_snapshot: str | None = None
+        self._last_rewrite_reasons_snapshot: tuple[str, ...] = ()
+        self._last_reranker_fallback_snapshot: str | None = None
+
+    def _diagnostic_context_var(self, attribute: str) -> ContextVar[object]:
+        value = getattr(self, attribute, None)
+        if isinstance(value, ContextVar):
+            return value
+        value = ContextVar(f"{attribute}_{id(self)}", default=_DIAGNOSTIC_UNSET)
+        setattr(self, attribute, value)
+        return value
+
+    @property
+    def last_vector_fallback_reason(self) -> str | None:
+        value = self._diagnostic_context_var("_vector_fallback_reason").get()
+        if value is _DIAGNOSTIC_UNSET:
+            return getattr(self, "_last_vector_fallback_snapshot", None)
+        return value if isinstance(value, str) else None
+
+    @last_vector_fallback_reason.setter
+    def last_vector_fallback_reason(self, value: str | None) -> None:
+        self._diagnostic_context_var("_vector_fallback_reason").set(value)
+        self._last_vector_fallback_snapshot = value
+
+    @property
+    def last_rewrite_reasons(self) -> tuple[str, ...]:
+        value = self._diagnostic_context_var("_rewrite_reasons").get()
+        if value is _DIAGNOSTIC_UNSET:
+            return getattr(self, "_last_rewrite_reasons_snapshot", ())
+        return value if isinstance(value, tuple) else ()
+
+    @last_rewrite_reasons.setter
+    def last_rewrite_reasons(self, value: tuple[str, ...]) -> None:
+        self._diagnostic_context_var("_rewrite_reasons").set(value)
+        self._last_rewrite_reasons_snapshot = value
+
+    @property
+    def last_reranker_fallback_reason(self) -> str | None:
+        value = self._diagnostic_context_var("_reranker_fallback_reason").get()
+        if value is _DIAGNOSTIC_UNSET:
+            return getattr(self, "_last_reranker_fallback_snapshot", None)
+        return value if isinstance(value, str) else None
+
+    @last_reranker_fallback_reason.setter
+    def last_reranker_fallback_reason(self, value: str | None) -> None:
+        self._diagnostic_context_var("_reranker_fallback_reason").set(value)
+        self._last_reranker_fallback_snapshot = value
 
     async def _embed_query(self, query: str) -> list[float] | None:
         self.last_vector_fallback_reason = None
@@ -197,6 +311,49 @@ class SQLLibrarySearch:
             self.last_vector_fallback_reason = "query_dimension_mismatch"
             return None
         return vector
+
+    async def _embed_rewritten_queries(
+        self,
+        queries: Sequence[str],
+        *,
+        contract: Any,
+    ) -> dict[str, list[float]]:
+        """批量嵌入逐论文补充查询，避免每篇论文单独发起模型请求。"""
+
+        normalized = list(dict.fromkeys(query.strip() for query in queries if query.strip()))
+        if not normalized:
+            return {}
+        from langchain_openai import OpenAIEmbeddings
+
+        async def invoke(provider: Any) -> list[list[float]]:
+            if provider.embedding_model != contract.model:
+                raise RuntimeError("EMBEDDING_CONTRACT_MISMATCH")
+            kwargs: dict[str, Any] = {
+                "model": provider.embedding_model,
+                "api_key": provider.api_key,
+                "base_url": provider.base_url,
+                "max_retries": 0,
+                "check_embedding_ctx_length": False,
+            }
+            if self.config.embedding_dimensions:
+                kwargs["dimensions"] = self.config.embedding_dimensions
+            return await OpenAIEmbeddings(**kwargs).aembed_documents(normalized)
+
+        try:
+            vectors = await self.model_router.execute(
+                "embedding",
+                invoke,
+                required_model=contract.model,
+            )
+        except (ModelRuntimeError, RuntimeError):
+            self.last_vector_fallback_reason = "embedding_provider_unavailable"
+            return {}
+        if len(vectors) != len(normalized) or any(
+            len(vector) != contract.dimensions for vector in vectors
+        ):
+            self.last_vector_fallback_reason = "query_dimension_mismatch"
+            return {}
+        return dict(zip(normalized, vectors))
 
     async def page_selection_evidence(
         self,
@@ -262,12 +419,20 @@ class SQLLibrarySearch:
             )
         return result
 
-    async def _rewrite_query(self, query: str) -> str | None:
-        """将中文/口语问题改写成少量英文论文检索词；失败时安静回退到原查询。"""
+    async def _rewrite_queries(
+        self,
+        query: str,
+        *,
+        reasons: Sequence[str] = (),
+    ) -> tuple[str, ...]:
+        """生成最多两条补充查询，并强制保留数字、缩写和英文实体。"""
 
-        if not _CJK_RE.search(query) or not self.model_router.has_provider("query_rewrite"):
-            return None
+        max_queries = int(getattr(self.config, "rag_query_rewrite_max_queries", 2) or 0)
+        if max_queries <= 0 or not self.model_router.has_provider("query_rewrite"):
+            return ()
         from langchain_openai import ChatOpenAI
+
+        required = technical_tokens(query)
 
         async def invoke(provider: Any) -> Any:
             model = ChatOpenAI(
@@ -276,17 +441,22 @@ class SQLLibrarySearch:
                 base_url=provider.base_url,
                 temperature=0,
                 max_retries=0,
-                max_tokens=80,
+                max_tokens=160,
             )
             return await model.ainvoke(
                 [
                     (
                         "system",
-                        "你是学术 PDF 检索查询改写器。把用户问题改写为 3 到 8 个用于检索"
-                        "英文论文原文的英文技术关键词，只输出空格分隔的关键词，不回答问题，"
-                        "不输出解释或标点。",
+                        "你是学术 PDF 检索查询改写器。只输出 JSON："
+                        '{"queries":["query one","query two"]}。生成至多两条用于检索英文'
+                        "论文原文的短查询：一条保留技术实体，一条聚焦问题意图。不得回答问题，"
+                        "不得添加用户未提及的数字、模型名或结论。",
                     ),
-                    ("human", query),
+                    (
+                        "human",
+                        f"原问题：{query}\n弱结果原因：{','.join(reasons) or 'unspecified'}\n"
+                        f"必须保留的实体：{', '.join(required) or '无'}",
+                    ),
                 ]
             )
 
@@ -298,15 +468,147 @@ class SQLLibrarySearch:
                 timeout_seconds=min(self.model_router.timeout_seconds, 6.0),
             )
         except ModelRuntimeError:
-            return None
-        rewritten = _keyword_search_query(str(response.content), limit=8)
-        return rewritten.replace(" OR ", " ") if rewritten else None
+            return ()
+        content = str(response.content).strip()
+        raw_queries: list[str] = []
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and isinstance(parsed.get("queries"), list):
+                raw_queries = [str(item) for item in parsed["queries"]]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_queries = [item for item in content.splitlines() if item.strip()]
+        queries: list[str] = []
+        required_suffix = " ".join(required)
+        for raw in raw_queries:
+            cleaned = " ".join(_LATIN_QUERY_TOKEN_RE.findall(raw))
+            if required_suffix:
+                cleaned = f"{cleaned} {required_suffix}".strip()
+            normalized = " ".join(dict.fromkeys(cleaned.split()))
+            if (
+                normalized
+                and normalized.casefold() != query.casefold()
+                and normalized not in queries
+            ):
+                queries.append(normalized[:500])
+            if len(queries) == max_queries:
+                break
+        return tuple(queries)
+
+    async def _rewrite_query(self, query: str) -> str | None:
+        """兼容旧调用方；新链路使用 ``_rewrite_queries``。"""
+
+        values = await self._rewrite_queries(query)
+        return values[0] if values else None
+
+    async def _paper_titles(
+        self,
+        session: Any,
+        request: LibrarySearchInput,
+    ) -> dict[str, str]:
+        if not request.paper_ids:
+            return {}
+        rows = list(
+            (
+                await session.execute(
+                    select(Paper.id, Paper.title).where(
+                        Paper.owner_id == request.user_id,
+                        Paper.id.in_(request.paper_ids),
+                    )
+                )
+            ).all()
+        )
+        return {str(paper_id): str(title) for paper_id, title in rows}
+
+    @staticmethod
+    def _deterministic_paper_queries(
+        query: str,
+        paper_titles: dict[str, str],
+    ) -> dict[str, str]:
+        focused = _deterministic_supplemental_query(query) or query
+        return {
+            paper_id: f"{title[:240]} {focused}"[:500] for paper_id, title in paper_titles.items()
+        }
+
+    async def _rewrite_paper_queries(
+        self,
+        query: str,
+        paper_titles: dict[str, str],
+        *,
+        reasons: Sequence[str] = (),
+    ) -> dict[str, str]:
+        """一次模型调用生成受论文标题约束的专属查询，最多覆盖十篇论文。"""
+
+        if not paper_titles or not self.model_router.has_provider("query_rewrite"):
+            return {}
+        from langchain_openai import ChatOpenAI
+
+        ordered = sorted(paper_titles.items())[:10]
+        aliases = {f"P{index}": paper_id for index, (paper_id, _title) in enumerate(ordered, 1)}
+        descriptor = "\n".join(
+            f"{alias}: {paper_titles[paper_id][:300]}" for alias, paper_id in aliases.items()
+        )
+        required = technical_tokens(query)
+
+        async def invoke(provider: Any) -> Any:
+            model = ChatOpenAI(
+                model=provider.chat_model,
+                api_key=provider.api_key,
+                base_url=provider.base_url,
+                temperature=0,
+                max_retries=0,
+                max_tokens=360,
+            ).bind(response_format={"type": "json_object"})
+            return await model.ainvoke(
+                [
+                    (
+                        "system",
+                        "你是多论文检索计划器。只输出 JSON："
+                        '{"queries":{"P1":"short English query"}}。为每篇论文生成一条'
+                        "与用户比较维度和论文主题相符的英文短查询。不得回答问题、猜测结论或"
+                        "改变 P 编号；必须保留用户问题中的数字、缩写和技术实体。",
+                    ),
+                    (
+                        "human",
+                        f"问题：{query}\n弱结果原因：{','.join(reasons)}\n"
+                        f"必须保留：{', '.join(required) or '无'}\n论文：\n{descriptor}",
+                    ),
+                ]
+            )
+
+        try:
+            response = await self.model_router.execute(
+                "query_rewrite",
+                invoke,
+                timeout_seconds=min(self.model_router.timeout_seconds, 8.0),
+            )
+            parsed = json.loads(str(response.content).strip())
+        except (ModelRuntimeError, TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        raw = parsed.get("queries") if isinstance(parsed, dict) else None
+        if not isinstance(raw, dict):
+            return {}
+        required_suffix = " ".join(required)
+        result: dict[str, str] = {}
+        for alias, paper_id in aliases.items():
+            value = raw.get(alias)
+            if not isinstance(value, str):
+                continue
+            cleaned = " ".join(_LATIN_QUERY_TOKEN_RE.findall(value))
+            if required_suffix:
+                cleaned = f"{cleaned} {required_suffix}".strip()
+            normalized = " ".join(dict.fromkeys(cleaned.split()))
+            if normalized:
+                result[paper_id] = normalized[:500]
+        return result
 
     async def _keyword_rows(
         self,
         session: Any,
         request: LibrarySearchInput,
         query: str,
+        *,
+        paper_id: str | None = None,
+        row_limit: int | None = None,
     ) -> list[Any]:
         search_query = _keyword_search_query(query)
         # PostgreSQL 的 simple 配置不会为连续中文可靠分词，但中文术语仍可通过
@@ -337,7 +639,9 @@ class SQLLibrarySearch:
             Paper.owner_id == request.user_id,
             match_condition,
         ]
-        if request.paper_ids:
+        if paper_id:
+            conditions.append(Paper.id == paper_id)
+        elif request.paper_ids:
             conditions.append(Paper.id.in_(request.paper_ids))
         return list(
             (
@@ -346,7 +650,7 @@ class SQLLibrarySearch:
                     .join(Paper, Paper.id == PaperChunk.paper_id)
                     .where(*conditions)
                     .order_by(rank.desc())
-                    .limit(max(request.limit * 5, 40))
+                    .limit(row_limit or max(request.limit * 5, 40))
                 )
             ).all()
         )
@@ -446,25 +750,204 @@ class SQLLibrarySearch:
         count = await session.scalar(select(func.count(Paper.id)).where(*conditions))
         return int(count or 0) > 0
 
+    async def _vector_rows(
+        self,
+        session: Any,
+        request: LibrarySearchInput,
+        query_vector: list[float],
+        contract: Any,
+        *,
+        paper_id: str | None = None,
+        row_limit: int,
+    ) -> list[Any]:
+        distance = PaperChunk.embedding.cosine_distance(query_vector)
+        conditions = [
+            Paper.owner_id == request.user_id,
+            Paper.embedding_status == "ready",
+            Paper.embedding_fingerprint == contract.fingerprint,
+            Paper.embedding_dimensions == contract.dimensions,
+            PaperChunk.embedding.is_not(None),
+        ]
+        if paper_id:
+            conditions.append(Paper.id == paper_id)
+        elif request.paper_ids:
+            conditions.append(Paper.id.in_(request.paper_ids))
+        return list(
+            (
+                await session.execute(
+                    select(PaperChunk, Paper, distance.label("distance"))
+                    .join(Paper, Paper.id == PaperChunk.paper_id)
+                    .where(*conditions)
+                    .order_by(distance)
+                    .limit(row_limit)
+                )
+            ).all()
+        )
+
+    def _fuse_channels(
+        self,
+        channels: Sequence[tuple[str, list[Any], str]],
+        *,
+        candidate_limit: int,
+    ) -> list[Evidence]:
+        rankings: list[list[RankedHit]] = []
+        scores_by_type: dict[str, dict[str, float]] = {}
+        query_by_hit: dict[str, str] = {}
+        payload_by_hit: dict[str, Evidence] = {}
+        for channel_name, rows, matched_query in channels:
+            ranking: list[RankedHit] = []
+            for row in rows:
+                chunk, paper = row[0], row[1]
+                score = 1.0 - float(row[2]) if channel_name == "vector" else float(row[2])
+                payload = Evidence(
+                    chunk_id=chunk.id,
+                    paper_id=paper.id,
+                    paper_title=paper.title,
+                    physical_page=chunk.physical_page,
+                    text=chunk.text,
+                    retrieval_query=matched_query,
+                    chunking_strategy=getattr(paper, "chunking_strategy", "unknown"),
+                    vector_fallback_reason=self.last_vector_fallback_reason,
+                )
+                ranking.append(RankedHit(chunk.id, score, payload))
+                payload_by_hit.setdefault(chunk.id, payload)
+                scores = scores_by_type.setdefault(channel_name, {})
+                scores[chunk.id] = max(scores.get(chunk.id, float("-inf")), score)
+                if channel_name == "keyword_rewrite" and matched_query:
+                    query_by_hit[chunk.id] = matched_query
+                elif channel_name != "vector" and matched_query:
+                    query_by_hit.setdefault(chunk.id, matched_query)
+            if ranking:
+                rankings.append(ranking)
+        if not rankings:
+            return []
+        fused: list[Evidence] = []
+        for hit in reciprocal_rank_fusion(rankings, limit=candidate_limit):
+            payload = payload_by_hit.get(hit.id)
+            if payload is None:
+                continue
+            hit_channels = tuple(
+                name for name, scores in scores_by_type.items() if hit.id in scores
+            )
+            channel_scores = tuple(
+                (name, scores[hit.id])
+                for name, scores in scores_by_type.items()
+                if hit.id in scores
+            )
+            fused.append(
+                Evidence(
+                    chunk_id=payload.chunk_id,
+                    paper_id=payload.paper_id,
+                    paper_title=payload.paper_title,
+                    physical_page=payload.physical_page,
+                    text=payload.text,
+                    retrieval_score=hit.score,
+                    retrieval_channels=hit_channels,
+                    channel_scores=channel_scores,
+                    retrieval_query=query_by_hit.get(hit.id, payload.retrieval_query),
+                    chunking_strategy=payload.chunking_strategy,
+                    vector_fallback_reason=payload.vector_fallback_reason,
+                )
+            )
+        return deduplicate_evidence_by_page(fused, limit=candidate_limit)
+
+    async def _maybe_rerank(
+        self,
+        query: str,
+        candidates: list[Evidence],
+        *,
+        limit: int,
+    ) -> list[Evidence]:
+        self.last_reranker_fallback_reason = None
+        if not bool(getattr(self.config, "rag_reranker_enabled", False)):
+            return candidates[:limit]
+        candidate_limit = int(getattr(self.config, "rag_reranker_candidate_limit", 40) or 40)
+        try:
+            if self.reranker is None:
+                self.reranker = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _FastEmbedRerankScorer,
+                        str(getattr(self.config, "rag_reranker_model", "")),
+                    ),
+                    timeout=float(getattr(self.config, "rag_reranker_timeout_seconds", 3.0) or 3.0),
+                )
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    rerank_evidence_by_sentence_windows,
+                    query,
+                    candidates[:candidate_limit],
+                    self.reranker,
+                    limit=limit,
+                ),
+                timeout=float(getattr(self.config, "rag_reranker_timeout_seconds", 3.0) or 3.0),
+            )
+        except Exception:
+            # 重排只是可选排序增强；依赖缺失、模型下载失败或超时都保留 RRF。
+            self.last_reranker_fallback_reason = "reranker_unavailable"
+            return candidates[:limit]
+
+    def _annotate_retrieval(
+        self,
+        evidence: Sequence[Evidence],
+        *,
+        per_paper: bool,
+    ) -> list[Evidence]:
+        channels = {channel for item in evidence for channel in item.retrieval_channels}
+        processors = [
+            *(["per_paper_balance"] if per_paper else []),
+            *(["weak_query_rewrite"] if "keyword_rewrite" in channels else []),
+            *(["sentence_window_rerank"] if "sentence_reranker" in channels else []),
+        ]
+        return [
+            replace(
+                item,
+                retrieval_processors=tuple(processors),
+                query_rewrite_reasons=self.last_rewrite_reasons,
+                reranker_fallback_reason=self.last_reranker_fallback_reason,
+            )
+            for item in evidence
+        ]
+
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
+        self.last_vector_fallback_reason = None
+        self.last_rewrite_reasons = ()
+        self.last_reranker_fallback_reason = None
         if len(request.paper_ids) == 1 and _is_scoped_overview_query(request.query):
             return await self._scoped_overview_evidence(request)
 
+        candidate_limit = max(
+            request.limit * 5,
+            int(getattr(self.config, "rag_candidate_pool_size", 40) or 40),
+        )
+        per_paper = (
+            bool(getattr(self.config, "rag_per_paper_retrieval_enabled", True))
+            and request.ensure_paper_coverage
+            and 1 < len(request.paper_ids) <= 10
+        )
+        per_paper_row_limit = max(
+            int(getattr(self.config, "rag_per_paper_candidate_limit", 5) or 5) * 3,
+            10,
+        )
+        independent_same_query = per_paper and request.per_paper_query_mode == "same_query"
+        row_limit = per_paper_row_limit if independent_same_query else candidate_limit
         async with get_session_factory()() as session:
-            retrieval_query = request.query
-            keyword_channel = "keyword"
-            keyword_rows = await self._keyword_rows(session, request, retrieval_query)
-            if not keyword_rows:
-                rewritten_query = await self._rewrite_query(request.query)
-                if rewritten_query:
-                    rewritten_rows = await self._keyword_rows(session, request, rewritten_query)
-                    if rewritten_rows:
-                        keyword_rows = rewritten_rows
-                        retrieval_query = rewritten_query
-                        keyword_channel = "keyword_rewrite"
+            channels: list[tuple[str, list[Any], str]] = []
+            # 逐论文专属查询先保留现有全局候选作为回退；只有消融模式
+            # per_paper_same 才会把原问题也对每篇论文独立执行。
+            scopes: list[str | None] = list(request.paper_ids) if independent_same_query else [None]
+            for paper_id in scopes:
+                rows = await self._keyword_rows(
+                    session,
+                    request,
+                    request.query,
+                    paper_id=paper_id,
+                    row_limit=row_limit,
+                )
+                if rows:
+                    channels.append(("keyword", rows, request.query))
 
-            vector_rows: list[Any] = []
             query_vector = await self._embed_query(request.query)
+            contract = None
             if query_vector:
                 contract = configured_embedding_contract(self.config, self.model_router)
                 if contract is None:
@@ -484,88 +967,144 @@ class SQLLibrarySearch:
                     if stored_mismatch or self.last_vector_fallback_reason == "vector_query_failed":
                         query_vector = None
                 if contract is not None and query_vector:
-                    distance = PaperChunk.embedding.cosine_distance(query_vector)
-                    vector_conditions = [
-                        Paper.owner_id == request.user_id,
-                        Paper.embedding_status == "ready",
-                        Paper.embedding_fingerprint == contract.fingerprint,
-                        Paper.embedding_dimensions == contract.dimensions,
-                        PaperChunk.embedding.is_not(None),
-                    ]
-                    if request.paper_ids:
-                        vector_conditions.append(Paper.id.in_(request.paper_ids))
-                    try:
-                        vector_rows = (
-                            await session.execute(
-                                select(PaperChunk, Paper, distance.label("distance"))
-                                .join(Paper, Paper.id == PaperChunk.paper_id)
-                                .where(*vector_conditions)
-                                .order_by(distance)
-                                .limit(max(request.limit * 5, 40))
+                    for paper_id in scopes:
+                        try:
+                            rows = await self._vector_rows(
+                                session,
+                                request,
+                                query_vector,
+                                contract,
+                                paper_id=paper_id,
+                                row_limit=row_limit,
                             )
-                        ).all()
-                    except Exception:
-                        # pgvector 维度/索引错误不得中断关键词召回。
-                        self.last_vector_fallback_reason = "vector_query_failed"
-                        vector_rows = []
+                        except Exception:
+                            self.last_vector_fallback_reason = "vector_query_failed"
+                            rows = []
+                        if rows:
+                            channels.append(("vector", rows, request.query))
 
-        def evidence_from(row: Any, *, matched_query: str = "") -> Evidence:
-            chunk, paper = row[0], row[1]
-            return Evidence(
-                chunk_id=chunk.id,
-                paper_id=paper.id,
-                paper_title=paper.title,
-                physical_page=chunk.physical_page,
-                text=chunk.text,
-                retrieval_query=matched_query,
-                chunking_strategy=getattr(paper, "chunking_strategy", "unknown"),
-                vector_fallback_reason=self.last_vector_fallback_reason,
-            )
+            initial = self._fuse_channels(channels, candidate_limit=candidate_limit)
+            decision = assess_rewrite_need(request.query, initial)
+            self.last_rewrite_reasons = decision.reasons
+            if (
+                bool(getattr(self.config, "rag_weak_query_rewrite_enabled", True))
+                and decision.required
+            ):
+                paper_queries: dict[str, str] = {}
+                paper_query_sets: dict[str, list[str]] = {}
+                if per_paper and request.per_paper_query_mode == "paper_specific":
+                    paper_titles = await self._paper_titles(session, request)
+                    deterministic_queries = self._deterministic_paper_queries(
+                        request.query, paper_titles
+                    )
+                    paper_query_sets = {
+                        paper_id: [rewritten]
+                        for paper_id, rewritten in deterministic_queries.items()
+                    }
+                    if set(decision.reasons) & {
+                        "cross_language",
+                        "low_lexical_coverage",
+                        "no_candidates",
+                    }:
+                        paper_queries = await self._rewrite_paper_queries(
+                            request.query,
+                            paper_titles,
+                            reasons=decision.reasons,
+                        )
+                        for paper_id, rewritten in paper_queries.items():
+                            values = paper_query_sets.setdefault(paper_id, [])
+                            if rewritten not in values:
+                                values.append(rewritten)
+                if paper_query_sets:
+                    all_paper_queries = [
+                        rewritten for values in paper_query_sets.values() for rewritten in values
+                    ]
+                    rewritten_vectors = (
+                        await self._embed_rewritten_queries(
+                            all_paper_queries,
+                            contract=contract,
+                        )
+                        if contract is not None and query_vector
+                        else {}
+                    )
+                    for paper_id, rewritten_queries in paper_query_sets.items():
+                        for rewritten_query in rewritten_queries[:2]:
+                            rows = await self._keyword_rows(
+                                session,
+                                request,
+                                rewritten_query,
+                                paper_id=paper_id,
+                                row_limit=per_paper_row_limit,
+                            )
+                            if rows:
+                                channels.append(("keyword_rewrite", rows, rewritten_query))
+                            rewritten_vector = rewritten_vectors.get(rewritten_query)
+                            if rewritten_vector and contract is not None:
+                                try:
+                                    rows = await self._vector_rows(
+                                        session,
+                                        request,
+                                        rewritten_vector,
+                                        contract,
+                                        paper_id=paper_id,
+                                        row_limit=per_paper_row_limit,
+                                    )
+                                except Exception:
+                                    self.last_vector_fallback_reason = "vector_query_failed"
+                                    rows = []
+                                if rows:
+                                    channels.append(("vector", rows, rewritten_query))
+                else:
+                    rewrites: list[str] = []
+                    deterministic_query = _deterministic_supplemental_query(request.query)
+                    if deterministic_query:
+                        rewrites.append(deterministic_query)
+                    if set(decision.reasons) & {
+                        "cross_language",
+                        "low_lexical_coverage",
+                        "no_candidates",
+                    }:
+                        model_rewrites = await self._rewrite_queries(
+                            request.query,
+                            reasons=decision.reasons,
+                        )
+                        rewrites.extend(value for value in model_rewrites if value not in rewrites)
+                    max_rewrites = int(
+                        getattr(self.config, "rag_query_rewrite_max_queries", 2) or 0
+                    )
+                    for rewritten_query in rewrites[:max_rewrites]:
+                        for paper_id in scopes:
+                            rows = await self._keyword_rows(
+                                session,
+                                request,
+                                rewritten_query,
+                                paper_id=paper_id,
+                                row_limit=row_limit,
+                            )
+                            if rows:
+                                channels.append(("keyword_rewrite", rows, rewritten_query))
 
-        keyword_hits = [
-            RankedHit(
-                row[0].id,
-                float(row[2]),
-                evidence_from(row, matched_query=retrieval_query),
+            candidates = self._fuse_channels(channels, candidate_limit=candidate_limit)
+
+        rerank_limit = candidate_limit if per_paper else request.limit
+        candidates = await self._maybe_rerank(
+            request.query,
+            candidates,
+            limit=rerank_limit,
+        )
+        if per_paper:
+            return self._annotate_retrieval(
+                balance_evidence_by_paper(
+                    candidates,
+                    paper_ids=request.paper_ids,
+                    limit=request.limit,
+                    per_paper_limit=int(
+                        getattr(self.config, "rag_per_paper_candidate_limit", 5) or 5
+                    ),
+                ),
+                per_paper=True,
             )
-            for row in keyword_rows
-        ]
-        vector_hits = [
-            RankedHit(row[0].id, 1.0 - float(row[2]), evidence_from(row)) for row in vector_rows
-        ]
-        channels = [hits for hits in (vector_hits, keyword_hits) if hits]
-        if not channels:
-            return []
-        channel_limit = max(request.limit * 5, 40)
-        keyword_scores = {hit.id: hit.score for hit in keyword_hits}
-        vector_scores = {hit.id: hit.score for hit in vector_hits}
-        fused_evidence: list[Evidence] = []
-        for hit in reciprocal_rank_fusion(channels, limit=channel_limit):
-            if not isinstance(hit.payload, Evidence):
-                continue
-            hit_channels = tuple(
-                name
-                for name, scores in ((keyword_channel, keyword_scores), ("vector", vector_scores))
-                if hit.id in scores
-            )
-            channel_scores = tuple(
-                (name, scores[hit.id])
-                for name, scores in ((keyword_channel, keyword_scores), ("vector", vector_scores))
-                if hit.id in scores
-            )
-            fused_evidence.append(
-                Evidence(
-                    chunk_id=hit.payload.chunk_id,
-                    paper_id=hit.payload.paper_id,
-                    paper_title=hit.payload.paper_title,
-                    physical_page=hit.payload.physical_page,
-                    text=hit.payload.text,
-                    retrieval_score=hit.score,
-                    retrieval_channels=hit_channels,
-                    channel_scores=channel_scores,
-                    retrieval_query=hit.payload.retrieval_query,
-                    chunking_strategy=hit.payload.chunking_strategy,
-                    vector_fallback_reason=hit.payload.vector_fallback_reason,
-                )
-            )
-        return deduplicate_evidence_by_page(fused_evidence, limit=request.limit)
+        return self._annotate_retrieval(
+            deduplicate_evidence_by_page(candidates, limit=request.limit),
+            per_paper=False,
+        )

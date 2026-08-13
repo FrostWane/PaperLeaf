@@ -1541,6 +1541,9 @@ class FunctionToolHarness:
                     query=request.query,
                     paper_ids=paper_ids,
                     limit=request.limit,
+                    ensure_paper_coverage=(
+                        name == "search_library" and 1 < len(paper_ids) <= 10
+                    ),
                 )
             )
             if context.selection_scope_locked and context.verified_selection_page is not None:

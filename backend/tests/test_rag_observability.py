@@ -40,6 +40,8 @@ def test_trace_records_channels_latency_and_strategy_without_content() -> None:
         "不会写入指标的证据正文",
         retrieval_channels=("keyword", "vector"),
         chunking_strategy="structure_aware_v2",
+        retrieval_processors=("per_paper_balance", "weak_query_rewrite"),
+        query_rewrite_reasons=("cross_language",),
     )
     trace = build_rag_trace(
         intent="method",
@@ -55,6 +57,8 @@ def test_trace_records_channels_latency_and_strategy_without_content() -> None:
 
     assert trace["retrieval_channels"] == ["keyword", "vector"]
     assert trace["chunking_strategies"] == ["structure_aware_v2"]
+    assert trace["retrieval_processors"] == ["per_paper_balance", "weak_query_rewrite"]
+    assert trace["query_rewrite_reasons"] == ["cross_language"]
     assert trace["stage_timings_ms"] == {"retrieval": 125, "generation": 860}
     assert trace["citation_count"] == 1
     serialized = str(trace)
@@ -78,6 +82,9 @@ def test_admin_aggregation_exposes_funnel_failures_channels_and_intents() -> Non
         "citation_count": 2,
         "stage_timings_ms": {"retrieval": 100, "generation": 900},
         "chunking_strategies": ["structure_aware_v2"],
+        "retrieval_processors": ["per_paper_balance", "weak_query_rewrite"],
+        "query_rewrite_reasons": ["cross_language"],
+        "reranker_fallback_reasons": ["reranker_unavailable"],
         "failure_category": "none",
     }
     failed_trace = {
@@ -128,3 +135,13 @@ def test_admin_aggregation_exposes_funnel_failures_channels_and_intents() -> Non
     }
     assert report["failures"][0]["category"] == "unverified_answer"
     assert {item["intent"] for item in report["intents"]} == {"method", "comparison"}
+    assert report["retrieval_processors"] == [
+        {"processor": "per_paper_balance", "label": "逐论文取证", "runs": 1},
+        {"processor": "weak_query_rewrite", "label": "弱结果补充查询", "runs": 1},
+    ]
+    assert report["query_rewrite_reasons"] == [
+        {"reason": "cross_language", "label": "中英文跨语言", "runs": 1}
+    ]
+    assert report["reranker_fallback_reasons"] == [
+        {"reason": "reranker_unavailable", "label": "重排器不可用", "runs": 1}
+    ]

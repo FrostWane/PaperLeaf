@@ -467,7 +467,10 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
             )
             await session.commit()
 
+        embedded_documents: list[str] = []
+
         async def embeddings_unavailable(texts: list[str], router: object | None = None) -> None:
+            embedded_documents.extend(texts)
             return None
 
         monkeypatch.setattr(worker, "get_session_factory", lambda: sessions)
@@ -499,6 +502,11 @@ def test_worker_persists_embedded_pdf_authors_and_year(tmp_path, monkeypatch) ->
                 assert job.status == JobStatus.completed
                 assert artifact is not None and artifact.status == "stale"
                 assert chunks
+                assert embedded_documents
+                assert all(
+                    "论文标题：Metadata Integration Paper" in text
+                    for text in embedded_documents
+                )
                 assert all(chunk.id != "paper-1:p1:c99" for chunk in chunks)
                 assert [chunk.chunk_index for chunk in chunks if chunk.physical_page == 1] == list(
                     range(sum(chunk.physical_page == 1 for chunk in chunks))

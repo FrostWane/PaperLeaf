@@ -197,6 +197,9 @@ describe("真实 API 契约", () => {
       intents: [{ intent: "comparison", label: "比较分析", runs: 2, cited_answer_rate: 0.5, sufficient_evidence_rate: 1, p95_ms: 2300 }],
       failures: [{ category: "model_timeout", label: "模型响应超时", count: 1, rate: 0.2 }],
       chunking_strategies: [{ strategy: "structure_aware_v2", runs: 5 }],
+      retrieval_processors: [{ processor: "per_paper_balance", label: "逐论文取证", runs: 2 }],
+      query_rewrite_reasons: [{ reason: "cross_language", label: "中英文跨语言", runs: 1 }],
+      reranker_fallback_reasons: [],
       runtime_store: { backend: "redis", status: "available" },
       privacy: { content_collected: false, identifiers_collected: false },
     })));
@@ -204,6 +207,8 @@ describe("真实 API 契约", () => {
       windowHours: 168,
       totals: { runs: 5, failureRate: 0.2, citedAnswerRate: 0.6, groundedAnswers: 2, ragIssueRate: 0.2 },
       latency: { overall: { p95Ms: 2400 }, stages: [{ stage: "retrieval", p95Ms: 210 }] },
+      retrievalProcessors: [{ processor: "per_paper_balance", label: "逐论文取证", runs: 2 }],
+      queryRewriteReasons: [{ reason: "cross_language", label: "中英文跨语言", runs: 1 }],
       retrievalChannels: [{ channel: "vector", retrievalP95Ms: 180 }],
       intents: [{ intent: "comparison" }],
       failures: [{ category: "model_timeout" }],

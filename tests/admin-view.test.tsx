@@ -37,6 +37,9 @@ const observability = {
   intents: [{ intent: "method", label: "方法与实现", runs: 6, cited_answer_rate: 0.8333, sufficient_evidence_rate: 0.8333, p95_ms: 3500 }],
   failures: [{ category: "unverified_answer", label: "回答引用未通过", count: 2, rate: 0.1667 }],
   chunking_strategies: [{ strategy: "structure_aware_v2", runs: 12 }],
+  retrieval_processors: [{ processor: "per_paper_balance", label: "逐论文取证", runs: 4 }],
+  query_rewrite_reasons: [{ reason: "cross_language", label: "中英文跨语言", runs: 3 }],
+  reranker_fallback_reasons: [{ reason: "reranker_unavailable", label: "重排器不可用", runs: 1 }],
   runtime_store: { backend: "redis", status: "available" },
   privacy: { content_collected: false, identifiers_collected: false },
 };
@@ -110,6 +113,9 @@ describe("AdminView 管理信息语义", () => {
     expect(screen.getByText("关键词检索")).toBeInTheDocument();
     expect(screen.getByText("回答引用未通过")).toBeInTheDocument();
     expect(screen.getByText("structure_aware_v2 · 12")).toBeInTheDocument();
+    expect(screen.getByText("逐论文取证")).toBeInTheDocument();
+    expect(screen.getByText("中英文跨语言")).toBeInTheDocument();
+    expect(screen.getByText("重排器不可用 · 1")).toBeInTheDocument();
     expect(screen.getByText("Redis 可用")).toBeInTheDocument();
     expect(screen.getAllByText("含引用回答").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("RAG 异常/受限率")).toBeInTheDocument();

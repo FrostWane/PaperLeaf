@@ -622,6 +622,8 @@ async def _execute_parallel_compare(
                 query=(f"{query}\n比较维度：{'、'.join(task.dimensions)}"),
                 paper_ids=list(task.paper_ids),
                 limit=min(18, max(8, len(task.paper_ids) * 5)),
+                ensure_paper_coverage=True,
+                per_paper_query_mode="paper_specific",
             )
         )
         return ScoutResult(evidence=tuple(evidence))
@@ -1302,6 +1304,8 @@ async def execute_agent_run(
                             ),
                             paper_ids=list(task.paper_ids),
                             limit=min(18, max(8, len(task.paper_ids) * 5)),
+                            ensure_paper_coverage=True,
+                            per_paper_query_mode="paper_specific",
                         )
                     )
 

@@ -136,6 +136,9 @@ def _evidence_to_dict(item: Evidence) -> dict[str, Any]:
         "retrieval_query": item.retrieval_query,
         "chunking_strategy": item.chunking_strategy,
         "vector_fallback_reason": item.vector_fallback_reason,
+        "retrieval_processors": list(item.retrieval_processors),
+        "query_rewrite_reasons": list(item.query_rewrite_reasons),
+        "reranker_fallback_reason": item.reranker_fallback_reason,
     }
 
 
@@ -158,6 +161,17 @@ def _evidence_from_dict(value: Mapping[str, Any]) -> Evidence:
         vector_fallback_reason=(
             str(value["vector_fallback_reason"])
             if value.get("vector_fallback_reason") is not None
+            else None
+        ),
+        retrieval_processors=tuple(
+            str(item) for item in value.get("retrieval_processors", [])
+        ),
+        query_rewrite_reasons=tuple(
+            str(item) for item in value.get("query_rewrite_reasons", [])
+        ),
+        reranker_fallback_reason=(
+            str(value["reranker_fallback_reason"])
+            if value.get("reranker_fallback_reason") is not None
             else None
         ),
     )

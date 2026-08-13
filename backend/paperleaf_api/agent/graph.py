@@ -1058,6 +1058,10 @@ class AgentRuntime:
                 user_id=state["user_id"],
                 query=state["query"],
                 paper_ids=state.get("selected_paper_ids", []),
+                ensure_paper_coverage=(
+                    1 < len(state.get("selected_paper_ids", [])) <= 10
+                    and str(state.get("scope", "")) in {"collection", "library"}
+                ),
             )
         )
         if state.get("selection_scope_locked"):

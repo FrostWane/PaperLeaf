@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 from paperleaf_api import worker
 from paperleaf_api.agent.tools import SQLLibrarySearch
-from paperleaf_api.embedding_contract import configured_embedding_contract
+from paperleaf_api.embedding_contract import (
+    EMBEDDING_INPUT_FORMAT,
+    configured_embedding_contract,
+    contract_fingerprint,
+)
 from paperleaf_api.model_runtime import ModelProvider, ModelRouter, ModelRuntimeError
 
 
@@ -161,6 +165,44 @@ def test_query_embedding_preserves_string_input_for_compatible_provider(monkeypa
     assert captured["kwargs"]["check_embedding_ctx_length"] is False
 
 
+def test_paper_specific_queries_share_one_embedding_batch(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeEmbeddings:
+        def __init__(self, **kwargs) -> None:
+            captured["kwargs"] = kwargs
+
+        async def aembed_documents(self, queries: list[str]) -> list[list[float]]:
+            captured["queries"] = queries
+            return [[float(index)] * 1024 for index, _ in enumerate(queries, 1)]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "langchain_openai",
+        SimpleNamespace(OpenAIEmbeddings=FakeEmbeddings),
+    )
+    search = SQLLibrarySearch(
+        config=SimpleNamespace(
+            embedding_dimensions=1024,
+            embedding_index_revision=2,
+        ),
+        model_router=_EmbeddingRouter(),
+    )
+    contract = configured_embedding_contract(search.config, search.model_router)
+    assert contract is not None
+
+    vectors = asyncio.run(
+        search._embed_rewritten_queries(
+            ["drug target affinity", "protein ligand binding", "drug target affinity"],
+            contract=contract,
+        )
+    )
+
+    assert captured["queries"] == ["drug target affinity", "protein ligand binding"]
+    assert set(vectors) == {"drug target affinity", "protein ligand binding"}
+    assert all(len(vector) == 1024 for vector in vectors.values())
+
+
 def test_query_embedding_dimension_mismatch_falls_back_without_pgvector(monkeypatch) -> None:
     class FakeEmbeddings:
         def __init__(self, **_kwargs) -> None:
@@ -175,9 +217,7 @@ def test_query_embedding_dimension_mismatch_falls_back_without_pgvector(monkeypa
         SimpleNamespace(OpenAIEmbeddings=FakeEmbeddings),
     )
     search = SQLLibrarySearch(
-        config=SimpleNamespace(
-            embedding_dimensions=1024, embedding_index_revision=1
-        ),
+        config=SimpleNamespace(embedding_dimensions=1024, embedding_index_revision=1),
         model_router=_EmbeddingRouter(),
     )
 
@@ -193,16 +233,12 @@ def test_stored_vector_dimension_mismatch_is_detected_before_vector_query() -> N
             return 1
 
     search = SQLLibrarySearch(
-        config=SimpleNamespace(
-            embedding_dimensions=1024, embedding_index_revision=1
-        ),
+        config=SimpleNamespace(embedding_dimensions=1024, embedding_index_revision=1),
         model_router=_EmbeddingRouter(),
     )
     request = SimpleNamespace(user_id="u1", paper_ids=["paper-1"])
 
-    mismatched = asyncio.run(
-        search._has_stored_dimension_mismatch(FakeSession(), request, 1024)
-    )
+    mismatched = asyncio.run(search._has_stored_dimension_mismatch(FakeSession(), request, 1024))
 
     assert mismatched is True
 
@@ -213,17 +249,13 @@ def test_stale_paper_in_scope_is_reported_as_contract_fallback() -> None:
             return 1
 
     search = SQLLibrarySearch(
-        config=SimpleNamespace(
-            embedding_dimensions=1024, embedding_index_revision=1
-        ),
+        config=SimpleNamespace(embedding_dimensions=1024, embedding_index_revision=1),
         model_router=_EmbeddingRouter(),
     )
     request = SimpleNamespace(user_id="u1", paper_ids=["paper-1"])
     contract = configured_embedding_contract(search.config, search.model_router)
 
-    mismatched = asyncio.run(
-        search._has_scope_contract_mismatch(FakeSession(), request, contract)
-    )
+    mismatched = asyncio.run(search._has_scope_contract_mismatch(FakeSession(), request, contract))
 
     assert mismatched is True
 
@@ -244,9 +276,7 @@ def test_verified_selection_uses_real_page_chunk_and_neighbors(monkeypatch) -> N
             ]
         )
     ]
-    paper = SimpleNamespace(
-        id="paper-1", title="DeepDTA", chunking_strategy="structure_aware_v2"
-    )
+    paper = SimpleNamespace(id="paper-1", title="DeepDTA", chunking_strategy="structure_aware_v2")
 
     class FakeResult:
         def all(self):
@@ -318,6 +348,13 @@ def test_embedding_contract_selects_explicit_provider_and_blocks_other_vector_sp
     assert contract is not None
     assert contract.provider == "fallback"
     assert contract.model == "qwen3-embedding:0.6b"
+    assert contract.input_format == EMBEDDING_INPUT_FORMAT
+    assert contract.fingerprint != contract_fingerprint(
+        contract.model,
+        contract.dimensions,
+        contract.revision,
+        input_format="raw_chunk_v1",
+    )
 
     invoked: list[str] = []
 
@@ -325,9 +362,7 @@ def test_embedding_contract_selects_explicit_provider_and_blocks_other_vector_sp
         invoked.append(provider.name)
         return [0.1] * 1024
 
-    vector = asyncio.run(
-        router.execute("embedding", operation, required_model=contract.model)
-    )
+    vector = asyncio.run(router.execute("embedding", operation, required_model=contract.model))
 
     assert len(vector) == 1024
     assert invoked == ["fallback"]

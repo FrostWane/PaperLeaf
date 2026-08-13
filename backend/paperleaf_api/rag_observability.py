@@ -25,8 +25,28 @@ RAG_METRIC_STAGES = (
     "answer_support",
     "citation_validation",
 )
-KNOWN_CHANNELS = {"keyword", "keyword_rewrite", "vector", "scoped_overview", "demo"}
+KNOWN_CHANNELS = {
+    "keyword",
+    "keyword_rewrite",
+    "vector",
+    "sentence_reranker",
+    "scoped_overview",
+    "demo",
+}
 KNOWN_SCOPES = {"paper", "selection", "collection", "library"}
+KNOWN_PROCESSORS = {
+    "per_paper_balance",
+    "weak_query_rewrite",
+    "sentence_window_rerank",
+}
+KNOWN_REWRITE_REASONS = {
+    "no_candidates",
+    "low_lexical_coverage",
+    "ambiguous_ranking",
+    "cross_language",
+    "broad_or_comparison_intent",
+}
+KNOWN_RERANKER_FALLBACK_REASONS = {"reranker_unavailable"}
 KNOWN_INTENTS = {
     "paper_overview",
     "comparison",
@@ -51,10 +71,29 @@ CHANNEL_LABELS = {
     "keyword": "关键词检索",
     "keyword_rewrite": "改写后关键词检索",
     "vector": "向量检索",
+    "sentence_reranker": "短句窗重排",
     "scoped_overview": "单篇跨页概览",
     "demo": "演示检索",
     "none": "未命中通道",
     "other": "其他通道",
+}
+PROCESSOR_LABELS = {
+    "per_paper_balance": "逐论文取证",
+    "weak_query_rewrite": "弱结果补充查询",
+    "sentence_window_rerank": "短句窗重排",
+    "other": "其他处理",
+}
+REWRITE_REASON_LABELS = {
+    "no_candidates": "初次未召回",
+    "low_lexical_coverage": "关键词覆盖较低",
+    "ambiguous_ranking": "候选分差较小",
+    "cross_language": "中英文跨语言",
+    "broad_or_comparison_intent": "宽泛或比较问题",
+    "other": "其他原因",
+}
+RERANKER_FALLBACK_LABELS = {
+    "reranker_unavailable": "重排器不可用",
+    "other": "其他原因",
 }
 FAILURE_LABELS = {
     "no_evidence": "没有召回证据",
@@ -201,6 +240,27 @@ def build_rag_trace(
             if getattr(item, "vector_fallback_reason", None)
         }
     )
+    processors = sorted(
+        {
+            processor if processor in KNOWN_PROCESSORS else "other"
+            for item in evidence
+            for processor in getattr(item, "retrieval_processors", ())
+        }
+    )
+    rewrite_reasons = sorted(
+        {
+            reason if reason in KNOWN_REWRITE_REASONS else "other"
+            for item in evidence
+            for reason in getattr(item, "query_rewrite_reasons", ())
+        }
+    )
+    reranker_fallback_reasons = sorted(
+        {
+            reason if reason in KNOWN_RERANKER_FALLBACK_REASONS else "other"
+            for item in evidence
+            if (reason := getattr(item, "reranker_fallback_reason", None))
+        }
+    )
     grade = str(quality.get("grade") or result.get("evidence_grade") or "unknown")
     retrieval_outcome = (
         "empty" if not evidence else "sufficient" if grade == "sufficient" else "insufficient"
@@ -219,6 +279,9 @@ def build_rag_trace(
         "stage_timings_ms": timings,
         "chunking_strategies": strategies or ["unknown"],
         "vector_fallback_reasons": vector_fallback_reasons,
+        "retrieval_processors": processors,
+        "query_rewrite_reasons": rewrite_reasons,
+        "reranker_fallback_reasons": reranker_fallback_reasons,
     }
     trace["failure_category"] = failure_category(error_code, trace)
     return trace
@@ -280,8 +343,7 @@ def aggregate_rag_runs(
     sufficient = sum(trace.get("retrieval_outcome") == "sufficient" for _, trace in traces)
     retrieved = sum(int(trace.get("evidence_count", 0)) > 0 for _, trace in traces)
     grounded = sum(
-        trace.get("retrieval_outcome") == "sufficient"
-        and int(trace.get("citation_count", 0)) > 0
+        trace.get("retrieval_outcome") == "sufficient" and int(trace.get("citation_count", 0)) > 0
         for _, trace in traces
     )
     rag_issue_runs = sum(
@@ -369,6 +431,24 @@ def aggregate_rag_runs(
         for _, trace in traces
         for strategy in set(trace.get("chunking_strategies", ["unknown"]))
     )
+    processor_counts = Counter(
+        processor
+        for _, trace in traces
+        for processor in set(trace.get("retrieval_processors", []))
+        if processor in KNOWN_PROCESSORS | {"other"}
+    )
+    rewrite_reason_counts = Counter(
+        reason
+        for _, trace in traces
+        for reason in set(trace.get("query_rewrite_reasons", []))
+        if reason in KNOWN_REWRITE_REASONS | {"other"}
+    )
+    reranker_fallback_counts = Counter(
+        reason
+        for _, trace in traces
+        for reason in set(trace.get("reranker_fallback_reasons", []))
+        if reason in KNOWN_RERANKER_FALLBACK_REASONS | {"other"}
+    )
     stage_latency = [
         {
             "stage": stage,
@@ -448,5 +528,35 @@ def aggregate_rag_runs(
         "chunking_strategies": [
             {"strategy": strategy, "runs": count}
             for strategy, count in strategy_counts.most_common()
+        ],
+        "retrieval_processors": [
+            {
+                "processor": processor,
+                "label": PROCESSOR_LABELS.get(processor, processor),
+                "runs": count,
+            }
+            for processor, count in sorted(
+                processor_counts.items(), key=lambda item: (-item[1], item[0])
+            )
+        ],
+        "query_rewrite_reasons": [
+            {
+                "reason": reason,
+                "label": REWRITE_REASON_LABELS.get(reason, reason),
+                "runs": count,
+            }
+            for reason, count in sorted(
+                rewrite_reason_counts.items(), key=lambda item: (-item[1], item[0])
+            )
+        ],
+        "reranker_fallback_reasons": [
+            {
+                "reason": reason,
+                "label": RERANKER_FALLBACK_LABELS.get(reason, reason),
+                "runs": count,
+            }
+            for reason, count in sorted(
+                reranker_fallback_counts.items(), key=lambda item: (-item[1], item[0])
+            )
         ],
     }

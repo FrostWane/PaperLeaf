@@ -939,6 +939,7 @@ def create_app(
                 "model": contract.model if contract else None,
                 "dimensions": contract.dimensions if contract else None,
                 "revision": contract.revision if contract else None,
+                "input_format": contract.input_format if contract else None,
                 **embedding_counts,
             },
             window_hours=hours,
