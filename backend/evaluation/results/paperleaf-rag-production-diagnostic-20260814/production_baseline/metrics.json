@@ -1,0 +1,1189 @@
+{
+  "case_count": 90,
+  "answerable_count": 80,
+  "unanswerable_count": 10,
+  "retrieval_recall_at_k": {
+    "k": 5,
+    "numerator": 54,
+    "denominator": 90,
+    "value": 0.6
+  },
+  "retrieval_mrr_at_k": {
+    "k": 5,
+    "numerator": 37.30000000000001,
+    "denominator": 80,
+    "value": 0.46625000000000016
+  },
+  "evidence_group_recall_at_k": {
+    "k": 5,
+    "numerator": 51,
+    "denominator": 80,
+    "value": 0.6375
+  },
+  "evidence_page_recall_at_k": {
+    "k": 5,
+    "numerator": 52.5,
+    "denominator": 80,
+    "value": 0.65625
+  },
+  "latency_ms": {
+    "median": 456,
+    "p95": 2443
+  },
+  "by_split": {
+    "test": {
+      "case_count": 90,
+      "answerable_count": 80,
+      "unanswerable_count": 10,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 54,
+        "denominator": 90,
+        "value": 0.6
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 37.30000000000001,
+        "denominator": 80,
+        "value": 0.46625000000000016
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 51,
+        "denominator": 80,
+        "value": 0.6375
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 52.5,
+        "denominator": 80,
+        "value": 0.65625
+      },
+      "latency_ms": {
+        "median": 456,
+        "p95": 2443
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    }
+  },
+  "by_category": {
+    "cross_paper": {
+      "case_count": 10,
+      "answerable_count": 10,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 3,
+        "denominator": 20,
+        "value": 0.15
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 0.95,
+        "denominator": 10,
+        "value": 0.095
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 0,
+        "denominator": 10,
+        "value": 0.0
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 1.5,
+        "denominator": 10,
+        "value": 0.15
+      },
+      "latency_ms": {
+        "median": 611,
+        "p95": 787
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "limitation": {
+      "case_count": 20,
+      "answerable_count": 20,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 16,
+        "denominator": 20,
+        "value": 0.8
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 11.899999999999999,
+        "denominator": 20,
+        "value": 0.595
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 16,
+        "denominator": 20,
+        "value": 0.8
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 16.0,
+        "denominator": 20,
+        "value": 0.8
+      },
+      "latency_ms": {
+        "median": 399,
+        "p95": 599
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "method": {
+      "case_count": 20,
+      "answerable_count": 20,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 15,
+        "denominator": 20,
+        "value": 0.75
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 9.783333333333333,
+        "denominator": 20,
+        "value": 0.48916666666666664
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 15,
+        "denominator": 20,
+        "value": 0.75
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 15.0,
+        "denominator": 20,
+        "value": 0.75
+      },
+      "latency_ms": {
+        "median": 462,
+        "p95": 682
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "result": {
+      "case_count": 10,
+      "answerable_count": 10,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 8,
+        "denominator": 10,
+        "value": 0.8
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 4.833333333333334,
+        "denominator": 10,
+        "value": 0.4833333333333334
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 8,
+        "denominator": 10,
+        "value": 0.8
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 8.0,
+        "denominator": 10,
+        "value": 0.8
+      },
+      "latency_ms": {
+        "median": 417,
+        "p95": 821
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "setup": {
+      "case_count": 20,
+      "answerable_count": 20,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 12,
+        "denominator": 20,
+        "value": 0.6
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 9.833333333333332,
+        "denominator": 20,
+        "value": 0.4916666666666666
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 12,
+        "denominator": 20,
+        "value": 0.6
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 12.0,
+        "denominator": 20,
+        "value": 0.6
+      },
+      "latency_ms": {
+        "median": 443,
+        "p95": 712
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "unanswerable": {
+      "case_count": 10,
+      "answerable_count": 0,
+      "unanswerable_count": 10,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 0,
+        "denominator": 0,
+        "value": null
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 0,
+        "denominator": 0,
+        "value": null
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 0,
+        "denominator": 0,
+        "value": null
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 0.0,
+        "denominator": 0,
+        "value": null
+      },
+      "latency_ms": {
+        "median": 719,
+        "p95": 2996
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    }
+  },
+  "answer_and_citation_metrics": {
+    "status": "not_measured",
+    "reason": "retrieval_only_protocol"
+  },
+  "by_retrieval_dimension": {
+    "cross_paper": {
+      "case_count": 10,
+      "answerable_count": 10,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 3,
+        "denominator": 20,
+        "value": 0.15
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 0.95,
+        "denominator": 10,
+        "value": 0.095
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 0,
+        "denominator": 10,
+        "value": 0.0
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 1.5,
+        "denominator": 10,
+        "value": 0.15
+      },
+      "latency_ms": {
+        "median": 611,
+        "p95": 787
+      },
+      "by_split": {
+        "test": {
+          "case_count": 10,
+          "answerable_count": 10,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 3,
+            "denominator": 20,
+            "value": 0.15
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 0.95,
+            "denominator": 10,
+            "value": 0.095
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 10,
+            "value": 0.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 1.5,
+            "denominator": 10,
+            "value": 0.15
+          },
+          "latency_ms": {
+            "median": 611,
+            "p95": 787
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "by_category": {
+        "cross_paper": {
+          "case_count": 10,
+          "answerable_count": 10,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 3,
+            "denominator": 20,
+            "value": 0.15
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 0.95,
+            "denominator": 10,
+            "value": 0.095
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 10,
+            "value": 0.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 1.5,
+            "denominator": 10,
+            "value": 0.15
+          },
+          "latency_ms": {
+            "median": 611,
+            "p95": 787
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "single_paper": {
+      "case_count": 80,
+      "answerable_count": 70,
+      "unanswerable_count": 10,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 51,
+        "denominator": 70,
+        "value": 0.7285714285714285
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 36.35000000000001,
+        "denominator": 70,
+        "value": 0.5192857142857145
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 51,
+        "denominator": 70,
+        "value": 0.7285714285714285
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 51.0,
+        "denominator": 70,
+        "value": 0.7285714285714285
+      },
+      "latency_ms": {
+        "median": 443,
+        "p95": 2443
+      },
+      "by_split": {
+        "test": {
+          "case_count": 80,
+          "answerable_count": 70,
+          "unanswerable_count": 10,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 51,
+            "denominator": 70,
+            "value": 0.7285714285714285
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 36.35000000000001,
+            "denominator": 70,
+            "value": 0.5192857142857145
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 51,
+            "denominator": 70,
+            "value": 0.7285714285714285
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 51.0,
+            "denominator": 70,
+            "value": 0.7285714285714285
+          },
+          "latency_ms": {
+            "median": 443,
+            "p95": 2443
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "by_category": {
+        "limitation": {
+          "case_count": 20,
+          "answerable_count": 20,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 16,
+            "denominator": 20,
+            "value": 0.8
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 11.899999999999999,
+            "denominator": 20,
+            "value": 0.595
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 16,
+            "denominator": 20,
+            "value": 0.8
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 16.0,
+            "denominator": 20,
+            "value": 0.8
+          },
+          "latency_ms": {
+            "median": 399,
+            "p95": 599
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "method": {
+          "case_count": 20,
+          "answerable_count": 20,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 15,
+            "denominator": 20,
+            "value": 0.75
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 9.783333333333333,
+            "denominator": 20,
+            "value": 0.48916666666666664
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 15,
+            "denominator": 20,
+            "value": 0.75
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 15.0,
+            "denominator": 20,
+            "value": 0.75
+          },
+          "latency_ms": {
+            "median": 462,
+            "p95": 682
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "result": {
+          "case_count": 10,
+          "answerable_count": 10,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 8,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 4.833333333333334,
+            "denominator": 10,
+            "value": 0.4833333333333334
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 8,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 8.0,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "latency_ms": {
+            "median": 417,
+            "p95": 821
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "setup": {
+          "case_count": 20,
+          "answerable_count": 20,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 12,
+            "denominator": 20,
+            "value": 0.6
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 9.833333333333332,
+            "denominator": 20,
+            "value": 0.4916666666666666
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 12,
+            "denominator": 20,
+            "value": 0.6
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 12.0,
+            "denominator": 20,
+            "value": 0.6
+          },
+          "latency_ms": {
+            "median": 443,
+            "p95": 712
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "answerable_count": 0,
+          "unanswerable_count": 10,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "median": 719,
+            "p95": 2996
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "table_or_formula": {
+      "case_count": 3,
+      "answerable_count": 3,
+      "unanswerable_count": 0,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 3,
+        "denominator": 3,
+        "value": 1.0
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 2.333333333333333,
+        "denominator": 3,
+        "value": 0.7777777777777777
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 3,
+        "denominator": 3,
+        "value": 1.0
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 3.0,
+        "denominator": 3,
+        "value": 1.0
+      },
+      "latency_ms": {
+        "median": 504,
+        "p95": 2756
+      },
+      "by_split": {
+        "test": {
+          "case_count": 3,
+          "answerable_count": 3,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 2.333333333333333,
+            "denominator": 3,
+            "value": 0.7777777777777777
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 3.0,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "median": 504,
+            "p95": 2756
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "by_category": {
+        "limitation": {
+          "case_count": 1,
+          "answerable_count": 1,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 1,
+            "denominator": 1,
+            "value": 1.0
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 1.0,
+            "denominator": 1,
+            "value": 1.0
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 1,
+            "denominator": 1,
+            "value": 1.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 1.0,
+            "denominator": 1,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "median": 438,
+            "p95": 438
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "method": {
+          "case_count": 2,
+          "answerable_count": 2,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 2,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 1.3333333333333333,
+            "denominator": 2,
+            "value": 0.6666666666666666
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 2,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 2.0,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "median": 2756,
+            "p95": 2756
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "technical_entity": {
+      "case_count": 49,
+      "answerable_count": 44,
+      "unanswerable_count": 5,
+      "retrieval_recall_at_k": {
+        "k": 5,
+        "numerator": 30,
+        "denominator": 51,
+        "value": 0.5882352941176471
+      },
+      "retrieval_mrr_at_k": {
+        "k": 5,
+        "numerator": 19.93333333333333,
+        "denominator": 44,
+        "value": 0.45303030303030295
+      },
+      "evidence_group_recall_at_k": {
+        "k": 5,
+        "numerator": 27,
+        "denominator": 44,
+        "value": 0.6136363636363636
+      },
+      "evidence_page_recall_at_k": {
+        "k": 5,
+        "numerator": 28.5,
+        "denominator": 44,
+        "value": 0.6477272727272727
+      },
+      "latency_ms": {
+        "median": 473,
+        "p95": 821
+      },
+      "by_split": {
+        "test": {
+          "case_count": 49,
+          "answerable_count": 44,
+          "unanswerable_count": 5,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 30,
+            "denominator": 51,
+            "value": 0.5882352941176471
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 19.93333333333333,
+            "denominator": 44,
+            "value": 0.45303030303030295
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 27,
+            "denominator": 44,
+            "value": 0.6136363636363636
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 28.5,
+            "denominator": 44,
+            "value": 0.6477272727272727
+          },
+          "latency_ms": {
+            "median": 473,
+            "p95": 821
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "by_category": {
+        "cross_paper": {
+          "case_count": 7,
+          "answerable_count": 7,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 3,
+            "denominator": 14,
+            "value": 0.21428571428571427
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 0.95,
+            "denominator": 7,
+            "value": 0.1357142857142857
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 7,
+            "value": 0.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 1.5,
+            "denominator": 7,
+            "value": 0.21428571428571427
+          },
+          "latency_ms": {
+            "median": 638,
+            "p95": 787
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "limitation": {
+          "case_count": 10,
+          "answerable_count": 10,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 8,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 5.45,
+            "denominator": 10,
+            "value": 0.545
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 8,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 8.0,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "latency_ms": {
+            "median": 399,
+            "p95": 599
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "method": {
+          "case_count": 8,
+          "answerable_count": 8,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 5,
+            "denominator": 8,
+            "value": 0.625
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 3.2,
+            "denominator": 8,
+            "value": 0.4
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 5,
+            "denominator": 8,
+            "value": 0.625
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 5.0,
+            "denominator": 8,
+            "value": 0.625
+          },
+          "latency_ms": {
+            "median": 504,
+            "p95": 682
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "result": {
+          "case_count": 7,
+          "answerable_count": 7,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 7,
+            "denominator": 7,
+            "value": 1.0
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 3.8333333333333335,
+            "denominator": 7,
+            "value": 0.5476190476190477
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 7,
+            "denominator": 7,
+            "value": 1.0
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 7.0,
+            "denominator": 7,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "median": 417,
+            "p95": 821
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "setup": {
+          "case_count": 12,
+          "answerable_count": 12,
+          "unanswerable_count": 0,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 7,
+            "denominator": 12,
+            "value": 0.5833333333333334
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 6.5,
+            "denominator": 12,
+            "value": 0.5416666666666666
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 7,
+            "denominator": 12,
+            "value": 0.5833333333333334
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 7.0,
+            "denominator": 12,
+            "value": 0.5833333333333334
+          },
+          "latency_ms": {
+            "median": 453,
+            "p95": 728
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        },
+        "unanswerable": {
+          "case_count": 5,
+          "answerable_count": 0,
+          "unanswerable_count": 5,
+          "retrieval_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "retrieval_mrr_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "evidence_group_recall_at_k": {
+            "k": 5,
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "evidence_page_recall_at_k": {
+            "k": 5,
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "median": 719,
+            "p95": 2534
+          },
+          "answer_and_citation_metrics": {
+            "status": "not_measured",
+            "reason": "retrieval_only_protocol"
+          }
+        }
+      },
+      "answer_and_citation_metrics": {
+        "status": "not_measured",
+        "reason": "retrieval_only_protocol"
+      }
+    },
+    "cjk_query": {
+      "status": "not_measured",
+      "case_count": 0
+    },
+    "long_evidence": {
+      "status": "not_measured",
+      "case_count": 0
+    }
+  },
+  "invalid_retrieval_count": 0,
+  "retrieval_channels": {
+    "keyword": 441,
+    "keyword_rewrite": 345,
+    "scoped_overview": 5,
+    "vector": 415
+  },
+  "retrieval_processors": {
+    "per_paper_balance": 50,
+    "weak_query_rewrite": 345
+  },
+  "query_rewrite_reasons": {
+    "ambiguous_ranking": 330,
+    "broad_or_comparison_intent": 55,
+    "low_lexical_coverage": 20
+  },
+  "vector_fallback_reasons": {},
+  "reranker_fallback_reasons": {},
+  "unanswerable_false_retrieval_rate": {
+    "numerator": 10,
+    "denominator": 10,
+    "value": 1.0
+  },
+  "required_paper_coverage_at_k": {
+    "k": 5,
+    "numerator": 20,
+    "denominator": 20,
+    "value": 1.0
+  },
+  "page_micro_recall_at_k": {
+    "k": 5,
+    "numerator": 54,
+    "denominator": 90,
+    "value": 0.6,
+    "definition": "每题选择命中比例最高的人工可接受证据组后做页级 micro 汇总"
+  },
+  "latency_cold_warm_ms": {
+    "cold_start": {
+      "sample_count": 1,
+      "p50": 2756,
+      "p95": 2756,
+      "definition": "新建检索器后的首题；不等同于清空 PostgreSQL/Ollama 操作系统缓存"
+    },
+    "warm": {
+      "sample_count": 89,
+      "p50": 455,
+      "p95": 821
+    }
+  }
+}

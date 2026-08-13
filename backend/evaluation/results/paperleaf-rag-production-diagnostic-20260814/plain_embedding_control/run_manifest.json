@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "status": "completed",
+  "created_at": "2026-08-13T17:35:10.241635+00:00",
+  "git_sha": "f3e6c72ad396e26f6972ac31c74b28640bab8d9a",
+  "docker_image_digest": "sha256:3f48037e22a663004b1c58bc1ccf1eb09ab72c5052244023f14ccc94cc0b8e78",
+  "mode": "diagnostic",
+  "variant": "plain_embedding_control",
+  "dataset": {
+    "dataset_id": "paperleaf-rag-v1",
+    "manifest_sha256": "8ba28472aef97056748d4d1ea1a815d8d3cce6d4fe8239ba2da53f7f27ee6d1d",
+    "cases_or_questions_sha256": "5dc0144ea02b2536a7921ee399126c10117497d865f814b3ef6682759c953310",
+    "oracle_sha256": null,
+    "case_count": 90
+  },
+  "protocol": {
+    "evaluation_status": "diagnostic_not_blind"
+  },
+  "configuration": {
+    "k": 5,
+    "candidate_pool_size": 40,
+    "embedding_provider": "fallback",
+    "embedding_model": "text-embedding-3-small",
+    "fallback_embedding_model": "qwen3-embedding:0.6b",
+    "embedding_revision": 1,
+    "embedding_input_format": "chunk_text_v1",
+    "retrieval_mode": "unified",
+    "per_paper": false,
+    "weak_query_rewrite": false,
+    "reranker": false,
+    "reranker_strategy": null,
+    "legacy_minilm_enabled": false
+  },
+  "preflight": {
+    "status": "ready",
+    "reason": null,
+    "missing_papers": [],
+    "missing_chunks": [],
+    "stale_or_incompatible": [],
+    "embedding_contract": {
+      "provider": "fallback",
+      "model": "qwen3-embedding:0.6b",
+      "dimensions": 1024,
+      "revision": 1,
+      "input_format": "chunk_text_v1",
+      "fingerprint": "31bcf2da4221f401ecce7005b5a0f9f29326302dda21e2c8386ee62a6f591916"
+    }
+  },
+  "corpus": {
+    "paper_count": 20,
+    "chunk_count": 2773,
+    "chunk_snapshot_sha256": "8b8cd2025c87d8d69a61ebf1f6be3cd576148224aef7c6599c3ec0633a638ff2",
+    "index_snapshot_sha256": "82fcff2cac023577781257f9121225157f6215585da6cbd84e743a4c43065f21",
+    "paper_status_counts": {
+      "ready": 20
+    },
+    "chunking_strategies": [
+      "structure_aware_v2"
+    ],
+    "embedding_fingerprints": [
+      "31bcf2da4221f401ecce7005b5a0f9f29326302dda21e2c8386ee62a6f591916"
+    ]
+  },
+  "completed_at": "2026-08-13T17:35:49.561220+00:00",
+  "artifacts": {
+    "per_query_results.jsonl": "ff410012514053e335dc45aab0b153cedbefa6d439b7aee251d14037baec799c",
+    "metrics.json": "a15e9285645905eb4b0a1b8ddcfd0acb00cea5352464753eb1dc1e1ecd1e5d04"
+  }
+}

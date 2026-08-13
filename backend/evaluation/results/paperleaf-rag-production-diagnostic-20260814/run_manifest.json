@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "status": "retrieval_completed_human_review_pending",
+  "mode": "diagnostic",
+  "dataset": {
+    "dataset_id": "paperleaf-rag-v1",
+    "case_count": 90,
+    "chunk_snapshot_sha256": "8b8cd2025c87d8d69a61ebf1f6be3cd576148224aef7c6599c3ec0633a638ff2"
+  },
+  "variants": {
+    "production_baseline": {
+      "run_manifest_sha256": "fd27179c9dbd4c6cce8bd125992f1d4a76fdd18c5fb76a202314ad48184daa58",
+      "per_query_results_sha256": "82945f1c45561645294d61c28710c212c1656af4d772e1035f6ba8f57ccb16af",
+      "metrics_sha256": "676841ff369080b480079a9112482bf9eeb4b650e6130c447a7bf2436d967db9"
+    },
+    "plain_embedding_control": {
+      "run_manifest_sha256": "a13f6041f73fa1851f05ed2ab4d67da369ca177b4c3ed3ae31dcf3ef9cc351e9",
+      "per_query_results_sha256": "ff410012514053e335dc45aab0b153cedbefa6d439b7aee251d14037baec799c",
+      "metrics_sha256": "a15e9285645905eb4b0a1b8ddcfd0acb00cea5352464753eb1dc1e1ecd1e5d04"
+    },
+    "contextual_embedding": {
+      "run_manifest_sha256": "1f9b72b7cda3aab901ceb70e25b2ec03ea0a0e580d153c345f1aae7796bb0fe6",
+      "per_query_results_sha256": "a90cb903e4776608836379cca3878496d29a2fbc393d989061e0d8222b175def",
+      "metrics_sha256": "91808779a286b05f9f46adee3d2aaa93eed121b7d3d05da1ff3e2033f65bf491"
+    },
+    "per_paper_retrieval": {
+      "run_manifest_sha256": "2d7d9db65c75a6a5a8a9659952a951da62666b1bab0e6a8e69f5a158464e91ec",
+      "per_query_results_sha256": "235e31b843fce97fd8065c84443dc4922177cffc37f289caf987691a9c1c0f6a",
+      "metrics_sha256": "742c369e4cf6febb6d123ef04dff812e38816f6dae4efcc41ca86368c10490e6"
+    },
+    "weak_query_rewrite": {
+      "run_manifest_sha256": "45b99ea580db9690c4657660104be19b79bc8059c7f776cafd55e33c2429b9a4",
+      "per_query_results_sha256": "f8a071a5c08f7956fb5de5fe239243f07c13ab2582e9deaa8933590173b979e0",
+      "metrics_sha256": "4e356bdc18d08746c94ec5a8f4a33e40497066c2b626e95fcf8ddb2d451a7752"
+    },
+    "multigranular_page_reranker": {
+      "run_manifest_sha256": "debadf85a6242b6e1aa66178b710e0c8a1c152155fa506fb8897dde58652101e",
+      "per_query_results_sha256": "b5289ea2b9f5dbf8f268613325f3ff76fe347b41cb4aed1cfae3568b02062daa",
+      "metrics_sha256": "0cc355d2c5f8a048109364ca91c9f89bff5c8a69b79371f93575d6d7d6747fc5"
+    },
+    "final_combined": {
+      "run_manifest_sha256": "6a4379d01c7e6777b645de410239e43df0385f1d0d9f191a9db47af5706ccd42",
+      "per_query_results_sha256": "5fa9211297c32d91394f8c33ce023bcf0fe4b158cbe03a5f9c368c7f0fabd125",
+      "metrics_sha256": "d06412ebc13456676b5c985ebbd6f245a728b5ec9c151658769dc1038c36847c"
+    }
+  },
+  "artifacts": {
+    "per_query_results.jsonl": "07f4360777a4d22d4fb0b64125da454fc46b3ed3df05e70ff6d5dc638aba4a44",
+    "metrics.json": "b9c01cfaeaa85ba2e1f0afa7ef8d5535ecea0c389a1ce1b6a7275d584f3b7bef",
+    "REPORT.md": "ec3e50d56c82b7f00aa5c6821fa7c0397ee4cfb200578265ac07187c7ef96f5b"
+  },
+  "human_review": {
+    "status": "pending",
+    "minimum_answers": 30,
+    "note": "LLM Judge 不得写成人工准确率"
+  }
+}
