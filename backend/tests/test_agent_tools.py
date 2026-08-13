@@ -265,3 +265,37 @@ def test_paper_specific_mode_keeps_global_baseline_then_queries_each_paper(
         "p3",
     }
     assert [item.paper_id for item in evidence] == ["p1", "p2", "p3"]
+
+
+def test_paper_specific_retrieval_does_not_depend_on_weak_rewrite(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "paperleaf_api.agent.tools.get_session_factory",
+        lambda: lambda: _EmptySessionContext(),
+    )
+
+    class PaperSpecificSearch(_PerPaperSearch):
+        async def _paper_titles(self, _session, request):
+            return {paper_id: f"Title {paper_id}" for paper_id in request.paper_ids}
+
+    search = PaperSpecificSearch()
+    search.config.rag_weak_query_rewrite_enabled = False
+    evidence = asyncio.run(
+        search(
+            LibrarySearchInput(
+                user_id="u1",
+                query="compare methods",
+                paper_ids=["p1", "p2", "p3"],
+                limit=3,
+                ensure_paper_coverage=True,
+                per_paper_query_mode="paper_specific",
+            )
+        )
+    )
+
+    assert {paper_id for _query, paper_id, _limit in search.paper_calls[1:]} == {
+        "p1",
+        "p2",
+        "p3",
+    }
+    assert [item.paper_id for item in evidence] == ["p1", "p2", "p3"]
+    assert search.rewrite_calls == []

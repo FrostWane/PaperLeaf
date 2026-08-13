@@ -1053,13 +1053,14 @@ class SQLLibrarySearch:
             initial = self._fuse_channels(channels, candidate_limit=candidate_limit)
             decision = assess_rewrite_need(request.query, initial)
             self.last_rewrite_reasons = decision.reasons
-            if (
-                bool(getattr(self.config, "rag_weak_query_rewrite_enabled", True))
-                and decision.required
-            ):
+            weak_rewrite = bool(
+                getattr(self.config, "rag_weak_query_rewrite_enabled", True)
+            )
+            paper_specific = per_paper and request.per_paper_query_mode == "paper_specific"
+            if paper_specific or (weak_rewrite and decision.required):
                 paper_queries: dict[str, str] = {}
                 paper_query_sets: dict[str, list[str]] = {}
-                if per_paper and request.per_paper_query_mode == "paper_specific":
+                if paper_specific:
                     paper_titles = await self._paper_titles(session, request)
                     deterministic_queries = self._deterministic_paper_queries(
                         request.query, paper_titles
@@ -1068,7 +1069,7 @@ class SQLLibrarySearch:
                         paper_id: [rewritten]
                         for paper_id, rewritten in deterministic_queries.items()
                     }
-                    if set(decision.reasons) & {
+                    if weak_rewrite and decision.required and set(decision.reasons) & {
                         "cross_language",
                         "low_lexical_coverage",
                         "no_candidates",
@@ -1121,7 +1122,7 @@ class SQLLibrarySearch:
                                     rows = []
                                 if rows:
                                     channels.append(("vector", rows, rewritten_query))
-                else:
+                elif weak_rewrite and decision.required:
                     rewrites: list[str] = []
                     deterministic_query = _deterministic_supplemental_query(request.query)
                     if deterministic_query:
