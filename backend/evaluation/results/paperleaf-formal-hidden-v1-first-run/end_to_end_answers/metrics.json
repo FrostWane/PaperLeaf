@@ -1,0 +1,54 @@
+{
+  "case_completion_rate": {
+    "numerator": 100,
+    "denominator": 100,
+    "value": 1.0
+  },
+  "citation_legality_rate": {
+    "numerator": 331,
+    "denominator": 347,
+    "value": 0.9538904899135446
+  },
+  "citation_physical_page_legality_rate": {
+    "numerator": 331,
+    "denominator": 347,
+    "value": 0.9538904899135446
+  },
+  "citation_gold_usefulness_rate": {
+    "numerator": 91,
+    "denominator": 347,
+    "value": 0.2622478386167147
+  },
+  "claim_citation_coverage": {
+    "numerator": 441,
+    "denominator": 441,
+    "value": 1.0
+  },
+  "claim_support_rate": {
+    "numerator": 419,
+    "denominator": 441,
+    "value": 0.9501133786848073
+  },
+  "unsupported_claim_rate": {
+    "numerator": 22,
+    "denominator": 441,
+    "value": 0.049886621315192746
+  },
+  "unanswerable_wrong_answer_rate": {
+    "numerator": 10,
+    "denominator": 10,
+    "value": 1.0
+  },
+  "answerable_over_refusal_rate": {
+    "numerator": 1,
+    "denominator": 90,
+    "value": 0.011111111111111112
+  },
+  "latency_ms": {
+    "p50": 51322,
+    "p95": 112432
+  },
+  "model_call_count": 805,
+  "tool_call_count": 239,
+  "human_review_status": "human_review_pending"
+}
