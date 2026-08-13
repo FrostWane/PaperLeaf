@@ -1,63 +1,104 @@
 # PaperLeaf
 
-PaperLeaf 是一个面向科研阅读的开源个人文献库。它把 PDF 保存、页级检索、带原文页码的问答、论文总结和结构图放在同一个工作台中，并通过受控 Agent 协调文库检索与学术数据源搜索。
+PaperLeaf 是一个可自托管的科研文献管理与阅读系统。它将 PDF 存储、层级文献库、页级检索、带原文引用的 AI 问答、全文翻译、论文概括和跨文献研究整合在同一个工作台中。
 
-> 当前版本处于早期开发阶段。建议先在本机或受控网络中部署，并在升级前备份数据库与对象存储。
+```text
+上传 PDF → 解析物理页 → 建立全文与向量索引 → 阅读与检索
+→ 单篇/跨文献问答 → 引用跳页 → 总结、翻译与研究结构图
+```
 
-[在线体验固定数据 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo) · [查看部署指南](docs/deployment.md)
+![PaperLeaf 论文阅读与问答工作台](docs/images/paperleaf-workspace.png)
 
-![PaperLeaf 三栏论文阅读与证据问答工作台](docs/images/paperleaf-workspace.png)
+## 核心能力
 
-## 功能
+### 文献管理
 
-- 上传、保存、查看、修改和删除 PDF 文献
-- 以 PDF 为中心的阅读工作台，支持 50%～200% 缩放、适合宽度、独立收起双侧栏和专注阅读
-- 后台逐页翻译已解析文本，当前页优先处理，并以“原始 PDF + 译文”双栏恢复阅读进度
-- Zotero 式父子集合树、多集合归属、递归筛选、最近阅读、待整理和批量归档
-- 自动识别标题、作者、年份、DOI 与出版物；本地缺失时仅用公开 DOI 查询 Crossref
-- 文献列表、元数据编辑、处理状态和用户范围内的全文检索
-- 按物理页解析与切块，回答附带可跳转的页码证据
-- 向量检索、关键词检索与 RRF 融合，不依赖一键式 RAG Chain
-- 混合候选按物理页去重并合并通道信号；弱匹配时明确提示证据边界，完全无证据时不伪装读过论文
-- DeepSeek 等聊天模型负责综合检索证据并组织中文回答，不把英文摘要或原始 Chunk 当作模型失败时的替代答案
-- 模型使用短引用别名，服务端再还原并核验真实 Chunk、论文和物理页；漏引段落不会进入最终消息
-- 单篇、集合与全库问答共用可持久化会话，支持新建、重命名、删除与跨页面恢复；跨文献历史每 15 条分页
-- 问答输入框按 Enter 发送、Shift + Enter 换行，并避免中文输入法选词时误发
-- 提交问题后由 Worker 在后台执行 LangGraph；关闭页面或 SSE 断线不会取消任务
-- 回答按完整事实段落完成引用校验后再保存为 SSE 增量，前端自适应逐字呈现；运行中的任务可主动取消
-- Agent 事件持久化并支持 `Last-Event-ID` 补发；人工确认后可以恢复同一个运行
-- 阅读器提问会携带服务端复核后的当前论文、物理页和选中文字；长会话按模型窗口保留最近原话并生成不可作为引用的结构化摘要
-- 可选长期记忆只保存用户明确表达的偏好、研究方向和固定背景；用户可在设置中查看、修改、固定、停用、删除或彻底清空
-- 科研任务按需加载版本化 Skill：常规问答、原文定位、跨论文比较、相关论文发现、主张核验、总结与研究脑图互不混用工具权限
-- 可选的有界 Specialist 子图会把 3～10 篇论文的复杂比较拆成最多三个隔离分支，经过确定性合并后再生成带页码引用的综合回答；默认关闭，普通问答不增加额外模型调用
-- 支持原生 Function Calling 的模型可在 Skill 白名单内选择强类型工具；多轮论文发现使用结构化 TaskFrame 继承数量、年份、来源和已展示候选，整个 Run 共享 Provider 权限与限次；参数、用户作用域、步骤、超时和写操作确认均由服务端 Harness 校验
-- 可选学术 MCP 只开放 OpenAlex、Semantic Scholar 公开元数据工具；相关论文发现未指定数据源时至少尝试一次 OpenAlex，其他问答仅在本地证据不足或用户明确要求时联网，外部结果不能冒充已读论文证据
-- 联网候选会过滤数据集、附件和其他非论文条目，按当前集合的标题与摘要重排，并在连续推荐时排除整库论文和此前实际展示的结果
-- 主/备用 OpenAI-compatible 服务统一经过超时、受控重试和按用途隔离的熔断器
-- Redis 为多 API 实例提供 Agent 提交限流与幂等判定；故障时退回本机限流，不承载业务真相
-- 管理员可查看 RAG 证据漏斗、召回通道、意图、失败分布，以及 Context、记忆容量、Skill、工具与 MCP 的聚合状态；页面不展示问题或记忆正文
-- 根据个人文献库的元数据与已索引正文推荐相关 arXiv 论文；恢复上次推荐，仅在点击“换一批”时生成新批次，并支持兴趣反馈、点击/导入漏斗和确认导入
-- 论文概览按研究问题、方法、实验、结果与局限生成结构化事实，并为每条事实保留页码证据
-- 论文概括与研究结构图由 Worker 后台生成；离开阅读页不会取消任务，返回后自动恢复进度
-- 研究结构图由模型生成 5～12 个语义节点，服务端校验节点引用、连通关系与无环结构后再渲染
-- 总结、结构图和逐页译文持久缓存；重新生成失败不会覆盖上一次成功产物，论文重新索引后旧产物会明确过期
-- 概括事实必须通过中文内容与页码引用校验；模型失败时只显示中文状态，不把英文原文 Chunk 冒充总结
-- 管理员创建、停用用户并查看脱敏的模型运行状态；默认不读取用户文献内容
-- 账户菜单提供真实昵称、邮箱、个人设置和退出登录；普通用户不会看到管理入口
-- 应用内导航保留已验证的账户状态，页面切换时不会闪回未登录侧栏
-- 个人设置持久保存小/标准/大字号、PDF 默认缩放、阅读器侧栏、翻译语言与联网学术搜索偏好
-- 未配置模型时仍可使用文献管理和 PDF 阅读功能
+- 上传、保存、查看、编辑、归档和删除 PDF。
+- 使用父子集合组织文献，一篇论文可以归入多个集合。
+- 自动识别标题、作者、年份、DOI 和出版物，缺失出版物时可通过 Crossref 补全公开元数据。
+- 支持批量归类、批量归档以及重新识别和索引。
+- 使用 MinIO 保存 PDF 原件，PostgreSQL 保存元数据、页文本、任务和会话。
 
-当前 `0.8.x` 的[公开 Demo](https://paperleaf-demo.chenlin1318.chatgpt.site/demo)使用固定文献和确定性 AI 产物，便于在不上传文件、不配置模型的情况下检查工作流。`/demo` 会显式绑定固定数据源，并可继续进入带父子集合、出版物元数据和批量整理能力的演示文献库；跨文献提问会展示与真实 SSE 契约一致的 Agent 运行轨迹和回答核验状态。Docker Compose 构建固定使用 `real` 数据模式并连接 FastAPI。
+### 阅读工作台
+
+- PDF、文献资料和论文助手三栏布局，两侧面板可以单独收起。
+- 支持切页、50%～200% 缩放、适合宽度和专注阅读。
+- 选中 PDF 原文后可以直接提问，服务端会重新核验选文所在论文和物理页。
+- 全文翻译按页在 Worker 中执行，离开页面后任务继续运行，返回后恢复进度。
+
+### RAG 与 AI 问答
+
+- 按物理页解析 PDF，Chunk 不跨页，引用可以跳回对应 PDF 页。
+- 结合 PostgreSQL 全文检索、pgvector 向量检索和 RRF 融合召回。
+- Embedding 不可用或索引契约不匹配时自动降级为关键词检索。
+- 单篇、集合和全库问答共用持久化会话，页面关闭或 SSE 断线不会取消后台任务。
+- 服务端校验引用的论文、Chunk 和物理页，并对事实主张执行分批证据支持核验。
+- 回答支持 Markdown、逐步流式展示和引用来源列表。
+
+### Agent Harness
+
+- 使用 LangGraph 编排持久化 Agent Run、人工确认、取消、恢复和后台执行。
+- Context Engine 管理当前论文、页码、选文、最近对话、摘要和 Token 预算。
+- Skill Registry 按需加载论文问答、原文定位、跨文献比较、主张核验、论文发现、总结和研究图等能力。
+- Function Calling 只能调用经过类型、权限、范围、超时和步骤预算校验的工具。
+- 可选的 Specialist 子图会把 3～10 篇论文的复杂比较拆成最多三个隔离分支，再确定性合并证据。
+- 跨论文冲突不会被覆盖；系统保留 `support / contradict / uncertain` 证据并按论文和实验条件组织回答。
+- PostgreSQL Checkpoint 与 Job 租约支持 Worker 故障接管；已经完成的 Specialist 分支不会重复执行。
+
+### 学术搜索与可观测性
+
+- 可通过受控 MCP 服务检索 OpenAlex 和 Semantic Scholar 公开元数据。
+- 外部元数据不会冒充已读取的论文正文；需要全文问答时仍须确认导入并完成索引。
+- 管理员可以查看 RAG 召回通道、意图、失败率、耗时、引用与主张支持情况。
+- Harness 页面聚合 Context、Memory、Skill、Tool、MCP、分支耗时、Token、证据数、冲突数和回退原因。
+- Prometheus 与 Grafana 提供容量和运行指标，不记录用户问题、论文正文或隐藏推理。
+
+### 用户与权限
+
+- 首次启动创建管理员，管理员再创建普通用户和临时密码。
+- 普通用户只能访问自己的文献、集合、会话、Agent Run 和产物。
+- 管理员负责用户、配额和任务管理，产品界面默认不提供读取用户 PDF 与聊天正文的入口。
+- 用户可以保存字号、PDF 缩放、侧栏、翻译语言、联网搜索和长期记忆偏好。
+
+## 技术架构
+
+| 层级 | 主要技术 |
+|---|---|
+| Web | Next.js App Router、React、TypeScript、Tailwind CSS、TanStack Query、Zustand |
+| PDF 与交互 | PDF.js、react-pdf、Radix UI、Mermaid |
+| API | FastAPI、Pydantic、SQLAlchemy Async、Alembic |
+| Agent | LangGraph、Function Calling、SSE、PostgreSQL Checkpointer |
+| RAG | PyMuPDF、PostgreSQL 全文检索、pgvector、RRF |
+| 异步任务 | PostgreSQL Job Queue、Python Worker、租约与 claim token fencing |
+| 存储 | PostgreSQL、MinIO、Redis |
+| 观测 | Prometheus、Grafana、应用内 RAG/Harness 聚合指标 |
+| 测试 | Pytest、Vitest、Testing Library、Playwright、axe-core、Lighthouse CI |
+
+```mermaid
+flowchart LR
+    B["浏览器"] -->|"REST / SSE"| W["Web"]
+    W --> A["FastAPI"]
+    A --> P[("PostgreSQL + pgvector")]
+    A --> M[("MinIO")]
+    A --> R[("Redis")]
+    Q["Python Worker"] --> P
+    Q --> M
+    Q --> L["OpenAI-compatible 模型"]
+    Q --> O["Ollama Embedding"]
+    Q --> X["学术搜索 MCP"]
+```
 
 ## 快速开始
 
 ### 环境要求
 
-- Docker Engine 24+ 与 Docker Compose v2
-- 至少 4 GB 可用内存；处理大 PDF 或运行本地模型时需要更多资源
+- Git
+- Docker Engine 24+ 或 Docker Desktop
+- Docker Compose v2
+- 至少 4 GB 可用内存
+- 可选：OpenAI-compatible 聊天模型、Ollama 和学术数据库 API Key
 
-### 启动
+### 1. 获取代码
 
 ```bash
 git clone https://github.com/FrostWane/PaperLeaf.git
@@ -65,117 +106,157 @@ cd PaperLeaf
 cp .env.example .env
 ```
 
-Windows PowerShell 可使用：
+Windows PowerShell：
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
+### 2. 设置基础配置
+
 打开 `.env`，至少替换以下值：
 
-- `POSTGRES_PASSWORD`
-- `MINIO_ROOT_PASSWORD`
-- `PAPERLEAF_SESSION_SECRET`
-- `PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL`
-- `PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD`
+```dotenv
+POSTGRES_PASSWORD=使用URL安全字符的数据库密码
+MINIO_ROOT_PASSWORD=对象存储密码
+PAPERLEAF_SESSION_SECRET=至少64位随机字符串
+PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL=你的管理员邮箱
+PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD=管理员初始密码
+GRAFANA_ADMIN_PASSWORD=Grafana管理员密码
+```
 
-然后启动：
+本地 HTTP 使用：
+
+```dotenv
+PAPERLEAF_BIND_ADDRESS=127.0.0.1
+PAPERLEAF_SECURE_COOKIES=false
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+```
+
+公网部署必须配置 HTTPS，并将 `PAPERLEAF_SECURE_COOKIES` 改为 `true`。
+
+### 3. 启动服务
 
 ```bash
 docker compose up -d --build
 docker compose ps
 ```
 
-访问：
+所有核心服务应处于 `running` 或 `healthy`。首次启动会自动：
 
-- Web：<http://localhost:3000>
-- API 健康检查：<http://localhost:8000/health>
-- MinIO 控制台：<http://localhost:9001>
-- Redis：仅在 Compose 私有网络中使用，无宿主机端口
-- 学术 MCP：仅在 Compose 私有网络中使用，无宿主机端口
-- Prometheus：<http://localhost:9090>
-- Grafana：<http://localhost:3001>
+1. 创建 PostgreSQL 数据结构；
+2. 创建私有 MinIO Bucket；
+3. 创建初始管理员；
+4. 启动 API、Worker、Web、Redis 和观测服务。
 
-首次启动会自动执行数据库迁移、创建私有 PDF Bucket，并根据环境变量创建管理员。查看日志：
+访问地址：
 
-```bash
-docker compose logs -f api worker web
-```
-
-## 配置 AI
-
-PaperLeaf 使用 OpenAI-compatible 接口，既可以连接云端模型，也可以连接提供兼容接口的本地服务。核心变量如下：
-
-| 变量 | 说明 |
+| 服务 | 地址 |
 |---|---|
-| `PAPERLEAF_OPENAI_API_KEY` | 服务端 API Key；不要以 `NEXT_PUBLIC_` 开头 |
-| `PAPERLEAF_OPENAI_BASE_URL` | 兼容接口根地址 |
-| `PAPERLEAF_CHAT_MODEL` | 问答与总结模型 |
-| `PAPERLEAF_EMBEDDING_ENABLED` | 当前服务是否提供 Embeddings；聊天服务不支持时必须关闭 |
-| `PAPERLEAF_EMBEDDING_PROVIDER` | 向量空间来源：`primary`、`fallback` 或 `auto` |
-| `PAPERLEAF_EMBEDDING_MODEL` | 向量模型 |
-| `PAPERLEAF_EMBEDDING_DIMENSIONS` | 向量维度，必须与模型输出一致 |
-| `PAPERLEAF_EMBEDDING_INDEX_REVISION` | 主动变更切分或向量契约时递增的索引修订号 |
-| `PAPERLEAF_EMBEDDING_BATCH_SIZE` | 文档向量化单批 Chunk 数，默认 8；本地模型不应一次提交整篇论文 |
-| `PAPERLEAF_EMBEDDING_TIMEOUT_SECONDS` | 单个向量批次超时，默认 90 秒，适配本地模型冷启动与并发抖动 |
-| `PAPERLEAF_EMBEDDING_BATCH_ATTEMPTS` | 单个向量批次的受控尝试次数，默认 2；整篇校验通过后才写入 |
-| `PAPERLEAF_VISION_MODEL` | 可选；低文本页 OCR 使用的视觉模型 |
-| `PAPERLEAF_FALLBACK_OPENAI_API_KEY` | 可选备用服务 Key；不配置则只使用主服务 |
-| `PAPERLEAF_FALLBACK_OPENAI_BASE_URL` | 备用 OpenAI-compatible 根地址 |
-| `PAPERLEAF_FALLBACK_CHAT_MODEL` | 备用问答与总结模型 |
-| `PAPERLEAF_FALLBACK_EMBEDDING_ENABLED` | 备用服务是否提供 Embeddings |
-| `PAPERLEAF_FALLBACK_EMBEDDING_MODEL` | 备用向量模型；输出维度必须与主模型一致 |
-| `PAPERLEAF_MODEL_TIMEOUT_SECONDS` | 单次模型调用超时 |
-| `PAPERLEAF_AGENT_ANSWER_TIMEOUT_SECONDS` | 最终回答首次生成超时，默认 90 秒 |
-| `PAPERLEAF_AGENT_ANSWER_RETRY_TIMEOUT_SECONDS` | 仅超时时使用的同证据紧凑重试超时，默认 60 秒 |
-| `PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS` | 单页全文翻译超时，默认 90 秒 |
-| `PAPERLEAF_ARTIFACT_TIMEOUT_SECONDS` | 后台全文概括首次生成超时，默认 120 秒 |
-| `PAPERLEAF_ARTIFACT_RETRY_TIMEOUT_SECONDS` | 后台全文概括精简证据重试超时，默认 90 秒 |
-| `PAPERLEAF_STRUCTURE_TIMEOUT_SECONDS` | 研究脑图首次生成超时，默认 180 秒 |
-| `PAPERLEAF_STRUCTURE_RETRY_TIMEOUT_SECONDS` | 研究脑图精简证据重试超时，默认 120 秒 |
-| `PAPERLEAF_MODEL_ATTEMPTS_PER_PROVIDER` | 每个服务最多尝试次数，范围 1~3 |
-| `PAPERLEAF_MODEL_CIRCUIT_FAILURE_THRESHOLD` | 连续失败多少次后打开熔断器 |
-| `PAPERLEAF_MODEL_CIRCUIT_COOLDOWN_SECONDS` | 熔断后的冷却时间 |
-| `PAPERLEAF_SPECIALIST_AGENTS_ENABLED` | 是否为复杂跨论文比较启用有界 Specialist 子图；默认关闭 |
-| `PAPERLEAF_SPECIALIST_AGENT_TIMEOUT_SECONDS` | 单个 Specialist 的模型调用上限，默认 45 秒 |
-| `PAPERLEAF_SPECIALIST_TOTAL_TIMEOUT_SECONDS` | 整个 Specialist 研究子图的总上限，默认 150 秒 |
+| PaperLeaf | <http://localhost:3000> |
+| API 健康检查 | <http://localhost:8000/health> |
+| MinIO 控制台 | <http://localhost:9001> |
+| Prometheus | <http://localhost:9090> |
+| Grafana | <http://localhost:3001> |
 
-修改嵌入模型或维度后，需要对既有文献重新建立索引。未配置 API Key 时，生产环境不会把文献发送给任何模型：系统保留全文检索、引用校验和提取式产物，但不会生成向量、调用模型回答或执行视觉 OCR。
+### 4. 首次登录
 
-使用 DeepSeek 做论文问答时，可将 `PAPERLEAF_OPENAI_BASE_URL` 设为
-`https://api.deepseek.com`、将 `PAPERLEAF_CHAT_MODEL` 设为当前可用的 DeepSeek
-聊天模型，并设置 `PAPERLEAF_EMBEDDING_ENABLED=false`。聊天生成与向量检索是两项独立
-能力：关闭向量调用后仍可通过 PostgreSQL 全文检索获得证据并交给 DeepSeek 回答；如需
-语义向量检索，应另外配置支持 Embeddings 的服务并重建既有文献索引。
+使用 `.env` 中的 `PAPERLEAF_BOOTSTRAP_ADMIN_EMAIL` 和 `PAPERLEAF_BOOTSTRAP_ADMIN_PASSWORD` 登录。
 
-例如继续使用 DeepSeek 回答，同时把一个支持 OpenAI-compatible Embeddings 的服务配置为
-备用服务：
+管理员可以直接使用系统，也可以进入“管理 → 用户与权限”创建普通用户。普通用户使用临时密码首次登录时需要设置新密码。
+
+## 使用教程
+
+### 建立文献库
+
+1. 进入“文献库”，创建需要的父集合和子集合。
+2. 点击“上传 PDF”，选择一个或多个目标集合。
+3. 等待论文状态变为“索引就绪”。
+4. 如果标题、作者、年份或出版物识别不完整，打开“文献设置”进行修改或重新处理。
+5. 已有多篇论文需要重新向量化时，在文献库勾选论文，执行“重新识别与索引”。
+
+重新索引会复用 MinIO 中的原始 PDF，不需要再次上传。重新解析后，旧的概括、结构图和向量产物会被标记为过期。
+
+### 阅读与选文提问
+
+1. 点击论文标题进入阅读工作台。
+2. 使用顶部工具栏切页、缩放或进入专注阅读。
+3. 在 PDF 文字层拖选一段原文。
+4. 右侧输入问题，例如“这段为什么这样处理？”或“这里的实验设置有什么作用？”。
+5. 发送后选文会作为本次消息附件提交；回答中的引用可以跳回相应物理页。
+
+扫描型 PDF 需要配置视觉模型才能补充 OCR。未配置 OCR 时仍可保存和阅读 PDF，但文本检索和选文能力可能不完整。
+
+### 单篇问答、概括与结构图
+
+在论文助手中可以：
+
+- 新建、重命名和删除会话；
+- 询问论文的问题、方法、实验、结果和局限；
+- 生成带引用的中文论文概括；
+- 生成“研究问题 → 方法 → 实验 → 结果 → 局限”结构图；
+- 点击任意引用回到 PDF 物理页。
+
+Agent Run 由 Worker 在后台执行。切换页面不会终止任务，再次进入时会恢复状态和已经生成的消息。
+
+### 跨文献问答
+
+1. 进入“跨文献提问”。
+2. 选择“全部文献”或某个集合；父集合会递归包含子集合文献。
+3. 提问，例如“比较这些论文的方法、实验设置和局限，并指出结论冲突”。
+4. 系统会冻结本次论文范围，检索各论文证据并生成统一回答。
+
+当启用 Specialist 子图且范围包含 3～10 篇论文时，复杂比较会拆分为最多三个独立分支。普通单篇问题和简单检索仍走开销更低的标准链路。
+
+### 全文翻译
+
+1. 在阅读器顶部点击“翻译全文”。
+2. 确认目标语言和页数。
+3. 阅读区切换为“原始 PDF + 译文”双栏。
+4. 当前页优先翻译，其余页面由 Worker 继续处理。
+
+翻译基于已经解析的页文本，不会生成或修改原始 PDF。公式、引用编号和专有名词会尽量保留。
+
+### 发现与导入论文
+
+1. 在个人设置中开启“允许联网学术搜索”。
+2. 在“发现”查看基于当前文献库生成的相关论文。
+3. 点击“换一批”获取下一批候选，并使用感兴趣/不感兴趣反馈调整后续排序。
+4. 导入前确认论文信息；PaperLeaf 只会在确认后创建下载与解析任务。
+
+也可以在问答中要求检索 OpenAlex、Semantic Scholar 或 arXiv。外部结果只提供公开元数据；未导入 PDF 前不能作为论文正文证据。
+
+## 配置 AI 服务
+
+PaperLeaf 将聊天生成与向量检索视为两项独立能力。只配置聊天模型时，系统仍可使用 PostgreSQL 全文检索完成 RAG；配置 Embedding 后才会增加语义向量召回。
+
+### DeepSeek 聊天模型
 
 ```dotenv
-# 主服务：DeepSeek 只负责聊天
-PAPERLEAF_OPENAI_API_KEY=your-deepseek-key
+PAPERLEAF_OPENAI_API_KEY=你的DeepSeekKey
 PAPERLEAF_OPENAI_BASE_URL=https://api.deepseek.com
-PAPERLEAF_CHAT_MODEL=your-deepseek-chat-model
-PAPERLEAF_EMBEDDING_ENABLED=false
+PAPERLEAF_CHAT_MODEL=填写当前可用的聊天模型
 
-# 第二服务：提供向量；如不承担聊天降级，将聊天模型明确留空
-PAPERLEAF_FALLBACK_OPENAI_API_KEY=your-embedding-service-key
-PAPERLEAF_FALLBACK_OPENAI_BASE_URL=https://your-compatible-service.example/v1
-PAPERLEAF_FALLBACK_CHAT_MODEL=
-PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
-PAPERLEAF_FALLBACK_EMBEDDING_MODEL=your-embedding-model
-PAPERLEAF_EMBEDDING_PROVIDER=fallback
-PAPERLEAF_EMBEDDING_DIMENSIONS=your-model-output-dimensions
-PAPERLEAF_EMBEDDING_INDEX_REVISION=1
+# DeepSeek 聊天接口不承担向量化
+PAPERLEAF_EMBEDDING_ENABLED=false
 ```
 
-`PAPERLEAF_EMBEDDING_DIMENSIONS` 必须等于所选模型的真实输出维度，不能留空；
-`PAPERLEAF_EMBEDDING_PROVIDER` 应明确指向实际向量服务。保存配置后只需重建 API 和 Worker，随后可在文献库勾选
-多篇论文并执行“重新识别与索引”，也可在单篇“文献设置”中重新处理。向量可用后，管理页的“AI 能力
-状态”会显示向量检索可用，新问答的 RAG 轨迹会记录实际使用的召回通道。
-本地模型建议保留默认批次 8，避免把整篇论文作为一次长请求提交。
+修改后重建：
 
-Docker Desktop 连接宿主机 Ollama 的示例：
+```bash
+docker compose up -d --build api worker web
+```
+
+### Ollama 本地向量模型
+
+先在宿主机安装并启动 Ollama：
+
+```bash
+ollama pull qwen3-embedding:0.6b
+ollama serve
+```
+
+Docker Desktop 通过 `host.docker.internal` 访问宿主机 Ollama：
 
 ```dotenv
 PAPERLEAF_FALLBACK_OPENAI_API_KEY=ollama
@@ -183,54 +264,137 @@ PAPERLEAF_FALLBACK_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
 PAPERLEAF_FALLBACK_CHAT_MODEL=
 PAPERLEAF_FALLBACK_EMBEDDING_ENABLED=true
 PAPERLEAF_FALLBACK_EMBEDDING_MODEL=qwen3-embedding:0.6b
+
 PAPERLEAF_EMBEDDING_PROVIDER=fallback
 PAPERLEAF_EMBEDDING_DIMENSIONS=1024
 PAPERLEAF_EMBEDDING_INDEX_REVISION=1
 PAPERLEAF_EMBEDDING_BATCH_SIZE=8
 ```
 
-完整环境变量和生产部署注意事项参见[部署指南](docs/deployment.md)。
+然后执行：
 
-## 基本使用
+```bash
+docker compose up -d --build api worker
+```
 
-1. 管理员登录后在“管理”页面创建普通用户；用户首次登录先修改临时密码。
-2. 在左下角账户菜单进入“个人设置”，保存昵称、字号、PDF 缩放和 AI/翻译偏好；也可在这里退出登录。
-3. 在“文献库”上传 PDF，等待状态变为“索引就绪”。
-4. 创建父集合或子集合，把一篇论文加入一个或多个集合；点击父集合会递归显示全部后代文献，也可以批量归类、归档或重新识别与索引。
-5. 打开文献，通过集中工具栏切页、缩放、适合宽度或收起两侧进入专注阅读；这些布局和缩放偏好会保存到账号。
-6. 点击“翻译全文”核对页数与目标语言。Worker 会优先翻译当前页，离开页面后继续逐页处理；重新进入可恢复进度与已有译文。
-7. 在阅读器右侧新建或恢复对话并提问；离开页面后任务仍会继续，返回后可以补发进度与回答，点击引用可跳转到对应物理页。
-8. 在论文助手中切换“概览”或“结构”，提交后台任务；可离开页面，返回后会自动恢复带证据页的中文总结与 Mermaid strict mode 结构图。
-9. 在左侧“文献设置”中修改元数据；解析失败或部分可用时可重新处理。文献库支持批量重新识别与索引，直接复用原始 PDF，不会重复导入。
-10. 在“全库问答”中选择某个集合或全部文献；会话会保存当次服务端解析出的论文范围快照。长对话的原始消息不会删除，压缩摘要只用于延续上下文，不能充当论文证据。
-11. 先在设置中开启“允许联网学术搜索”，再到“发现”查看基于个人文献库生成的 arXiv 推荐，或在问答中让 Agent 检索 OpenAlex、Semantic Scholar 与 arXiv。再次进入“发现”会恢复上次批次，点击“换一批”才会生成新推荐；PaperLeaf 只会在确认后创建导入任务。
+进入文献库，对已有论文执行“重新识别与索引”。向量模型、维度或索引修订发生变化时，旧索引会变为过期状态，在重新索引完成前自动使用关键词检索。
 
-扫描版 PDF 需要配置视觉模型才能补充 OCR。未配置 OCR 时，原始 PDF 仍可保存和阅读，但检索覆盖可能不完整。
+### Context、Memory、Skill 与多 Agent
 
-## 数据与隐私
+这些功能默认关闭，可以按阶段启用：
 
-- PDF 原件保存在私有 MinIO Bucket 中，不公开对象地址。
-- 数据库保存文献元数据、页文本、检索块、向量、后台任务、问答会话、公开 Agent 事件、总结/结构图产物和 LangGraph Checkpoint。
-- 模型 Key 只由 API/Worker 读取，不下发浏览器。
-- 管理员负责账号和任务管理，默认没有读取用户 PDF 与提问内容的产品入口。
-- 启用外部模型会把完成当前请求所需的文本证据或 OCR 页面图像发送给相应提供方，请结合其数据政策自行判断。
-- 全文翻译只读取数据库中已经解析的单页文本，不修改原始 PDF，也不向模型开放工具、URL 或文件系统；目标语言固定在服务端白名单内。
-- 出版物无法从 PDF 本地识别且存在 DOI 时，Worker 只把该公开 DOI 发送给 Crossref，不上传 PDF、标题、作者或正文。
-- PaperLeaf 不用于绕过付费墙，只导入用户上传或允许来源中的开放文件。
+```dotenv
+PAPERLEAF_CONTEXT_ENGINE_ENABLED=true
+PAPERLEAF_MEMORY_ENABLED=true
+PAPERLEAF_SKILLS_ENABLED=true
+PAPERLEAF_FUNCTION_TOOLS_ENABLED=true
+PAPERLEAF_MULTI_AGENT_ENABLED=true
+PAPERLEAF_SPECIALIST_AGENTS_ENABLED=true
+```
 
-部署者应配置 HTTPS、强密码、备份、最小化网络暴露和符合所在地区要求的数据保留策略。详细边界参见[安全说明](docs/security.md)。
+- Context Engine 负责多轮指代、当前页、选文和 Token 预算。
+- Memory 只保存用户可查看和删除的研究偏好与固定背景。
+- Skill 与 Function Tools 提供受控工具选择。
+- `MULTI_AGENT` 启用确定性并行 Map-Reduce 检索。
+- `SPECIALIST_AGENTS` 对符合条件的复杂跨文献任务优先使用隔离 Specialist 子图。
 
-## 当前限制
+修改后重建 API 和 Worker。管理员可在“Agent Harness”查看实际采用的编排版本、分支耗时和回退原因。
 
-- V1 的论文发现页只导入 arXiv 开放 PDF；Agent 另可读取 OpenAlex 与 Semantic Scholar 的公开元数据，但不支持任意网页抓取。
-- 个性化发现默认关闭；开启后只向 arXiv 发送从文献派生的少量主题词，不上传 PDF 文件或完整页级文本。
-- 管理员的“推荐效果”只展示聚合曝光、点击、兴趣反馈和导入指标；兴趣命中率以明确反馈为分母，未反馈不会被当作不感兴趣。
-- 暂不支持 Zotero 同步、RIS/BibTeX、团队协作批注和原生移动端。
-- OCR、问答和向量质量取决于所配置模型。
-- 引用校验可以降低伪造引用风险，但不能替代阅读原文和科研判断。
-- 大型 PDF、复杂公式、双栏排版和扫描质量会影响解析效果。
+### OpenAlex 与 Semantic Scholar
 
-## 本地开发与测试
+```dotenv
+PAPERLEAF_MCP_ENABLED=true
+OPENALEX_API_KEY=你的OpenAlexKey
+SEMANTIC_SCHOLAR_API_KEY=可选
+```
+
+```bash
+docker compose up -d --build academic-search-mcp api worker
+```
+
+然后进入“管理 → Agent Harness”，检测学术搜索连接并刷新工具列表。普通用户不能修改 MCP 地址，服务端只连接配置的白名单服务。
+
+## 日常运维
+
+### 查看状态和日志
+
+```bash
+docker compose ps
+docker compose logs -f api worker web
+docker compose logs --tail 200 worker
+```
+
+### 修改配置后重建
+
+```bash
+docker compose up -d --build api worker web
+```
+
+### 更新代码
+
+升级前先备份 PostgreSQL 与 MinIO 数据，然后执行：
+
+```bash
+git pull --ff-only
+docker compose up -d --build
+docker compose ps
+```
+
+数据库迁移由 `migrate` 服务自动执行。不要删除 `postgres-data` 和 `minio-data` 命名卷。
+
+### 停止服务
+
+```bash
+docker compose stop
+```
+
+`docker compose down` 会删除容器和网络，但默认保留命名卷。除非确认不再需要全部数据，否则不要使用 `down -v`。
+
+## 常见问题
+
+### 登录时显示 Failed to fetch
+
+依次检查：
+
+```bash
+docker compose ps
+docker compose logs --tail 100 api web
+```
+
+确认 API 为 `healthy`，并检查 `.env` 中：
+
+```dotenv
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+PAPERLEAF_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
+
+修改 `NEXT_PUBLIC_*` 后必须重新构建 Web。
+
+### 论文一直停留在处理中
+
+```bash
+docker compose logs --tail 200 worker
+```
+
+在管理页面查看后台任务的失败原因。网络、模型或 OCR 暂时不可用时，可以重试任务；解析数据异常时，对论文执行重新处理。
+
+### 已安装 Ollama，但没有向量召回
+
+确认以下条件同时满足：
+
+1. Ollama 正在运行；
+2. 容器能访问 `host.docker.internal:11434`；
+3. Embedding Provider、模型和维度配置一致；
+4. 修改配置后已经重建 API 与 Worker；
+5. 既有论文已经重新索引。
+
+管理员的“AI 能力状态”和“向量索引契约”会显示当前模型、可用索引和关键词降级次数。
+
+### 问答完成较慢
+
+全文概括、结构图、跨论文比较和逐条证据核验可能产生多次模型调用。可以在管理页面查看回答、分支、合并和最终核验耗时；不需要多 Agent 时关闭 `PAPERLEAF_SPECIALIST_AGENTS_ENABLED` 可以降低延迟和 Token 使用。
+
+## 开发与测试
 
 前端：
 
@@ -258,48 +422,27 @@ ruff check paperleaf_api tests
 pytest
 ```
 
-仓库另带自建冻结集与基于 QASPER 人工问题的“公开校准集 + 私有答案 holdout”，以及无需
-模型密钥即可复现的哈希向量、BM25、RRF、页去重和拒答基线；可选依赖还可运行本地 ONNX
-dense 与 Cross-Encoder 诊断。PDF 不随仓库重新分发。数据来源、许可、预注册锁、真实
-分子/分母、未泛化的负向结果与指标边界见
-[RAG 离线评测说明](backend/evaluation/README.md)。
+仓库包含 RAG 冻结评测集、Context Harness 评测、多 Agent v1/v2/v3 对照协议、Worker 故障恢复测试、真实 PostgreSQL 集成测试以及前端键盘、移动端和无障碍测试。外部模型评测与人工盲评不会放进普通 CI，避免网络和模型费用波动造成不稳定构建。
 
-容器配置：
+## 数据与安全
 
-```bash
-docker compose --env-file .env.example config --quiet
-# 启动服务并在 .env 中配置管理员后，可执行临时数据闭环
-python scripts/smoke_compose.py
-```
+- PDF 原件保存在私有 MinIO Bucket，不向客户端暴露对象地址。
+- 用户、文献、页文本、会话、任务、Agent 事件和 Checkpoint 的事实源是 PostgreSQL。
+- Redis 只保存允许丢失的缓存、限流和幂等状态。
+- 模型 Key 仅由 API、Worker 或学术 MCP 服务读取，不下发浏览器。
+- 外部模型只接收完成当前请求所需的证据文本或 OCR 页面，请根据服务商政策决定是否启用。
+- PaperLeaf 不提供付费墙绕过和任意网页下载。
+- AI 回答和引用校验不能替代原文阅读与科研判断。
 
-测试策略、场景与质量门禁参见[测试指南](docs/testing.md)。
+生产部署请配置 HTTPS、Secure Cookie、强密码、数据备份、最小网络暴露和适合所在地区的数据保留策略。
 
-## 架构
-
-```mermaid
-flowchart LR
-    U["浏览器"] -->|"REST / SSE"| W["Next.js Web"]
-    W --> A["FastAPI"]
-    A --> P[("PostgreSQL + pgvector")]
-    A --> M[("MinIO 私有 PDF")]
-    A --> C[("Redis 短期运行态")]
-    A --> G["LangGraph Agent"]
-    Q["Python Worker"] --> P
-    Q --> M
-    Q --> L["OpenAI-compatible 模型"]
-    G --> R["自研页级 RAG"]
-    R --> P
-```
-
-进一步了解数据流、权限边界和 Agent 设计，请阅读[架构说明](docs/architecture.md)。
-
-## 文档
+## 项目文档
 
 - [架构说明](docs/architecture.md)
 - [部署指南](docs/deployment.md)
 - [测试指南](docs/testing.md)
-- [容量与可观测性里程碑](docs/scaling.md)
-- [RAG 可观测性与指标口径](docs/observability.md)
+- [容量与扩展](docs/scaling.md)
+- [RAG 可观测性](docs/observability.md)
 - [RAG 离线评测](backend/evaluation/README.md)
 - [安全说明](docs/security.md)
 - [贡献指南](docs/contributing.md)
@@ -307,8 +450,8 @@ flowchart LR
 
 ## 参与贡献
 
-欢迎提交可复现的问题、文档修正、测试和功能改进。提交代码前请先阅读[贡献指南](docs/contributing.md)，并确保前后端测试通过。
+提交代码前请阅读[贡献指南](docs/contributing.md)，并运行与修改范围对应的前后端测试。问题反馈应包含复现步骤、期望行为、实际行为、日志中的公开错误码和运行环境；不要提交 PDF 正文、API Key 或用户数据。
 
 ## 许可证
 
-PaperLeaf 基于 [Apache License 2.0](LICENSE) 发布。依赖项和字体遵循各自许可证；仓库内自托管的 Geist 字体保留其 [SIL Open Font License 1.1](public/fonts/LICENSE-Geist.txt)。
+PaperLeaf 基于 [Apache License 2.0](LICENSE) 发布。依赖项和字体遵循各自许可证；仓库内 Geist 字体保留 [SIL Open Font License 1.1](public/fonts/LICENSE-Geist.txt)。
