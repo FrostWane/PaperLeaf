@@ -51,6 +51,7 @@ def test_specialist_uses_fresh_context_and_maps_aliases_to_real_chunks() -> None
                 "claims": [
                     {
                         "dimension": "核心方法",
+                        "claim_key": "稀疏测量校准",
                         "claim": "  论文使用稀疏测量校准。 ",
                         "evidence_aliases": ["E1"],
                         "stance": "support",
@@ -69,11 +70,14 @@ def test_specialist_uses_fresh_context_and_maps_aliases_to_real_chunks() -> None
         assert "主会话" not in captured["messages"][1]["content"]
         assert captured["max_output_tokens"] == analysis.usage.output_reserve
         assert analysis.claims[0].chunk_ids == ("private-chunk-id",)
+        assert analysis.claims[0].paper_ids == ("p1",)
+        assert analysis.claims[0].claim_key == "稀疏测量校准"
         assert analysis.claims[0].claim == "论文使用稀疏测量校准。"
         assert analysis.finding.chunk_ids == ("private-chunk-id",)
         assert analysis.finding.stance == "support"
         assert analysis.finding.confidence == pytest.approx(0.92)
         assert analysis.usage.input_tokens + analysis.usage.output_reserve <= 2048
+        assert analysis.usage.output_tokens > 0
 
     asyncio.run(scenario())
 
@@ -163,4 +167,3 @@ def test_prompt_selection_is_deterministic_and_drops_foreign_scope() -> None:
     assert list(first.evidence_by_alias) == ["E1", "E2"]
     assert [item.chunk_id for item in first.evidence_by_alias.values()] == ["c1", "c2"]
     assert "越权证据" not in first.messages[1]["content"]
-

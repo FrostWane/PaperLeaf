@@ -709,6 +709,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .harness-stat-list dd { margin: 0; color: var(--ink); font-family: var(--font-mono); font-size: var(--ui-support-font); text-align: right; }
 .harness-stat-list + .rag-empty { margin-top: 12px; line-height: 1.6; }
 .harness-stat-list.compact { margin-top: 12px; border-top: 1px solid var(--border); }
+.admin-inline-details { margin-top: 8px; border-top: 1px solid var(--border); }
+.admin-inline-details summary { min-height: 44px; display: flex; align-items: center; color: var(--blue-ink); font-size: var(--ui-support-font); cursor: pointer; }
+.admin-inline-details summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
 .mcp-server-row { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 17px; border-bottom: 1px solid var(--border); }
 .mcp-server-row:last-child { border-bottom: 0; }
 .mcp-server-row > span strong, .mcp-server-row > span small { display: block; }

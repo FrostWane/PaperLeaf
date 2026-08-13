@@ -486,6 +486,18 @@ export interface AdminHarnessMetrics {
     findingCount: number;
     dedupCount: number;
     conflictCount: number;
+    paperCoverageCount: number;
+    branchEvidenceCount: number;
+    branchClaimCount: number;
+    estimatedBranchInputTokens: number;
+    estimatedBranchOutputTokens: number;
+    providerBranchInputTokens?: number;
+    providerBranchOutputTokens?: number;
+    providerTokenSamples: number;
+    branchErrorCategories: Record<string, number>;
+    validationP50Ms?: number;
+    validationP95Ms?: number;
+    versions: Record<string, number>;
   };
   privacy: { contentCollected: boolean; identifiersCollected: boolean };
 }

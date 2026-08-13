@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 
 import pytest
@@ -163,6 +164,21 @@ class CompareSkillDefinition:
 class CompareSkillRegistry:
     def route(self, *_args, **_kwargs):
         return CompareSkillDefinition()
+
+
+class PaperQASkillManifest:
+    name = "paper_qa"
+    version = 1
+
+
+class PaperQASkillDefinition:
+    manifest = PaperQASkillManifest()
+    instructions = "依据论文证据回答问题。"
+
+
+class PaperQASkillRegistry:
+    def route(self, *_args, **_kwargs):
+        return PaperQASkillDefinition()
 
 
 class ModelTaskFrameHarness:
@@ -336,7 +352,7 @@ def test_parallel_compare_uses_one_parent_run_and_safe_branch_events() -> None:
             submission.run.id,
             token,
             answer_quality_policy=AnswerQualityPolicy(),
-            skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+            skill_registry=PaperQASkillRegistry(),  # type: ignore[arg-type]
             function_tool_harness=CompareHarnessStub(retriever),  # type: ignore[arg-type]
         )
 
@@ -369,7 +385,7 @@ def test_parallel_compare_uses_one_parent_run_and_safe_branch_events() -> None:
 
 
 def test_specialist_subgraph_uses_independent_agents_and_skips_second_planner() -> None:
-    """生产接线回归：v3 只使用一个研究编排器，最终仍交给原回答 Graph。"""
+    """冻结为 v3 后不被粗粒度 Skill 路由降级，且只使用一个研究编排器。"""
 
     async def scenario() -> None:
         repository = MemoryRepository("secret")
@@ -412,13 +428,19 @@ def test_specialist_subgraph_uses_independent_agents_and_skips_second_planner() 
             assert len(messages) == 2
             assert max_output_tokens > 0
             assert "会话" not in messages[1]["content"]
+            is_contradiction = "论文 p2" in messages[1]["content"]
             return {
                 "claims": [
                     {
                         "dimension": "核心方法",
-                        "claim": "该分支论文给出了可比较的方法证据。",
+                        "claim_key": "方法在相同设置下提升性能",
+                        "claim": (
+                            "该论文在相同设置下未观察到性能提升。"
+                            if is_contradiction
+                            else "该论文在相同设置下观察到性能提升。"
+                        ),
                         "evidence_aliases": ["E1"],
-                        "stance": "support",
+                        "stance": "contradict" if is_contradiction else "support",
                         "confidence": 0.9,
                     }
                 ]
@@ -432,7 +454,7 @@ def test_specialist_subgraph_uses_independent_agents_and_skips_second_planner() 
             submission.run.id,
             token,
             answer_quality_policy=AnswerQualityPolicy(),
-            skill_registry=CompareSkillRegistry(),  # type: ignore[arg-type]
+            skill_registry=PaperQASkillRegistry(),  # type: ignore[arg-type]
             function_tool_harness=CompareHarnessStub(retriever),  # type: ignore[arg-type]
             research_graph=research_graph,
             evidence_specialist=EvidenceSpecialist(specialist_model, timeout_seconds=1),
@@ -447,12 +469,13 @@ def test_specialist_subgraph_uses_independent_agents_and_skips_second_planner() 
         assert graph.initial["memory_ids"] == []
         assert graph.initial["messages"][0] == {
             "role": "skill",
-            "content": "比较多篇论文的方法、实验、结果与局限。",
+            "content": "依据论文证据回答问题。",
         }
         assert graph.initial["messages"][1]["role"] == "research_synthesis"
-        assert "该分支论文给出了可比较的方法证据" in graph.initial["messages"][1][
-            "content"
-        ]
+        synthesis = json.loads(graph.initial["messages"][1]["content"])
+        assert synthesis["conflicts"][0]["claim_key"] == "方法在相同设置下提升性能"
+        assert synthesis["conflicts"][0]["support"]
+        assert synthesis["conflicts"][0]["contradict"]
         assert sorted(retriever.calls) == [("p1",), ("p2",), ("p3",)]
         assert graph.config is not None
         assert graph.config["configurable"]["checkpoint_ns"] == (

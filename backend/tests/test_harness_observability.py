@@ -85,6 +85,18 @@ def test_parallel_compare_aggregates_only_versioned_low_cardinality_trace() -> N
         "finding_count": 9,
         "dedup_count": 4,
         "conflict_count": 2,
+        "paper_coverage_count": 0,
+        "branch_evidence_count": 0,
+        "branch_claim_count": 0,
+        "estimated_branch_input_tokens": 0,
+        "estimated_branch_output_tokens": 0,
+        "provider_branch_input_tokens": None,
+        "provider_branch_output_tokens": None,
+        "provider_token_samples": 0,
+        "branch_error_categories": {},
+        "validation_p50_ms": None,
+        "validation_p95_ms": None,
+        "versions": {"compare_map_reduce_v2": 2},
     }
     serialized = str(report)
     assert "不得出现在聚合结果" not in serialized
@@ -109,3 +121,46 @@ def test_parallel_compare_normalizes_unknown_reason_and_untrusted_counts() -> No
     assert metrics["failed_subtasks"] == 0
     assert metrics["fallback_reasons"] == {"other": 1}
     assert metrics["subtask_p95_ms"] == 30
+
+
+def test_specialist_branch_tokens_errors_and_validation_are_aggregated_without_content() -> None:
+    metrics = _report(
+        {
+            "orchestration_version": "specialist_subgraph_v3",
+            "planned_subtasks": 3,
+            "succeeded_subtasks": 2,
+            "failed_subtasks": 1,
+            "paper_coverage_count": 3,
+            "branch_metrics": [
+                {
+                    "subtask_id": "s1",
+                    "status": "succeeded",
+                    "input_tokens": 120,
+                    "output_tokens": 30,
+                    "provider_input_tokens": 118,
+                    "provider_output_tokens": 28,
+                    "evidence_count": 4,
+                    "claim_count": 3,
+                },
+                {
+                    "subtask_id": "s2",
+                    "status": "failed",
+                    "input_tokens": 110,
+                    "output_tokens": 0,
+                    "evidence_count": 0,
+                    "claim_count": 0,
+                    "error_category": "schema",
+                },
+            ],
+        }
+    )["parallel_compare"]
+
+    assert metrics["versions"] == {"specialist_subgraph_v3": 1}
+    assert metrics["paper_coverage_count"] == 3
+    assert metrics["branch_evidence_count"] == 4
+    assert metrics["branch_claim_count"] == 3
+    assert metrics["estimated_branch_input_tokens"] == 230
+    assert metrics["estimated_branch_output_tokens"] == 30
+    assert metrics["provider_branch_input_tokens"] == 118
+    assert metrics["provider_branch_output_tokens"] == 28
+    assert metrics["branch_error_categories"] == {"schema": 1}

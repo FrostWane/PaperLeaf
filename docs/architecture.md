@@ -248,12 +248,14 @@ sequenceDiagram
 - 唯一 Coordinator 只根据可信论文描述拆分最多三个任务，不读取正文；进入 v3 后不再调用 Function Tool planner。
 - LangGraph `Send` 为每个 Specialist 创建独立输入；分支只含自己的任务、论文别名和 `E1…En` 证据，不含会话历史、Memory 或兄弟结果。
 - 自定义字典 reducer 可交换、结合且幂等，分支完成顺序和同代重放不会改变确定性合并结果。
-- Research Graph、最终回答和标准回退分别使用 `specialist_subgraph_v3/research`、`specialist_subgraph_v3/final` 与 `single_agent_v1/fallback` Checkpoint 命名空间。
+- 父 Research Graph 与每个 Specialist 分别使用独立 PostgreSQL Checkpoint thread；即使 Worker 在 `Send` 屏障完成前退出，新 Worker 也只重跑未完成分支。最终回答继续使用版本化 Checkpoint。
 - Specialist 主张不能直接成为 Citation。Merger 只接收服务端 Retriever 返回的 Evidence，并再次复核 Chunk、论文范围和物理页，再以论文轮转方式限制最终证据。
+- Specialist 输出包含稳定 `claim_key`、`support / contradict / unclear` 立场、置信度和证据别名。Reducer 不覆盖相反立场，Merger 形成 `ConflictSet`，综合器按论文和实验条件并列呈现冲突。
 - Synthesizer 使用不含聊天历史和长期记忆的独立综合上下文；回答仍通过既有引用合法性和分批语义支持核验。
 - 单支失败可形成带覆盖说明的部分结果；全部失败、计划非法、综合失败或预算不足时直接走标准检索。
+- 分支观测记录耗时、估算 Token、可用的 Provider Token、证据数、主张数与错误分类；聚合层记录论文覆盖、去重、冲突、合并和最终核验延迟，不收集问题、论文 ID、Chunk ID 或主张正文。
 
-该能力通过默认关闭的 `PAPERLEAF_SPECIALIST_AGENTS_ENABLED` 灰度。它是有界多 Specialist 协作，不是自由通信的 Agent Swarm；完整冻结集 A/B 与人工盲评通过前不声明优于 v1/v2。详细取舍见 [ADR 0021](decisions/0021-bounded-specialist-subgraph.md)。
+该能力通过默认关闭的 `PAPERLEAF_SPECIALIST_AGENTS_ENABLED` 灰度。它是有界多 Specialist 协作，不是自由通信的 Agent Swarm；每个 Specialist 仍只读取服务端预检索的有界证据，暂不开放完整工具循环。完整冻结集 A/B 与人工盲评通过前不声明优于 v1/v2。详细取舍见 [ADR 0021](decisions/0021-bounded-specialist-subgraph.md)。
 
 ### 学术 MCP Gateway
 

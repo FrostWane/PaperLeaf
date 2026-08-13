@@ -39,6 +39,8 @@ from .agent.memory import MEMORY_TYPES, memory_hash, normalize_memory_value
 from .agent.research_specialist_graph import (
     SPECIALIST_ORCHESTRATION_VERSION,
     build_research_specialist_graph,
+    research_checkpoint_thread_id,
+    specialist_branch_thread_id,
 )
 from .agent.research_specialists import build_configured_evidence_specialist
 from .agent.skills import SkillRegistry
@@ -277,7 +279,13 @@ class AppServices:
         if not delete_thread:
             raise RuntimeError("CHECKPOINT_DELETE_UNAVAILABLE")
         for thread_id in thread_ids:
-            await delete_thread(thread_id)
+            derived = [
+                thread_id,
+                research_checkpoint_thread_id(thread_id),
+                *(specialist_branch_thread_id(thread_id, index) for index in range(1, 4)),
+            ]
+            for checkpoint_thread_id in derived:
+                await delete_thread(checkpoint_thread_id)
 
 
 def _paper_read(paper: PaperRecord) -> PaperRead:

@@ -30,6 +30,7 @@ def _percentile(values: Iterable[int | float], fraction: float) -> int | None:
 
 
 _COMPARE_ORCHESTRATION_VERSION = "compare_map_reduce_v2"
+_SPECIALIST_ORCHESTRATION_VERSION = "specialist_subgraph_v3"
 _COMPARE_FALLBACK_REASONS = {
     "disabled",
     "skill_not_supported",
@@ -38,6 +39,7 @@ _COMPARE_FALLBACK_REASONS = {
     "invalid_plan",
     "budget_exceeded",
     "all_subtasks_failed",
+    "all_specialists_failed",
     "no_merged_evidence",
     "cancelled",
     "timeout",
@@ -97,6 +99,17 @@ def aggregate_harness_metrics(
     compare_dedup_count = 0
     compare_conflict_count = 0
     compare_finding_count = 0
+    compare_paper_coverage_count = 0
+    compare_branch_input_tokens = 0
+    compare_branch_output_tokens = 0
+    compare_provider_input_tokens = 0
+    compare_provider_output_tokens = 0
+    compare_provider_token_samples = 0
+    compare_branch_evidence_count = 0
+    compare_branch_claim_count = 0
+    compare_branch_errors: Counter[str] = Counter()
+    compare_validation_durations: list[int] = []
+    compare_versions: Counter[str] = Counter()
 
     for run in runs:
         snapshot = _dict(getattr(run, "context_snapshot", {}))
@@ -130,8 +143,13 @@ def aggregate_harness_metrics(
         skill_counts[skill] += 1
         harness_trace = _dict(getattr(run, "harness_trace", {}))
         route_sources[str(harness_trace.get("skill_route_source") or "unknown")[:64]] += 1
-        if harness_trace.get("orchestration_version") == _COMPARE_ORCHESTRATION_VERSION:
+        orchestration_version = str(harness_trace.get("orchestration_version") or "")
+        if orchestration_version in {
+            _COMPARE_ORCHESTRATION_VERSION,
+            _SPECIALIST_ORCHESTRATION_VERSION,
+        }:
             compare_runs += 1
+            compare_versions[orchestration_version] += 1
             compare_planned_subtasks += min(
                 3, _non_negative_int(harness_trace.get("planned_subtasks"))
             )
@@ -145,17 +163,16 @@ def aggregate_harness_metrics(
                 3, _non_negative_int(harness_trace.get("timeout_subtasks"))
             )
             compare_dedup_count += _non_negative_int(harness_trace.get("merge_dedup_count"))
-            compare_conflict_count += _non_negative_int(
-                harness_trace.get("merge_conflict_count")
-            )
+            compare_conflict_count += _non_negative_int(harness_trace.get("merge_conflict_count"))
             compare_finding_count += _non_negative_int(harness_trace.get("finding_count"))
+            compare_paper_coverage_count += _non_negative_int(
+                harness_trace.get("paper_coverage_count")
+            )
             if harness_trace.get("partial_failure") is True:
                 compare_partial_runs += 1
             if harness_trace.get("fallback_to_v1") is True:
                 compare_fallback_runs += 1
-            fallback_reason = _compare_fallback_reason(
-                harness_trace.get("fallback_reason")
-            )
+            fallback_reason = _compare_fallback_reason(harness_trace.get("fallback_reason"))
             if fallback_reason:
                 compare_fallback_reasons[fallback_reason] += 1
             raw_durations = harness_trace.get("subtask_durations_ms")
@@ -170,6 +187,31 @@ def aggregate_harness_metrics(
                 merge_duration, bool
             ):
                 compare_merge_durations.append(_non_negative_int(merge_duration))
+            raw_branch_metrics = harness_trace.get("branch_metrics")
+            if isinstance(raw_branch_metrics, list):
+                for item in raw_branch_metrics[:3]:
+                    if not isinstance(item, dict):
+                        continue
+                    compare_branch_input_tokens += _non_negative_int(item.get("input_tokens"))
+                    compare_branch_output_tokens += _non_negative_int(item.get("output_tokens"))
+                    compare_branch_evidence_count += _non_negative_int(item.get("evidence_count"))
+                    compare_branch_claim_count += _non_negative_int(item.get("claim_count"))
+                    provider_input = item.get("provider_input_tokens")
+                    provider_output = item.get("provider_output_tokens")
+                    if isinstance(provider_input, int) and isinstance(provider_output, int):
+                        compare_provider_input_tokens += max(0, provider_input)
+                        compare_provider_output_tokens += max(0, provider_output)
+                        compare_provider_token_samples += 1
+                    error_category = str(item.get("error_category") or "").strip()[:32]
+                    if error_category:
+                        compare_branch_errors[error_category] += 1
+            stage_timings = _dict(trace.get("stage_timings_ms"))
+            validation_ms = sum(
+                _non_negative_int(stage_timings.get(key))
+                for key in ("citation_validation", "answer_support")
+            )
+            if validation_ms:
+                compare_validation_durations.append(validation_ms)
         run_status = str(getattr(run, "status", ""))
         if run_status in {"completed", "failed", "cancelled"}:
             skill_terminal[skill] += 1
@@ -178,9 +220,7 @@ def aggregate_harness_metrics(
 
     token_before = sum(before_tokens)
     token_after = sum(after_tokens)
-    compression_rate = (
-        max(0.0, min(1.0, 1 - token_after / token_before)) if token_before else 0.0
-    )
+    compression_rate = max(0.0, min(1.0, 1 - token_after / token_before)) if token_before else 0.0
     confidence_bands = {
         "high": sum(1 for value in confidences if value >= 0.8),
         "medium": sum(1 for value in confidences if 0.55 <= value < 0.8),
@@ -217,13 +257,10 @@ def aggregate_harness_metrics(
             "display_name": str(getattr(item, "display_name", "MCP"))[:100],
             "enabled": bool(getattr(item, "enabled", False)),
             "health_status": str(getattr(item, "health_status", "unknown"))[:32],
-            "consecutive_failures": max(
-                0, int(getattr(item, "consecutive_failures", 0) or 0)
-            ),
+            "consecutive_failures": max(0, int(getattr(item, "consecutive_failures", 0) or 0)),
             "circuit_open_until": getattr(item, "circuit_open_until", None),
             "last_checked_at": getattr(item, "last_checked_at", None),
-            "last_error_code": str(getattr(item, "last_error_code", None) or "")[:80]
-            or None,
+            "last_error_code": str(getattr(item, "last_error_code", None) or "")[:80] or None,
         }
         for item in mcp_servers
     ]
@@ -260,9 +297,7 @@ def aggregate_harness_metrics(
                     "skill": skill,
                     "runs": count,
                     "terminal_runs": skill_terminal[skill],
-                    "completion_rate": _rate(
-                        skill_completed[skill], skill_terminal[skill]
-                    ),
+                    "completion_rate": _rate(skill_completed[skill], skill_terminal[skill]),
                 }
                 for skill, count in skill_counts.most_common()
             ],
@@ -277,9 +312,7 @@ def aggregate_harness_metrics(
             "p50_ms": _percentile(durations, 0.5),
             "p95_ms": _percentile(durations, 0.95),
             "retried_calls": retries,
-            "timeouts": sum(
-                count for code, count in tool_errors.items() if "TIMEOUT" in code
-            ),
+            "timeouts": sum(count for code, count in tool_errors.items() if "TIMEOUT" in code),
             "permission_denied": sum(
                 count for code, count in tool_errors.items() if "PERMISSION" in code
             ),
@@ -308,9 +341,7 @@ def aggregate_harness_metrics(
             "succeeded_subtasks": compare_succeeded_subtasks,
             "failed_subtasks": compare_failed_subtasks,
             "timeout_subtasks": compare_timeout_subtasks,
-            "success_rate": _rate(
-                compare_succeeded_subtasks, compare_planned_subtasks
-            ),
+            "success_rate": _rate(compare_succeeded_subtasks, compare_planned_subtasks),
             "partial_runs": compare_partial_runs,
             "partial_rate": _rate(compare_partial_runs, compare_runs),
             "fallback_runs": compare_fallback_runs,
@@ -323,5 +354,21 @@ def aggregate_harness_metrics(
             "finding_count": compare_finding_count,
             "dedup_count": compare_dedup_count,
             "conflict_count": compare_conflict_count,
+            "paper_coverage_count": compare_paper_coverage_count,
+            "branch_evidence_count": compare_branch_evidence_count,
+            "branch_claim_count": compare_branch_claim_count,
+            "estimated_branch_input_tokens": compare_branch_input_tokens,
+            "estimated_branch_output_tokens": compare_branch_output_tokens,
+            "provider_branch_input_tokens": (
+                compare_provider_input_tokens if compare_provider_token_samples else None
+            ),
+            "provider_branch_output_tokens": (
+                compare_provider_output_tokens if compare_provider_token_samples else None
+            ),
+            "provider_token_samples": compare_provider_token_samples,
+            "branch_error_categories": dict(compare_branch_errors),
+            "validation_p50_ms": _percentile(compare_validation_durations, 0.5),
+            "validation_p95_ms": _percentile(compare_validation_durations, 0.95),
+            "versions": dict(compare_versions),
         },
     }

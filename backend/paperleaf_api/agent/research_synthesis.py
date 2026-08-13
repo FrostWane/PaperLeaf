@@ -161,6 +161,8 @@ class ResearchSynthesisResult:
     plan: ResearchPlan
     report: MergeReport
     evidence: tuple[Evidence, ...]
+    branch_metrics: tuple[dict[str, Any], ...] = ()
+    conflict_sets: tuple[dict[str, Any], ...] = ()
 
     @property
     def fallback_required(self) -> bool:

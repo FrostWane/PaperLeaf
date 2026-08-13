@@ -33,6 +33,7 @@ from .agent.recommendation_quality import entity_keys
 from .agent.research_specialist_graph import (
     SPECIALIST_ORCHESTRATION_VERSION,
     ResearchGraphContext,
+    research_checkpoint_thread_id,
     specialist_result_from_state,
 )
 from .agent.research_specialists import EvidenceSpecialist
@@ -428,8 +429,8 @@ async def _invoke_specialist_graph_with_cancel(
     graph_config = {
         "recursion_limit": 8,
         "configurable": {
-            "thread_id": run.thread_id,
-            "checkpoint_ns": f"{SPECIALIST_ORCHESTRATION_VERSION}/research",
+            "thread_id": research_checkpoint_thread_id(run.thread_id),
+            "checkpoint_ns": "",
         },
     }
     invocation: Any = initial
@@ -509,8 +510,11 @@ def _parallel_compare_trace(
             "merge_dedup_count": 0,
             "merge_conflict_count": 0,
             "finding_count": 0,
+            "paper_coverage_count": 0,
+            "branch_metrics": [],
         }
     findings = list(result.report.findings)
+    branch_metrics = list(result.branch_metrics)
     succeeded = sum(item.status == "succeeded" for item in findings)
     timed_out = sum(item.status == "timeout" for item in findings)
     failed = len(findings) - succeeded
@@ -530,6 +534,34 @@ def _parallel_compare_trace(
         "merge_dedup_count": result.report.dedup_count,
         "merge_conflict_count": result.report.conflict_count,
         "finding_count": len(result.evidence),
+        "paper_coverage_count": len(result.report.evidence_paper_ids),
+        "branch_metrics": [
+            {
+                "subtask_id": str(item.get("subtask_id", ""))[:8],
+                "status": str(item.get("status", "failed"))[:24],
+                "duration_ms": max(0, int(item.get("duration_ms", 0) or 0)),
+                "evidence_count": max(0, int(item.get("evidence_count", 0) or 0)),
+                "claim_count": max(0, int(item.get("claim_count", 0) or 0)),
+                "input_tokens": max(0, int(item.get("input_tokens", 0) or 0)),
+                "output_tokens": max(0, int(item.get("output_tokens", 0) or 0)),
+                "provider_input_tokens": item.get("provider_input_tokens"),
+                "provider_output_tokens": item.get("provider_output_tokens"),
+                "error_category": (
+                    "timeout"
+                    if str(item.get("status")) == "timeout"
+                    else "schema"
+                    if "OUTPUT" in str(item.get("error_code") or "")
+                    or "ALIAS" in str(item.get("error_code") or "")
+                    or "DIMENSION" in str(item.get("error_code") or "")
+                    else "budget"
+                    if "BUDGET" in str(item.get("error_code") or "")
+                    else "provider"
+                    if str(item.get("status")) == "failed"
+                    else None
+                ),
+            }
+            for item in branch_metrics[:3]
+        ],
     }
 
 
@@ -1235,9 +1267,7 @@ async def execute_agent_run(
         research_fallback_to_v1 = False
         compare_fallback_reason: str | None = None
         compare_event_epoch = hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:10]
-        requested_orchestration = str(
-            snapshot.get("orchestration_version", "single_agent_v1")
-        )
+        requested_orchestration = str(snapshot.get("orchestration_version", "single_agent_v1"))
         specialist_requested = (
             requested_orchestration == SPECIALIST_ORCHESTRATION_VERSION
             and bool(harness_flags.get("specialist_agents_enabled", False))
@@ -1253,9 +1283,7 @@ async def execute_agent_run(
         if specialist_requested and not resolution.needs_clarification:
             research_orchestration_attempted = True
             specialist_started_at = time.perf_counter()
-            if selected_skill != "compare_papers":
-                compare_fallback_reason = "skill_not_supported"
-            elif (
+            if (
                 function_tool_harness is None
                 or research_graph is None
                 or evidence_specialist is None
@@ -1309,12 +1337,19 @@ async def execute_agent_run(
                         "subtask_total",
                         "status",
                         "finding_count",
+                        "evidence_count",
+                        "input_tokens",
+                        "output_tokens",
+                        "provider_input_tokens",
+                        "provider_output_tokens",
                         "succeeded_subtasks",
                         "failed_subtasks",
                         "timeout_subtasks",
                         "dedup_count",
                         "conflict_count",
+                        "paper_coverage_count",
                         "duration_ms",
+                        "recovered",
                     ):
                         if key in data:
                             public[key] = data[key]
@@ -1334,22 +1369,19 @@ async def execute_agent_run(
                         run.id,
                         event_type,
                         public,
-                        event_key=(
-                            f"stage:compare:{compare_event_epoch}:{suffix}{key_part}"
-                        ),
+                        event_key=(f"stage:compare:{compare_event_epoch}:{suffix}{key_part}"),
                         claim_token=claim_token,
                     )
 
                 specialist_initial = {
                     "run_id": run.id,
+                    "parent_thread_id": run.thread_id,
                     "user_id": run.user_id,
                     "objective": resolution.resolved_query,
                     "paper_ids": paper_ids,
                     "dimensions": ["研究问题", "核心方法", "实验设置", "主要结果", "局限"],
                     "max_branches": int(harness_flags.get("multi_agent_max_branches", 3)),
-                    "total_token_budget": int(
-                        harness_flags.get("multi_agent_token_budget", 12000)
-                    ),
+                    "total_token_budget": int(harness_flags.get("multi_agent_token_budget", 12000)),
                     "branch_results": {},
                 }
                 try:
@@ -1398,9 +1430,7 @@ async def execute_agent_run(
                         continue
                     evidence_per_paper[item.paper_id] = count + 1
                     bounded_specialist_evidence.append(item)
-                tasks_by_id = {
-                    task.subtask_id: task for task in compare_result.plan.tasks
-                }
+                tasks_by_id = {task.subtask_id: task for task in compare_result.plan.tasks}
                 synthesis_findings = []
                 for item in compare_result.report.findings:
                     if item.status != "succeeded" or not item.claim.strip():
@@ -1421,6 +1451,36 @@ async def execute_agent_run(
                             "confidence": round(float(item.confidence), 3),
                         }
                     )
+                synthesis_conflicts = []
+                for conflict in compare_result.conflict_sets[:4]:
+                    sides: dict[str, list[dict[str, Any]]] = {}
+                    for stance in ("support", "contradict", "uncertain"):
+                        rendered = []
+                        for claim in list(conflict.get(stance, []))[:3]:
+                            paper_ids_for_claim = set(claim.get("paper_ids", []))
+                            rendered.append(
+                                {
+                                    "papers": sorted(
+                                        {
+                                            evidence.paper_title
+                                            for evidence in bounded_specialist_evidence
+                                            if evidence.paper_id in paper_ids_for_claim
+                                        }
+                                    ),
+                                    "claim": str(claim.get("claim", ""))[:500],
+                                    "confidence": round(float(claim.get("confidence", 0.0)), 3),
+                                }
+                            )
+                        if rendered:
+                            sides[stance] = rendered
+                    if sides.get("support") and sides.get("contradict"):
+                        synthesis_conflicts.append(
+                            {
+                                "dimension": str(conflict.get("dimension", ""))[:64],
+                                "claim_key": str(conflict.get("claim_key", ""))[:160],
+                                **sides,
+                            }
+                        )
                 tool_mode_active = True
                 initial["tool_mode_active"] = True
                 initial["pre_retrieved_evidence"] = bounded_specialist_evidence
@@ -1430,9 +1490,7 @@ async def execute_agent_run(
                 # Specialist 的自由文本。会话约束已经固化进 resolved_query。
                 initial["messages"] = []
                 if skill_instructions:
-                    initial["messages"].append(
-                        {"role": "skill", "content": skill_instructions}
-                    )
+                    initial["messages"].append({"role": "skill", "content": skill_instructions})
                 if synthesis_findings:
                     initial["messages"].append(
                         {
@@ -1440,6 +1498,7 @@ async def execute_agent_run(
                             "content": json.dumps(
                                 {
                                     "findings": synthesis_findings,
+                                    "conflicts": synthesis_conflicts,
                                     "coverage_notice": (
                                         compare_result.report.coverage_notice or ""
                                     ),
@@ -1453,14 +1512,14 @@ async def execute_agent_run(
                     (time.perf_counter() - specialist_started_at) * 1000
                 )
                 if compare_result.report.coverage_notice:
-                    initial["tool_context_entries"] = [{
-                        "kind": "specialist_coverage",
-                        "status": compare_result.report.status,
-                        "summary": compare_result.report.coverage_notice,
-                    }]
-                harness_trace.update(
-                    _parallel_compare_trace(compare_result, fallback_reason=None)
-                )
+                    initial["tool_context_entries"] = [
+                        {
+                            "kind": "specialist_coverage",
+                            "status": compare_result.report.status,
+                            "summary": compare_result.report.coverage_notice,
+                        }
+                    ]
+                harness_trace.update(_parallel_compare_trace(compare_result, fallback_reason=None))
                 harness_trace["orchestration_version"] = SPECIALIST_ORCHESTRATION_VERSION
                 harness_trace["compare_mode"] = "bounded_specialists"
                 harness_trace["tool_mode_active"] = True
@@ -1468,9 +1527,8 @@ async def execute_agent_run(
                 harness_trace["tool_activation_reason"] = "specialist_evidence"
                 harness_trace["function_calling"] = "specialist_subgraph"
                 harness_trace["synthesis_context"] = "fresh"
-                harness_trace["synthesis_evidence_count"] = len(
-                    bounded_specialist_evidence
-                )
+                harness_trace["synthesis_evidence_count"] = len(bounded_specialist_evidence)
+                harness_trace["specialist_conflict_set_count"] = len(compare_result.conflict_sets)
             else:
                 research_fallback_to_v1 = True
                 harness_trace.update(
@@ -1493,9 +1551,7 @@ async def execute_agent_run(
         if compare_requested and not resolution.needs_clarification:
             research_orchestration_attempted = True
             compare_started_at = time.perf_counter()
-            if selected_skill != "compare_papers":
-                compare_fallback_reason = "skill_not_supported"
-            elif function_tool_harness is None:
+            if function_tool_harness is None:
                 compare_fallback_reason = "internal_error"
             else:
                 try:
