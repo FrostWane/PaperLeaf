@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "status": "completed",
+  "created_at": "2026-08-13T18:48:45.719928+00:00",
+  "git_sha": "e332f2228d7a308fdf36e5caed07e0ead87e0c1e",
+  "docker_image_digest": "sha256:950caee095eb7bce64c883877027f097be31a9c1ac297d55411a1186372eaf9a",
+  "mode": "hidden",
+  "variant": "per_paper_retrieval",
+  "dataset": {
+    "dataset_id": "paperleaf-formal-hidden-v1",
+    "manifest_sha256": "b13e5e18333117b3877f5d03ef2598e7b225692060b1a3d2604745dbe2839c91",
+    "cases_or_questions_sha256": "8f40cc630d01ce319f6b90d98c06615b109a9cf9d3845fcc8f713d2f20d1a30b",
+    "oracle_sha256": "5aa635a0d9830e9853b96fa979c5fe93088a4f000f4d9ec81c048bd334fd90ea",
+    "case_count": 100
+  },
+  "protocol": {
+    "status": "verified",
+    "dataset_id": "paperleaf-formal-hidden-v1",
+    "paper_count": 70,
+    "case_count": 100,
+    "lock_sha256": "6895b6b508048db8dee118e1dfb8c981312285195dec36ab5f647c81a62e8418",
+    "evaluation_status": "hidden_first_formal_batch"
+  },
+  "configuration": {
+    "k": 5,
+    "candidate_pool_size": 40,
+    "embedding_provider": "fallback",
+    "embedding_model": "text-embedding-3-small",
+    "fallback_embedding_model": "qwen3-embedding:0.6b",
+    "embedding_revision": 2,
+    "embedding_input_format": "paper_context_v2",
+    "retrieval_mode": "per_paper_specific",
+    "per_paper": true,
+    "weak_query_rewrite": false,
+    "reranker": false,
+    "reranker_strategy": null,
+    "legacy_minilm_enabled": false
+  },
+  "preflight": {
+    "status": "ready",
+    "reason": null,
+    "missing_papers": [],
+    "missing_chunks": [],
+    "stale_or_incompatible": [],
+    "embedding_contract": {
+      "provider": "fallback",
+      "model": "qwen3-embedding:0.6b",
+      "dimensions": 1024,
+      "revision": 2,
+      "input_format": "paper_context_v2",
+      "fingerprint": "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+    }
+  },
+  "corpus": {
+    "paper_count": 70,
+    "chunk_count": 2458,
+    "chunk_snapshot_sha256": "a230883447feb687d245e7f08c2d452f94fd78c8466f5fa4edddff420e4dca64",
+    "index_snapshot_sha256": "146917a36f2a0f8009d626bf7d455910b7629f7fd8ef9041a26e6879c49caf8b",
+    "paper_status_counts": {
+      "ready": 70
+    },
+    "chunking_strategies": [
+      "structure_aware_v2"
+    ],
+    "embedding_fingerprints": [
+      "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+    ]
+  },
+  "completed_at": "2026-08-13T18:50:12.861452+00:00",
+  "artifacts": {
+    "per_query_results.jsonl": "bb428a150dc950fffc9da008cb26d85c0994c2407502d57373ad589f71183d73",
+    "metrics.json": "29ad45ad72ff5320f6566afed4b1872e8f09ab5c2c3cb99bab0f0bfa8c056e04"
+  }
+}

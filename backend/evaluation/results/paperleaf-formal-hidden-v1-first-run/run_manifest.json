@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "status": "retrieval_completed_human_review_pending",
+  "mode": "hidden",
+  "dataset": {
+    "dataset_id": "paperleaf-formal-hidden-v1",
+    "case_count": 100,
+    "chunk_snapshot_sha256": "a230883447feb687d245e7f08c2d452f94fd78c8466f5fa4edddff420e4dca64"
+  },
+  "variants": {
+    "production_baseline": {
+      "run_manifest_sha256": "d5856d6fec88084488c8ce011f2aaf0224650b9d4e5a01cb1128ceb1cfe50cc9",
+      "per_query_results_sha256": "e61dfbe3cfadfe5aed248a0a4d0f79fada82736f4116e8b6c697ac380da638e5",
+      "metrics_sha256": "ae1264dc33b3b86ddac1c66d9c2a5aef191063933294daf19e67424aa5d29ffe"
+    },
+    "plain_embedding_control": {
+      "run_manifest_sha256": "153c3809d61d9508bbe0a5c63f2c515837c0ac5b0c05b4472c457722ae8fec94",
+      "per_query_results_sha256": "477ce11f6a37bc7e60b998298c0b31ccbda115c10d59d569d3d3bdaf690cc9b9",
+      "metrics_sha256": "13c1bc4a99f5960aef30eba134af2b22e44195765445f1110b0c17d677614bc5"
+    },
+    "contextual_embedding": {
+      "run_manifest_sha256": "0f837f5915ffafad606c3cae9de75875eea211c88a674ba1afdcfcf308b34dc3",
+      "per_query_results_sha256": "a2c388ad2cee138d2fbcc893f31fa61737fbd0178e864f26befa0159eae4cb81",
+      "metrics_sha256": "19a6d3c6b94ee532284affabdbed14e0d97cb4b8e912b3eef4091d4ce0f74da6"
+    },
+    "per_paper_retrieval": {
+      "run_manifest_sha256": "52edb37a3c84618b6210667f11cb4b4830068490e9aed14a3a741b483b27e5e6",
+      "per_query_results_sha256": "bb428a150dc950fffc9da008cb26d85c0994c2407502d57373ad589f71183d73",
+      "metrics_sha256": "29ad45ad72ff5320f6566afed4b1872e8f09ab5c2c3cb99bab0f0bfa8c056e04"
+    },
+    "weak_query_rewrite": {
+      "run_manifest_sha256": "d3caf7a9b63271e11d1cfe5a6cbb5f0b934c72b09ce35659e1b24baa2b3b8905",
+      "per_query_results_sha256": "d3213c03cc8ad4ea1c2fb6baa9a2b16805143dc83cb29b4267cc2fbc7d28c7c0",
+      "metrics_sha256": "f51e382702eaf20dd6a0b311482c01f068ae64d564a97159b7e0bb357ad06cd0"
+    },
+    "multigranular_page_reranker": {
+      "run_manifest_sha256": "28b856444b8ea727458ff69d962021a0cf13e97587ad898c17c5383f49e74753",
+      "per_query_results_sha256": "ba8e750b3b9962c141bf4781a3c6911f70924d37d8e466d88617e4826345b589",
+      "metrics_sha256": "9a8cf61e7fc7c1b1a8680ca2eb900be4b86550253ca156faad31de4e5ac11525"
+    },
+    "final_combined": {
+      "run_manifest_sha256": "9f3ca99f6ac77ac2888a6300791340647ef1d0d9255aca49026a02d8ec64063d",
+      "per_query_results_sha256": "3be5aa4fa3d35e448a65c32922a235dc348857ac76a2651cfb6c6e297c8be15c",
+      "metrics_sha256": "bb0534aadbba15fe273938898e83e5d1940eb02899416af85b1539e8fd8b28fa"
+    }
+  },
+  "artifacts": {
+    "per_query_results.jsonl": "c4cf023c478c2311f970a28613b64ffe755bedba81902e2eb6a21f0118ad8879",
+    "metrics.json": "728a761204a0ce3fbe7501dff34d8f68a895a3967607d46076cc7e85d5f5b2fc",
+    "REPORT.md": "27f52800de4853113d261fa27ea0f5c3af1d001ac2c75ab6fabb2bcec7331980"
+  },
+  "human_review": {
+    "status": "pending",
+    "minimum_answers": 30,
+    "note": "LLM Judge 不得写成人工准确率"
+  }
+}
