@@ -10,7 +10,9 @@ import argparse
 import asyncio
 import hashlib
 import json
+import random
 import re
+import statistics
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
@@ -140,6 +142,11 @@ async def evaluate_production_cases(
     processors: dict[str, int] = defaultdict(int)
     rewrite_reasons: dict[str, int] = defaultdict(int)
     reranker_fallback_reasons: dict[str, int] = defaultdict(int)
+    unanswerable_false_retrievals = 0
+    required_papers_retrieved = 0
+    required_papers_total = 0
+    micro_pages_retrieved = 0
+    micro_pages_total = 0
     case_results: list[dict[str, Any]] = []
     for case in cases:
         missing = [paper_id for paper_id in case.paper_ids if paper_id not in paper_id_map]
@@ -159,6 +166,9 @@ async def evaluate_production_cases(
                     "paper_specific" if retrieval_mode == "per_paper_specific" else "same_query"
                 ),
             )
+        )
+        candidate_snapshot = list(
+            getattr(retriever, "last_candidate_snapshot", ()) or evidence
         )
         latency_ms = max(0, round((time.perf_counter() - started) * 1000))
         logical_by_local = {local: logical for logical, local in paper_id_map.items()}
@@ -194,26 +204,140 @@ async def evaluate_production_cases(
             latency_ms=latency_ms,
         )
         predictions.append(prediction)
+        if not case.answerable:
+            unanswerable_false_retrievals += int(bool(converted))
+        ranked_pairs = [(item.paper_id, item.physical_page) for item in converted[:k]]
+        rank_by_page = {pair: index for index, pair in enumerate(ranked_pairs, 1)}
+        evidence_groups = [
+            {(item.paper_id, item.physical_page) for item in group.items}
+            for group in case.acceptable_evidence_groups
+        ]
+        if not evidence_groups and case.expected_evidence:
+            evidence_groups = [
+                {(item.paper_id, item.physical_page) for item in case.expected_evidence}
+            ]
+        best_group: set[tuple[str, int]] = set()
+        if evidence_groups:
+            best_group = max(
+                evidence_groups,
+                key=lambda group: (
+                    len(set(ranked_pairs) & group) / len(group),
+                    len(set(ranked_pairs) & group),
+                    -len(group),
+                ),
+            )
+            micro_pages_retrieved += len(set(ranked_pairs) & best_group)
+            micro_pages_total += len(best_group)
+        if len(case.paper_ids) > 1 and case.answerable:
+            required = min(
+                (
+                    {paper_id for paper_id, _page in group}
+                    for group in evidence_groups
+                    if group
+                ),
+                key=len,
+                default=set(case.paper_ids),
+            )
+            retrieved_papers = {item.paper_id for item in converted[:k]}
+            required_papers_retrieved += len(required & retrieved_papers)
+            required_papers_total += len(required)
+        else:
+            required = set()
+            retrieved_papers = {item.paper_id for item in converted[:k]}
         predictions_by_id[case.id] = prediction
         case_results.append(
             {
                 "case_id": case.id,
+                "query": case.query,
                 "scope_paper_ids": list(case.paper_ids),
+                "answerable": case.answerable,
+                "gold_evidence_groups": [
+                    [
+                        {
+                            "paper_id": item.paper_id,
+                            "physical_page": item.physical_page,
+                            "anchor_sha256": hashlib.sha256(
+                                " ".join(item.anchor.split()).encode("utf-8")
+                            ).hexdigest(),
+                        }
+                        for item in group.items
+                    ]
+                    for group in case.acceptable_evidence_groups
+                ],
                 "latency_ms": latency_ms,
-                "retrieved": [
+                "top_40": [
                     {
                         "paper_id": logical_by_local[item.paper_id],
                         "physical_page": item.physical_page,
                         "chunk_id": item.chunk_id,
                         "score": item.retrieval_score,
                         "channels": list(item.retrieval_channels),
+                        "channel_scores": [list(value) for value in item.channel_scores],
                         "matched_query": item.retrieval_query,
                     }
-                    for item in evidence[:k]
+                    for item in candidate_snapshot[:40]
                     if item.paper_id in logical_by_local
                     and item.paper_id in local_scope
                     and item.physical_page >= 1
                 ],
+                "top_5": [
+                    {
+                        "paper_id": item.paper_id,
+                        "physical_page": item.physical_page,
+                        "chunk_id": item.chunk_id,
+                        "score": item.score,
+                    }
+                    for item in converted[:k]
+                ],
+                "gold_page_ranks": [
+                    {
+                        "paper_id": paper_id,
+                        "physical_page": physical_page,
+                        "rank": rank_by_page.get((paper_id, physical_page)),
+                    }
+                    for paper_id, physical_page in sorted(
+                        {
+                            (item.paper_id, item.physical_page)
+                            for group in case.acceptable_evidence_groups
+                            for item in group.items
+                        }
+                        | {
+                            (item.paper_id, item.physical_page)
+                            for item in case.expected_evidence
+                        }
+                    )
+                ],
+                "best_evidence_group": {
+                    "required_pages": len(best_group),
+                    "retrieved_pages": len(set(ranked_pairs) & best_group),
+                    "complete_hit": bool(best_group and best_group <= set(ranked_pairs)),
+                },
+                "required_paper_coverage": {
+                    "required_paper_ids": sorted(required),
+                    "retrieved_paper_ids": sorted(required & retrieved_papers),
+                    "numerator": len(required & retrieved_papers),
+                    "denominator": len(required),
+                },
+                "rewrite_queries": list(
+                    dict.fromkeys(
+                        item.retrieval_query
+                        for item in candidate_snapshot
+                        if item.retrieval_query
+                        and " ".join(item.retrieval_query.split()).casefold()
+                        != " ".join(case.query.split()).casefold()
+                    )
+                ),
+                "query_rewrite_reasons": list(
+                    getattr(retriever, "last_rewrite_reasons", ())
+                ),
+                "vector_fallback_reason": getattr(
+                    retriever, "last_vector_fallback_reason", None
+                ),
+                "reranker_fallback_reason": getattr(
+                    retriever, "last_reranker_fallback_reason", None
+                ),
+                "final_citations": [],
+                "error": None,
             }
         )
         converted_case = _evaluation_case(case)
@@ -249,8 +373,82 @@ async def evaluate_production_cases(
     metrics["query_rewrite_reasons"] = dict(sorted(rewrite_reasons.items()))
     metrics["vector_fallback_reasons"] = dict(sorted(fallback_reasons.items()))
     metrics["reranker_fallback_reasons"] = dict(sorted(reranker_fallback_reasons.items()))
+    metrics["unanswerable_false_retrieval_rate"] = {
+        "numerator": unanswerable_false_retrievals,
+        "denominator": sum(not case.answerable for case in cases),
+        "value": (
+            unanswerable_false_retrievals / sum(not case.answerable for case in cases)
+            if any(not case.answerable for case in cases)
+            else None
+        ),
+    }
+    metrics["required_paper_coverage_at_k"] = {
+        "k": k,
+        "numerator": required_papers_retrieved,
+        "denominator": required_papers_total,
+        "value": (
+            required_papers_retrieved / required_papers_total
+            if required_papers_total
+            else None
+        ),
+    }
+    metrics["page_micro_recall_at_k"] = {
+        "k": k,
+        "numerator": micro_pages_retrieved,
+        "denominator": micro_pages_total,
+        "value": micro_pages_retrieved / micro_pages_total if micro_pages_total else None,
+        "definition": "每题选择命中比例最高的人工可接受证据组后做页级 micro 汇总",
+    }
+    latencies = [int(item["latency_ms"]) for item in case_results]
+    warm = sorted(latencies[1:])
+    metrics["latency_cold_warm_ms"] = {
+        "cold_start": {
+            "sample_count": min(1, len(latencies)),
+            "p50": latencies[0] if latencies else None,
+            "p95": latencies[0] if latencies else None,
+            "definition": "新建检索器后的首题；不等同于清空 PostgreSQL/Ollama 操作系统缓存",
+        },
+        "warm": {
+            "sample_count": len(warm),
+            "p50": warm[len(warm) // 2] if warm else None,
+            "p95": warm[max(0, min(len(warm) - 1, int(len(warm) * 0.95 + 0.999999) - 1))]
+            if warm
+            else None,
+        },
+    }
     metrics["case_results"] = case_results
     return metrics
+
+
+def paired_bootstrap_interval(
+    baseline: Sequence[float],
+    candidate: Sequence[float],
+    *,
+    samples: int = 10_000,
+    seed: int = 20260814,
+) -> dict[str, float | int]:
+    """对逐题配对差值做确定性 Bootstrap 95% 区间。"""
+
+    if len(baseline) != len(candidate) or not baseline:
+        raise ValueError("配对 Bootstrap 要求两个等长非空序列")
+    if samples < 1000:
+        raise ValueError("正式 Bootstrap 至少抽样 1000 次")
+    differences = [right - left for left, right in zip(baseline, candidate)]
+    rng = random.Random(seed)
+    values = sorted(
+        statistics.fmean(differences[rng.randrange(len(differences))] for _ in differences)
+        for _ in range(samples)
+    )
+    lower = values[int(samples * 0.025)]
+    upper = values[min(samples - 1, int(samples * 0.975))]
+    return {
+        "sample_count": len(differences),
+        "bootstrap_samples": samples,
+        "mean_delta": statistics.fmean(differences),
+        "ci95_lower": lower,
+        "ci95_upper": upper,
+        "seed": seed,
+    }
 
 
 async def preflight_production_corpus(
@@ -258,6 +456,7 @@ async def preflight_production_corpus(
     *,
     user_email: str,
     required_paper_ids: set[str] | None = None,
+    config: Any = settings,
 ) -> dict[str, Any]:
     expected_papers = [
         paper
@@ -266,8 +465,8 @@ async def preflight_production_corpus(
     ]
     if not expected_papers:
         return {"status": "not_executed", "reason": "empty_evaluation_scope"}
-    router = build_model_router(settings)
-    contract = configured_embedding_contract(settings, router)
+    router = build_model_router(config)
+    contract = configured_embedding_contract(config, router)
     async with get_session_factory()() as session:
         user = await session.scalar(
             select(User).where(func.lower(User.email) == user_email.lower())
@@ -285,13 +484,23 @@ async def preflight_production_corpus(
             ).scalars()
         )
         by_arxiv = {paper.arxiv_id: paper for paper in rows if paper.arxiv_id}
-        missing = [paper.arxiv_id for paper in expected_papers if paper.arxiv_id not in by_arxiv]
+        by_sha = {paper.sha256: paper for paper in rows}
+        matched = {
+            expected.id: by_sha.get(expected.sha256) or by_arxiv.get(expected.arxiv_id)
+            for expected in expected_papers
+        }
+        missing = [
+            paper.arxiv_id for paper in expected_papers if matched.get(paper.id) is None
+        ]
         stale: list[str] = []
         empty: list[str] = []
         mapping: dict[str, str] = {}
         for expected in expected_papers:
-            paper = by_arxiv.get(expected.arxiv_id)
+            paper = matched.get(expected.id)
             if paper is None:
+                continue
+            if paper.sha256 != expected.sha256 or paper.page_count != expected.page_count:
+                stale.append(expected.id)
                 continue
             mapping[expected.id] = paper.id
             count = await session.scalar(

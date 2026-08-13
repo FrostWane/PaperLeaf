@@ -37,6 +37,10 @@ def configured_embedding_contract(config: Any, router: Any) -> EmbeddingContract
 
     dimensions = int(getattr(config, "embedding_dimensions", 0) or 0)
     revision = int(getattr(config, "embedding_index_revision", 1) or 1)
+    input_format = str(
+        getattr(config, "embedding_input_format", EMBEDDING_INPUT_FORMAT)
+        or EMBEDDING_INPUT_FORMAT
+    )
     if dimensions <= 0:
         return None
     providers = list(getattr(router, "providers", []) or [])
@@ -59,8 +63,10 @@ def configured_embedding_contract(config: Any, router: Any) -> EmbeddingContract
             model=model,
             dimensions=dimensions,
             revision=revision,
-            input_format=EMBEDDING_INPUT_FORMAT,
-            fingerprint=contract_fingerprint(model, dimensions, revision),
+            input_format=input_format,
+            fingerprint=contract_fingerprint(
+                model, dimensions, revision, input_format=input_format
+            ),
         )
     return None
 

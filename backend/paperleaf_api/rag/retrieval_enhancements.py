@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol
@@ -47,6 +49,71 @@ class SentenceWindow:
 
 class RerankScorer(Protocol):
     def score(self, query: str, documents: Sequence[str]) -> Sequence[float]: ...
+
+
+class MultiGranularLexicalScorer:
+    """以完整句窗、技术实体和字符片段进行确定性候选重排。"""
+
+    @staticmethod
+    def _terms(text: str) -> tuple[str, ...]:
+        normalized = " ".join(text.casefold().split())
+        latin = re.findall(r"[a-z0-9]+(?:[-_./][a-z0-9]+)*", normalized)
+        cjk_runs = re.findall(r"[\u3400-\u9fff]+", normalized)
+        cjk = [
+            run[index : index + 2]
+            for run in cjk_runs
+            for index in range(max(1, len(run) - 1))
+        ]
+        return tuple((*latin, *cjk))
+
+    def score(self, query: str, documents: Sequence[str]) -> Sequence[float]:
+        query_terms = self._terms(query)
+        if not query_terms:
+            return [0.0] * len(documents)
+        document_terms = [self._terms(document) for document in documents]
+        document_frequency = Counter(
+            term for terms in document_terms for term in set(terms)
+        )
+        total_documents = max(1, len(documents))
+        weighted_query = Counter(query_terms)
+
+        def weight(term: str) -> float:
+            return math.log((total_documents + 1) / (document_frequency[term] + 1)) + 1
+
+        query_weight = sum(count * weight(term) for term, count in weighted_query.items())
+        technical = {token.casefold() for token in technical_tokens(query)}
+        normalized_query = " ".join(query.casefold().split())
+        scores: list[float] = []
+        for document, terms in zip(documents, document_terms):
+            counts = Counter(terms)
+            matched_weight = sum(
+                min(count, counts.get(term, 0)) * weight(term)
+                for term, count in weighted_query.items()
+            )
+            coverage = matched_weight / query_weight if query_weight else 0.0
+            normalized_document = " ".join(document.casefold().split())
+            phrase_bonus = float(
+                bool(normalized_query and normalized_query in normalized_document)
+            )
+            technical_bonus = (
+                sum(token in normalized_document for token in technical) / len(technical)
+                if technical
+                else 0.0
+            )
+            density = min(1.0, sum(counts.get(term, 0) for term in weighted_query) / 12)
+            scores.append(
+                round(
+                    min(
+                        1.0,
+                        0.62 * coverage
+                        + 0.18 * technical_bonus
+                        + 0.12 * phrase_bonus
+                        + 0.08 * density,
+                    ),
+                    8,
+                )
+            )
+        return scores
 
 
 def _tokens(text: str) -> list[str]:
@@ -219,6 +286,8 @@ def rerank_evidence_by_sentence_windows(
     *,
     limit: int,
     rrf_weight: float = 0.35,
+    document_texts: Sequence[str] | None = None,
+    channel_name: str = "sentence_reranker",
 ) -> list[Evidence]:
     """以每页最高句窗分数融合原 RRF 分数，返回稳定页级排名。"""
 
@@ -226,9 +295,12 @@ def rerank_evidence_by_sentence_windows(
         raise ValueError("重排参数无效")
     documents: list[str] = []
     owners: list[int] = []
+    if document_texts is not None and len(document_texts) != len(candidates):
+        raise ValueError("重排页文本数量与候选数量不一致")
     for index, item in enumerate(candidates):
-        windows = sentence_windows(item.text)
-        rendered = [window.text for window in windows] or [item.text]
+        source_text = document_texts[index] if document_texts is not None else item.text
+        windows = sentence_windows(source_text)
+        rendered = [window.text for window in windows] or [source_text]
         documents.extend(rendered)
         owners.extend([index] * len(rendered))
     if not documents:
@@ -253,10 +325,10 @@ def rerank_evidence_by_sentence_windows(
                     item,
                     retrieval_score=fused,
                     retrieval_channels=tuple(
-                        dict.fromkeys((*item.retrieval_channels, "sentence_reranker"))
+                        dict.fromkeys((*item.retrieval_channels, channel_name))
                     ),
                     channel_scores=tuple(
-                        (*item.channel_scores, ("sentence_reranker", rerank_score))
+                        (*item.channel_scores, (channel_name, rerank_score))
                     ),
                 ),
             )

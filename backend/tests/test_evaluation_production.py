@@ -1,7 +1,10 @@
 import asyncio
 
 from paperleaf_api.evaluation_dataset import FrozenEvaluationCase
-from paperleaf_api.evaluation_production import evaluate_production_cases
+from paperleaf_api.evaluation_production import (
+    evaluate_production_cases,
+    paired_bootstrap_interval,
+)
 from paperleaf_api.rag.citations import Evidence
 
 
@@ -71,14 +74,23 @@ def test_production_evaluator_uses_frozen_scope_and_reports_cross_paper_metrics(
     assert "selective_answering" not in result
     assert result["retrieval_processors"] == {"per_paper_balance": 1}
     assert result["query_rewrite_reasons"] == {"broad_or_comparison_intent": 1}
-    assert result["case_results"][0]["retrieved"][0] == {
+    assert result["case_results"][0]["top_40"][0] == {
         "paper_id": "p1",
         "physical_page": 1,
         "chunk_id": "local-1:p1:c0",
-        "score": 0.9,
-        "channels": ["keyword", "vector"],
-        "matched_query": "BERT method",
+            "score": 0.9,
+            "channels": ["keyword", "vector"],
+            "channel_scores": [],
+            "matched_query": "BERT method",
+        }
+    assert result["page_micro_recall_at_k"]["value"] == 1.0
+    assert result["required_paper_coverage_at_k"]["value"] == 1.0
+    assert result["case_results"][0]["best_evidence_group"] == {
+        "required_pages": 2,
+        "retrieved_pages": 2,
+        "complete_hit": True,
     }
+    assert result["latency_cold_warm_ms"]["cold_start"]["sample_count"] == 1
     assert result["by_retrieval_dimension"]["long_evidence"] == {
         "status": "not_measured",
         "case_count": 0,
@@ -101,3 +113,11 @@ def test_production_evaluator_drops_out_of_scope_retrieval_and_counts_it() -> No
 
     assert result["invalid_retrieval_count"] == 1
     assert result["retrieval_recall_at_k"]["value"] == 0.0
+
+
+def test_paired_bootstrap_is_deterministic_and_uses_paired_delta() -> None:
+    first = paired_bootstrap_interval([0, 1, 0, 1], [1, 1, 1, 1], samples=1000)
+    second = paired_bootstrap_interval([0, 1, 0, 1], [1, 1, 1, 1], samples=1000)
+    assert first == second
+    assert first["sample_count"] == 4
+    assert first["mean_delta"] == 0.5

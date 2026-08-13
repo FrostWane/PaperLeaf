@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-formal-hidden-v1",
+  "manifest_sha256": "b13e5e18333117b3877f5d03ef2598e7b225692060b1a3d2604745dbe2839c91",
+  "questions_sha256": "ca630b46d757eeb2409f747426d67076bc1650f424da457d595f3c76187ac7a1",
+  "oracle_sha256": "5aa635a0d9830e9853b96fa979c5fe93088a4f000f4d9ec81c048bd334fd90ea",
+  "excluded_datasets": [
+    {
+      "dataset_id": "paperleaf-rag-v1",
+      "manifest_sha256": "8ba28472aef97056748d4d1ea1a815d8d3cce6d4fe8239ba2da53f7f27ee6d1d",
+      "paper_ids_sha256": "8a18c63fb191654fce05bf8977a7bf013996adf92930f8cdf70c7e94794a81ef",
+      "paper_count": 20
+    },
+    {
+      "dataset_id": "paperleaf-qasper-calibration-v1",
+      "manifest_sha256": "f9e415a0c9033c088191f5847c3f3e8bbc0e402893e4e367ee5d4c50e58ed45f",
+      "paper_ids_sha256": "c449ddcf296fa69417b5eb5aba5e3f5c6db493518c160ac5a159de97d5fe1f02",
+      "paper_count": 29
+    },
+    {
+      "dataset_id": "paperleaf-qasper-holdout-v1",
+      "manifest_sha256": "a54db5e95606e15ec3c333049f65f13d361103d978be01a56153582902a5046a",
+      "paper_ids_sha256": "573bc25d1f7923eb8dc61c0c8744fd278d3a1155900fc1c5e08993bc47af172b",
+      "paper_count": 55
+    },
+    {
+      "dataset_id": "paperleaf-qasper-selective-holdout-v2",
+      "manifest_sha256": "6cbaaf0ea3adb56a18a53f3d6223797ec00d7c9f961ca50321f63d01677332f0",
+      "paper_ids_sha256": "c7e8a2c35d66258e85a80101f69cc8346ddada7e6d6b3702aaf35113cae4be02",
+      "paper_count": 23
+    }
+  ],
+  "candidate_variants": [
+    "production_baseline",
+    "plain_embedding_control",
+    "contextual_embedding",
+    "per_paper_retrieval",
+    "weak_query_rewrite",
+    "multigranular_page_reranker",
+    "final_combined"
+  ],
+  "protocol": {
+    "k": 5,
+    "expected_case_count": 100,
+    "minimum_paper_count": 50,
+    "category_quotas": {
+      "single_paper": 50,
+      "cross_paper": 30,
+      "multi_evidence": 10,
+      "unanswerable": 10
+    },
+    "chunking_strategy": "structure_aware_v2",
+    "embedding_revision": 2,
+    "bootstrap_samples": 10000,
+    "bootstrap_seed": 20260814,
+    "hidden_run_policy": "single_formal_batch_no_post_reveal_tuning",
+    "legacy_minilm_reranker": "disabled",
+    "human_review_minimum": 30
+  },
+  "locked_at": "2026-08-13T16:28:09.153447+00:00",
+  "status": "frozen_before_first_run"
+}

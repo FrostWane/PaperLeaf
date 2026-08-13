@@ -1,0 +1,18 @@
+{
+  "dataset_id": "paperleaf-formal-hidden-v1",
+  "paper_count": 70,
+  "case_count": 100,
+  "category_counts": {
+    "cross_paper": 30,
+    "multi_evidence": 10,
+    "single_paper": 50,
+    "unanswerable": 10
+  },
+  "selection_seed": "paperleaf-formal-hidden-20260814",
+  "ground_truth_provenance": "qasper_human_annotations",
+  "cross_paper_construction": "three_qasper_questions_and_cartesian_evidence_groups",
+  "source_dataset_ids": [
+    "paperleaf-formal-hidden-answerable-base-v1",
+    "paperleaf-formal-unanswerable-base-v1"
+  ]
+}

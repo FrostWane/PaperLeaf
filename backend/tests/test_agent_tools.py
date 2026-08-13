@@ -223,6 +223,7 @@ def test_sql_search_runs_independent_channels_and_balances_papers(monkeypatch) -
         "p3",
     }
     assert [item.paper_id for item in evidence] == ["p1", "p2", "p3"]
+    assert [item.paper_id for item in search.last_candidate_snapshot] == ["p1", "p2", "p3"]
     assert search.rewrite_calls
     assert "broad_or_comparison_intent" in search.rewrite_calls[0][1]
 

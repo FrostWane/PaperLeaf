@@ -108,6 +108,9 @@ class Settings:
         os.getenv("PAPERLEAF_RAG_QUERY_REWRITE_MAX_QUERIES", "2")
     )
     rag_reranker_enabled: bool = _bool("PAPERLEAF_RAG_RERANKER_ENABLED", False)
+    rag_reranker_strategy: str = os.getenv(
+        "PAPERLEAF_RAG_RERANKER_STRATEGY", "multigranular_v1"
+    )
     rag_reranker_model: str = os.getenv(
         "PAPERLEAF_RAG_RERANKER_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2"
     )
@@ -139,6 +142,9 @@ class Settings:
     embedding_timeout_seconds: float = float(os.getenv("PAPERLEAF_EMBEDDING_TIMEOUT_SECONDS", "90"))
     embedding_batch_attempts: int = int(os.getenv("PAPERLEAF_EMBEDDING_BATCH_ATTEMPTS", "2"))
     embedding_index_revision: int = int(os.getenv("PAPERLEAF_EMBEDDING_INDEX_REVISION", "2"))
+    embedding_input_format: str = os.getenv(
+        "PAPERLEAF_EMBEDDING_INPUT_FORMAT", "paper_context_v2"
+    )
     fallback_openai_api_key: str | None = os.getenv("PAPERLEAF_FALLBACK_OPENAI_API_KEY")
     fallback_openai_base_url: str = os.getenv(
         "PAPERLEAF_FALLBACK_OPENAI_BASE_URL", "https://api.openai.com/v1"
@@ -303,8 +309,16 @@ class Settings:
             raise RuntimeError("重排候选数必须位于 5 到 100 之间")
         if not 0 < self.rag_reranker_timeout_seconds <= 30:
             raise RuntimeError("重排超时必须位于 0 到 30 秒之间")
-        if self.rag_reranker_enabled and not self.rag_reranker_model.strip():
+        if self.rag_reranker_strategy not in {"multigranular_v1", "legacy_cross_encoder"}:
+            raise RuntimeError("重排策略仅支持 multigranular_v1 或 legacy_cross_encoder")
+        if (
+            self.rag_reranker_enabled
+            and self.rag_reranker_strategy == "legacy_cross_encoder"
+            and not self.rag_reranker_model.strip()
+        ):
             raise RuntimeError("启用重排时必须配置重排模型")
+        if self.embedding_input_format not in {"chunk_text_v1", "paper_context_v2"}:
+            raise RuntimeError("Embedding 输入格式仅支持 chunk_text_v1 或 paper_context_v2")
         if self.redis_timeout_seconds <= 0 or self.redis_timeout_seconds > 5:
             raise RuntimeError("Redis 超时必须位于 0 到 5 秒之间")
         if self.agent_rate_limit_requests < 1:

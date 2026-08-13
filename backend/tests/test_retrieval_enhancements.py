@@ -1,5 +1,6 @@
 from paperleaf_api.rag.citations import Evidence
 from paperleaf_api.rag.retrieval_enhancements import (
+    MultiGranularLexicalScorer,
     assess_rewrite_need,
     balance_evidence_by_paper,
     contextual_embedding_text,
@@ -99,6 +100,54 @@ def test_sentence_reranker_uses_best_window_and_keeps_original_evidence() -> Non
     assert result[0].paper_id == "p2"
     assert result[0].text == "first sentence. needle appears here."
     assert "sentence_reranker" in result[0].retrieval_channels
+
+
+def test_multigranular_reranker_scores_full_page_but_keeps_original_chunk() -> None:
+    candidates = [
+        _evidence("p1", 1, 0.9, "short chunk without the requested entity"),
+        _evidence("p2", 2, 0.1, "original citation chunk"),
+    ]
+    result = rerank_evidence_by_sentence_windows(
+        "FlashAttention IO complexity",
+        candidates,
+        MultiGranularLexicalScorer(),
+        limit=2,
+        rrf_weight=0.2,
+        document_texts=[
+            "This page discusses an unrelated baseline.",
+            "FlashAttention reduces IO complexity between HBM and SRAM.",
+        ],
+        channel_name="multigranular_reranker",
+    )
+    assert result[0].paper_id == "p2"
+    assert result[0].text == "original citation chunk"
+    assert "multigranular_reranker" in result[0].retrieval_channels
+
+
+def test_multigranular_scorer_is_deterministic_for_chinese_and_english() -> None:
+    scorer = MultiGranularLexicalScorer()
+    documents = ["药物靶点结合亲和力 prediction", "image generation benchmark"]
+    assert scorer.score("药物靶点 affinity", documents) == scorer.score(
+        "药物靶点 affinity", documents
+    )
+    assert scorer.score("药物靶点 affinity", documents)[0] > scorer.score(
+        "药物靶点 affinity", documents
+    )[1]
+
+
+def test_reranker_rejects_mismatched_page_texts() -> None:
+    try:
+        rerank_evidence_by_sentence_windows(
+            "query",
+            [_evidence("p1", 1, 0.5)],
+            MultiGranularLexicalScorer(),
+            limit=1,
+            document_texts=[],
+        )
+    except ValueError as exc:
+        assert "数量" in str(exc)
+    else:
+        raise AssertionError("页文本数量不一致时必须失败")
 
 
 def test_contextual_embedding_contains_metadata_without_changing_chunk_text() -> None:

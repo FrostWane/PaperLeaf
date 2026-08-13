@@ -873,14 +873,19 @@ async def process_parse_job(job_id: str, claim_token: str | None = None) -> None
         and is_generated_title(paper.title, paper.filename, paper.arxiv_id)
         else paper.title
     )
-    embedding_documents = [
-        contextual_embedding_text(
-            paper_title=embedding_title,
-            physical_page=chunk.physical_page,
-            chunk_text=chunk.text,
-        )
-        for chunk in chunks
-    ]
+    embedding_documents = (
+        [chunk.text for chunk in chunks]
+        if embedding_contract is not None
+        and embedding_contract.input_format == "chunk_text_v1"
+        else [
+            contextual_embedding_text(
+                paper_title=embedding_title,
+                physical_page=chunk.physical_page,
+                chunk_text=chunk.text,
+            )
+            for chunk in chunks
+        ]
+    )
     embeddings = await embed_texts(embedding_documents)
     if embedding_contract is None:
         embedding_status = "unavailable"

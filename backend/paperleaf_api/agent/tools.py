@@ -20,9 +20,10 @@ from ..config import settings
 from ..db import get_session_factory
 from ..embedding_contract import configured_embedding_contract
 from ..model_runtime import ModelRouter, ModelRuntimeError, build_model_router
-from ..models import Paper, PaperChunk
+from ..models import Paper, PaperChunk, PaperPage
 from ..rag.citations import Evidence
 from ..rag.retrieval_enhancements import (
+    MultiGranularLexicalScorer,
     assess_rewrite_need,
     balance_evidence_by_paper,
     rerank_evidence_by_sentence_windows,
@@ -224,9 +225,13 @@ class SQLLibrarySearch:
         self._reranker_fallback_reason: ContextVar[object] = ContextVar(
             f"rag_reranker_fallback_{id(self)}", default=_DIAGNOSTIC_UNSET
         )
+        self._candidate_snapshot: ContextVar[object] = ContextVar(
+            f"rag_candidate_snapshot_{id(self)}", default=_DIAGNOSTIC_UNSET
+        )
         self._last_vector_fallback_snapshot: str | None = None
         self._last_rewrite_reasons_snapshot: tuple[str, ...] = ()
         self._last_reranker_fallback_snapshot: str | None = None
+        self._last_candidate_snapshot: tuple[Evidence, ...] = ()
 
     def _diagnostic_context_var(self, attribute: str) -> ContextVar[object]:
         value = getattr(self, attribute, None)
@@ -271,6 +276,20 @@ class SQLLibrarySearch:
     def last_reranker_fallback_reason(self, value: str | None) -> None:
         self._diagnostic_context_var("_reranker_fallback_reason").set(value)
         self._last_reranker_fallback_snapshot = value
+
+    @property
+    def last_candidate_snapshot(self) -> tuple[Evidence, ...]:
+        """返回同一次检索在页级去重后的候选池，供只读评测记录 Top-40。"""
+
+        value = self._diagnostic_context_var("_candidate_snapshot").get()
+        if value is _DIAGNOSTIC_UNSET:
+            return getattr(self, "_last_candidate_snapshot", ())
+        return value if isinstance(value, tuple) else ()
+
+    @last_candidate_snapshot.setter
+    def last_candidate_snapshot(self, value: tuple[Evidence, ...]) -> None:
+        self._diagnostic_context_var("_candidate_snapshot").set(value)
+        self._last_candidate_snapshot = value
 
     async def _embed_query(self, query: str) -> list[float] | None:
         self.last_vector_fallback_reason = None
@@ -862,8 +881,14 @@ class SQLLibrarySearch:
         if not bool(getattr(self.config, "rag_reranker_enabled", False)):
             return candidates[:limit]
         candidate_limit = int(getattr(self.config, "rag_reranker_candidate_limit", 40) or 40)
+        strategy = str(
+            getattr(self.config, "rag_reranker_strategy", "multigranular_v1")
+            or "multigranular_v1"
+        )
         try:
-            if self.reranker is None:
+            if self.reranker is None and strategy == "multigranular_v1":
+                self.reranker = MultiGranularLexicalScorer()
+            elif self.reranker is None and strategy == "legacy_cross_encoder":
                 self.reranker = await asyncio.wait_for(
                     asyncio.to_thread(
                         _FastEmbedRerankScorer,
@@ -871,13 +896,43 @@ class SQLLibrarySearch:
                     ),
                     timeout=float(getattr(self.config, "rag_reranker_timeout_seconds", 3.0) or 3.0),
                 )
+            elif self.reranker is None:
+                raise ValueError("unknown_reranker_strategy")
+            scoped = candidates[:candidate_limit]
+            page_texts: dict[tuple[str, int], str] = {}
+            if scoped:
+                conditions = [
+                    (PaperPage.paper_id == item.paper_id)
+                    & (PaperPage.physical_page == item.physical_page)
+                    for item in scoped
+                ]
+                async with get_session_factory()() as session:
+                    rows = await session.execute(
+                        select(PaperPage.paper_id, PaperPage.physical_page, PaperPage.text).where(
+                            or_(*conditions)
+                        )
+                    )
+                    page_texts = {
+                        (str(paper_id), int(physical_page)): text or ""
+                        for paper_id, physical_page, text in rows.all()
+                    }
+            documents = [
+                page_texts.get((item.paper_id, item.physical_page), "") or item.text
+                for item in scoped
+            ]
             return await asyncio.wait_for(
                 asyncio.to_thread(
                     rerank_evidence_by_sentence_windows,
                     query,
-                    candidates[:candidate_limit],
+                    scoped,
                     self.reranker,
                     limit=limit,
+                    document_texts=documents,
+                    channel_name=(
+                        "multigranular_reranker"
+                        if strategy == "multigranular_v1"
+                        else "legacy_sentence_reranker"
+                    ),
                 ),
                 timeout=float(getattr(self.config, "rag_reranker_timeout_seconds", 3.0) or 3.0),
             )
@@ -896,7 +951,16 @@ class SQLLibrarySearch:
         processors = [
             *(["per_paper_balance"] if per_paper else []),
             *(["weak_query_rewrite"] if "keyword_rewrite" in channels else []),
-            *(["sentence_window_rerank"] if "sentence_reranker" in channels else []),
+            *(
+                ["multigranular_page_rerank"]
+                if "multigranular_reranker" in channels
+                else []
+            ),
+            *(
+                ["legacy_sentence_window_rerank"]
+                if "legacy_sentence_reranker" in channels
+                else []
+            ),
         ]
         return [
             replace(
@@ -912,8 +976,11 @@ class SQLLibrarySearch:
         self.last_vector_fallback_reason = None
         self.last_rewrite_reasons = ()
         self.last_reranker_fallback_reason = None
+        self.last_candidate_snapshot = ()
         if len(request.paper_ids) == 1 and _is_scoped_overview_query(request.query):
-            return await self._scoped_overview_evidence(request)
+            overview = await self._scoped_overview_evidence(request)
+            self.last_candidate_snapshot = tuple(overview)
+            return overview
 
         candidate_limit = max(
             request.limit * 5,
@@ -1093,18 +1160,21 @@ class SQLLibrarySearch:
             limit=rerank_limit,
         )
         if per_paper:
-            return self._annotate_retrieval(
+            ranked = self._annotate_retrieval(
                 balance_evidence_by_paper(
                     candidates,
                     paper_ids=request.paper_ids,
-                    limit=request.limit,
+                    limit=candidate_limit,
                     per_paper_limit=int(
                         getattr(self.config, "rag_per_paper_candidate_limit", 5) or 5
                     ),
                 ),
                 per_paper=True,
             )
-        return self._annotate_retrieval(
-            deduplicate_evidence_by_page(candidates, limit=request.limit),
-            per_paper=False,
-        )
+        else:
+            ranked = self._annotate_retrieval(
+                deduplicate_evidence_by_page(candidates, limit=candidate_limit),
+                per_paper=False,
+            )
+        self.last_candidate_snapshot = tuple(ranked)
+        return ranked[: request.limit]
