@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -64,26 +65,69 @@ class CorpusPreparer:
                 await asyncio.sleep(2**attempt)
         raise RuntimeError(f"请求 {path} 连续 {attempts} 次失败") from last_error
 
+    async def upload_with_retry(
+        self, path: Path, *, title: str, attempts: int = 3
+    ) -> httpx.Response:
+        content = path.read_bytes()
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                response = await self.client.post(
+                    "/api/v1/papers",
+                    headers=self.headers(),
+                    files={"file": (path.name, content, "application/pdf")},
+                    data={"title": title},
+                )
+                if response.status_code not in {429, 502, 503, 504}:
+                    return response
+                last_error = RuntimeError(f"HTTP {response.status_code}")
+            except httpx.RequestError as exc:
+                last_error = exc
+            if attempt + 1 < attempts:
+                await asyncio.sleep(2**attempt)
+        raise RuntimeError(f"上传 {path.name} 连续 {attempts} 次失败") from last_error
+
     async def papers(self) -> list[dict[str, Any]]:
         response = await self.client.get("/api/v1/papers")
         response.raise_for_status()
         return list(response.json())
 
     async def ensure_manifest(
-        self, manifest_path: Path, *, force_reindex: bool = False
+        self,
+        manifest_path: Path,
+        *,
+        force_reindex: bool = False,
+        pdf_dirs: list[Path] | None = None,
     ) -> dict[str, Any]:
         manifest = read_manifest(manifest_path)
         existing = await self.papers()
         existing_sha = {str(item.get("sha256")): item for item in existing}
         existing_arxiv = {str(item.get("arxiv_id")): item for item in existing}
         submitted = 0
+        uploaded = 0
         for paper in manifest.papers:
             if paper.sha256 in existing_sha or paper.arxiv_id in existing_arxiv:
                 continue
-            response = await self.post_with_retry(
-                "/api/v1/discover/arxiv/import",
-                payload={"arxiv_id": paper.arxiv_id},
+            local_pdf = next(
+                (
+                    directory / paper.filename
+                    for directory in pdf_dirs or []
+                    if (directory / paper.filename).is_file()
+                ),
+                None,
             )
+            if local_pdf is not None:
+                if local_pdf.stat().st_size <= 10 * 1024:
+                    raise RuntimeError(f"本地 PDF 过小：{paper.filename}")
+                if hashlib.sha256(local_pdf.read_bytes()).hexdigest() != paper.sha256:
+                    raise RuntimeError(f"本地 PDF SHA-256 不匹配：{paper.filename}")
+                response = await self.upload_with_retry(local_pdf, title=paper.title)
+                uploaded += int(response.status_code == 201)
+            else:
+                response = await self.post_with_retry(
+                    "/api/v1/discover/arxiv/import",
+                    payload={"arxiv_id": paper.arxiv_id},
+                )
             if response.status_code not in {201, 409}:
                 raise RuntimeError(
                     f"导入 {paper.arxiv_id} 失败：HTTP {response.status_code}"
@@ -149,6 +193,7 @@ class CorpusPreparer:
                     "dataset_id": manifest.dataset_id,
                     "paper_count": manifest.paper_count,
                     "submitted": submitted,
+                    "uploaded": uploaded,
                     "reindexed": reindexed,
                     "embedding_revision": settings.embedding_index_revision,
                     "embedding_input_format": settings.embedding_input_format,
@@ -162,7 +207,11 @@ async def _run(args: argparse.Namespace) -> list[dict[str, Any]]:
     try:
         await preparer.login()
         return [
-            await preparer.ensure_manifest(path, force_reindex=args.force_reindex)
+            await preparer.ensure_manifest(
+                path,
+                force_reindex=args.force_reindex,
+                pdf_dirs=args.pdf_dir,
+            )
             for path in args.manifest
         ]
     finally:
@@ -175,6 +224,13 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://api:8000")
     parser.add_argument("--timeout-seconds", type=int, default=7200)
     parser.add_argument("--force-reindex", action="store_true")
+    parser.add_argument(
+        "--pdf-dir",
+        action="append",
+        type=Path,
+        default=[],
+        help="优先从精确 PDF 缓存上传；可重复提供。缺失时回退 arXiv 导入。",
+    )
     args = parser.parse_args()
     print(json.dumps(asyncio.run(_run(args)), ensure_ascii=False, indent=2))
 
