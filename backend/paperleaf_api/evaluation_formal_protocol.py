@@ -66,6 +66,27 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _canonical_text(path: Path, *, newline: str) -> bytes:
+    text = path.read_text(encoding="utf-8")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return newline.join(normalized.split("\n")).encode("utf-8")
+
+
+def matches_locked_text_sha(path: Path, expected: str) -> bool:
+    """接受相同文本的 LF/CRLF 哈希，内容变化仍会失败。
+
+    GitHub Actions 使用 LF checkout，而冻结文件最初在 Windows 以 CRLF 写入。
+    冻结对象是规范化文本内容，不应把平台换行误报为数据漂移。
+    """
+
+    candidates = {
+        sha256_file(path),
+        hashlib.sha256(_canonical_text(path, newline="\n")).hexdigest(),
+        hashlib.sha256(_canonical_text(path, newline="\r\n")).hexdigest(),
+    }
+    return expected in candidates
+
+
 def _base_id(value: str) -> str:
     return re.sub(r"v\d+$", "", value.removeprefix("arxiv:"))
 
@@ -185,9 +206,9 @@ def verify_public_formal_inputs(
 ) -> dict[str, Any]:
     """在 CI 不读取私有 oracle 的情况下校验公开冻结材料。"""
 
-    if sha256_file(manifest_path) != lock.manifest_sha256:
+    if not matches_locked_text_sha(manifest_path, lock.manifest_sha256):
         raise ValueError("正式评测 manifest 哈希漂移")
-    if sha256_file(questions_path) != lock.questions_sha256:
+    if not matches_locked_text_sha(questions_path, lock.questions_sha256):
         raise ValueError("正式评测 questions 哈希漂移")
     manifest = read_manifest(manifest_path)
     questions = read_questions(questions_path)
@@ -214,7 +235,7 @@ def verify_public_formal_inputs(
         ids = {_base_id(paper.id) for paper in excluded.papers}
         if (
             expected is None
-            or sha256_file(path) != expected.manifest_sha256
+            or not matches_locked_text_sha(path, expected.manifest_sha256)
             or _paper_ids_sha256(ids) != expected.paper_ids_sha256
             or len(ids) != expected.paper_count
         ):
