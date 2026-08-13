@@ -40,3 +40,7 @@
 
 人工盲评至少需要真实人员完成 30 道答案的事实正确性、完整性、引用有用性与总体
 偏好。评分表未由真实人员填写前，整体结论保持 `human_review_pending`。
+
+Embedding 消融通过 `evaluation_corpus_prepare --force-reindex` 显式重建同一批 Chunk
+的向量。执行 plain 对照时使用 revision 1 / `chunk_text_v1`，随后恢复 revision 2 /
+`paper_context_v2`；两个空间不能混用，执行器会校验每篇论文的统一指纹。

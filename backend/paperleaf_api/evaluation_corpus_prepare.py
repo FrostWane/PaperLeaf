@@ -49,7 +49,9 @@ class CorpusPreparer:
         response.raise_for_status()
         return list(response.json())
 
-    async def ensure_manifest(self, manifest_path: Path) -> dict[str, Any]:
+    async def ensure_manifest(
+        self, manifest_path: Path, *, force_reindex: bool = False
+    ) -> dict[str, Any]:
         manifest = read_manifest(manifest_path)
         existing = await self.papers()
         existing_sha = {str(item.get("sha256")): item for item in existing}
@@ -75,6 +77,28 @@ class CorpusPreparer:
                 )
             submitted += int(response.status_code == 201)
 
+        reindexed = 0
+        if force_reindex:
+            refreshed = await self.papers()
+            by_sha = {str(item.get("sha256")): item for item in refreshed}
+            targets = [
+                str(by_sha[paper.sha256]["id"])
+                for paper in manifest.papers
+                if paper.sha256 in by_sha
+                and by_sha[paper.sha256].get("status") == "ready"
+            ]
+            if len(targets) != manifest.paper_count:
+                raise RuntimeError("强制重索引前必须确保清单论文全部已 ready")
+            for start in range(0, len(targets), 100):
+                batch = targets[start : start + 100]
+                response = await self.client.post(
+                    "/api/v1/papers/bulk",
+                    headers=self.headers(),
+                    json={"paper_ids": batch, "action": "reindex"},
+                )
+                response.raise_for_status()
+                reindexed += int(response.json().get("affected", 0))
+
         deadline = time.monotonic() + self.timeout_seconds
         while time.monotonic() < deadline:
             current = await self.papers()
@@ -94,7 +118,8 @@ class CorpusPreparer:
                 and (
                     by_sha[paper.sha256].get("status") != "ready"
                     or by_sha[paper.sha256].get("embedding_status") != "ready"
-                    or by_sha[paper.sha256].get("embedding_index_revision") != 2
+                    or by_sha[paper.sha256].get("embedding_index_revision")
+                    != settings.embedding_index_revision
                 )
             ]
             if not missing and not pending:
@@ -112,6 +137,9 @@ class CorpusPreparer:
                     "dataset_id": manifest.dataset_id,
                     "paper_count": manifest.paper_count,
                     "submitted": submitted,
+                    "reindexed": reindexed,
+                    "embedding_revision": settings.embedding_index_revision,
+                    "embedding_input_format": settings.embedding_input_format,
                 }
             await asyncio.sleep(5)
         raise TimeoutError(f"评测语料未在期限内就绪：missing={missing}, pending={pending}")
@@ -121,7 +149,10 @@ async def _run(args: argparse.Namespace) -> list[dict[str, Any]]:
     preparer = CorpusPreparer(args.base_url, args.timeout_seconds)
     try:
         await preparer.login()
-        return [await preparer.ensure_manifest(path) for path in args.manifest]
+        return [
+            await preparer.ensure_manifest(path, force_reindex=args.force_reindex)
+            for path in args.manifest
+        ]
     finally:
         await preparer.close()
 
@@ -131,6 +162,7 @@ def main() -> None:
     parser.add_argument("--manifest", action="append", required=True, type=Path)
     parser.add_argument("--base-url", default="http://api:8000")
     parser.add_argument("--timeout-seconds", type=int, default=7200)
+    parser.add_argument("--force-reindex", action="store_true")
     args = parser.parse_args()
     print(json.dumps(asyncio.run(_run(args)), ensure_ascii=False, indent=2))
 
