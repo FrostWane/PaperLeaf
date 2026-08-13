@@ -7,6 +7,7 @@ from paperleaf_api.evaluation_formal_protocol import (
     FormalEvaluationLock,
     verify_public_formal_inputs,
 )
+from paperleaf_api.evaluation_holdout import read_questions
 
 
 def test_formal_lock_requires_exact_preregistered_variants() -> None:
@@ -84,3 +85,14 @@ def test_repository_formal_hidden_public_inputs_are_frozen() -> None:
         "case_count": 100,
         "oracle_sha256": lock.oracle_sha256,
     }
+
+
+def test_formal_hidden_contains_frozen_chinese_and_english_buckets() -> None:
+    backend = Path(__file__).resolve().parents[1]
+    dataset = backend / "evaluation" / "datasets" / "paperleaf-formal-hidden-v1"
+    questions = read_questions(dataset / "questions.jsonl")
+    chinese = sum(
+        any("\u4e00" <= char <= "\u9fff" for char in item.query) for item in questions
+    )
+    assert chinese == 50
+    assert len(questions) - chinese == 50
