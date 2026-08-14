@@ -2043,6 +2043,7 @@ async def execute_agent_run(
     validated: list[tuple[str, str, list[CitationClaim]]] = []
     dropped_paragraphs = 0
     external_metadata_answer = bool(result.get("external_metadata_answer"))
+    answerability_abstained = result.get("answerability_status") == "unanswerable"
     semantic_support_suppressed = str(
         quality.get("answer_support_grade", "")
     ) == "unsupported" and str(quality.get("reason_code", "")) not in {
@@ -2077,6 +2078,8 @@ async def execute_agent_run(
     citation_validation_started_at = time.perf_counter()
     if external_metadata_answer:
         validated.append((answer, "external_metadata", []))
+    elif answerability_abstained:
+        validated.append((answer, "controlled_notice", []))
     elif semantic_support_suppressed:
         validated.append((answer, "controlled_notice", []))
     else:
@@ -2102,6 +2105,7 @@ async def execute_agent_run(
         evidence
         and not has_cited_answer
         and not external_metadata_answer
+        and not answerability_abstained
         and not semantic_support_suppressed
     ):
         await _finish_observed_run(

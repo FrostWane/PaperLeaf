@@ -306,6 +306,60 @@ def test_rejected_function_tool_is_visible_then_legacy_retrieval_runs() -> None:
     asyncio.run(scenario())
 
 
+def test_answerability_abstention_is_published_instead_of_unverified_failure() -> None:
+    async def scenario() -> None:
+        repository = MemoryRepository("secret")
+        session = await repository.create_chat_session(
+            "u1", "不可回答门禁", "library", None, None
+        )
+        submission = await repository.submit_chat_message(
+            session.id,
+            "u1",
+            "论文没有报告的预算是多少？",
+            "answerability-abstain-client",
+            "answerability-abstain-hash",
+            {"type": "library", "paper_ids": ["p1"], "web_enabled": False},
+        )
+        assert submission is not None
+        claim_token = await repository.claim_agent_run_job(submission.run.id)
+        assert claim_token is not None
+        evidence = [Evidence("c1", "p1", "论文一", 2, "论文只介绍了研究方法。")]
+        graph = ResultGraph(
+            {
+                "status": "completed",
+                "answer": "当前证据没有直接提供所问信息。",
+                "retrieved_evidence": evidence,
+                "citations": [],
+                "answerability_status": "unanswerable",
+                "evidence_quality": {
+                    "grade": "insufficient",
+                    "reason_code": "question_not_answered_by_evidence",
+                },
+                "tool_steps": 1,
+            }
+        )
+
+        await execute_agent_run(
+            repository,
+            graph,
+            submission.run.id,
+            claim_token,
+            answer_quality_policy=AnswerQualityPolicy(),
+        )
+
+        run = await repository.get_agent_run(submission.run.id)
+        assert run is not None and run.status == "completed"
+        assert run.error_code is None
+        assert run.result_summary["rag_trace"]["outcome"] == "abstained"
+        messages = await repository.list_chat_messages(session.id, "u1")
+        assert messages is not None
+        assistant = next(message for message in messages if message.role == "assistant")
+        assert assistant.content == "当前证据没有直接提供所问信息。"
+        assert assistant.citations == []
+
+    asyncio.run(scenario())
+
+
 def test_parallel_compare_uses_one_parent_run_and_safe_branch_events() -> None:
     """确定性集成：3 篇比较走并行 Map-Reduce，Graph 仍负责最终回答门禁。"""
 
