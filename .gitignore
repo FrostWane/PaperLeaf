@@ -63,4 +63,5 @@ __pycache__/
 /backend/evaluation/datasets/**/pdfs/
 /backend/evaluation/**/predictions/
 /backend/outputs/private/
+/backend/evaluation/outputs/private/
 ops/grafana/grafana.tar.gz

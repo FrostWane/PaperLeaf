@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "historical_database_audit": {
+    "specialist_branch_timeout_count": 14,
+    "specialist_schema_failure_count": 6,
+    "note": "历史混合版本负结果，仅作返工起点，不能与单次冻结批次计算显著性。"
+  },
+  "frozen_30_run_batch": {
+    "git_sha": "a4ebe834145344c3bcfc773b4051d1f81dd5d549",
+    "agent_runs": {"numerator": 30, "denominator": 30, "value": 1.0},
+    "branches": 81,
+    "succeeded_branches": 76,
+    "timeout_branches": 0,
+    "schema_failed_branches": 5,
+    "branch_success_rate": {"numerator": 76, "denominator": 81, "value": 0.9382716049}
+  },
+  "schema_retry_regression": {
+    "git_sha": "bdd052b5fcb23e8f12b7efbaf1b8b4261ef3a402",
+    "agent_runs": 4,
+    "branches": 9,
+    "succeeded_branches": 7,
+    "timeout_branches": 0,
+    "schema_failed_branches": 2,
+    "conclusion": "仅增加一次 Schema 重试仍不足。"
+  },
+  "schema_fallback_regression": {
+    "git_sha": "de3d92b7f2fbc9d56ed351caff76703e20ea2702",
+    "agent_runs": {"numerator": 4, "denominator": 4, "value": 1.0},
+    "branches": 12,
+    "succeeded_branches": 11,
+    "timeout_branches": 1,
+    "schema_failed_branches": 0,
+    "schema_fallback_branches": 4,
+    "branch_success_rate": {"numerator": 11, "denominator": 12, "value": 0.9166666667}
+  },
+  "timeout_fallback_targeted_regression": {
+    "git_sha": "0fda1a53e53fbb860786f695f16dc887adf3e8b9",
+    "agent_runs": {"numerator": 1, "denominator": 1, "value": 1.0},
+    "branches": 3,
+    "succeeded_branches": 3,
+    "timeout_branches": 0,
+    "schema_failed_branches": 0,
+    "schema_fallback_branches": 1,
+    "timeout_fallback_branches": 1,
+    "branch_success_rate": {"numerator": 3, "denominator": 3, "value": 1.0},
+    "note": "定向复跑唯一超时案例；不是新的 30 Run 泛化结论。"
+  },
+  "human_review_status": "human_review_pending",
+  "quality_claim": "quality_pending"
+}

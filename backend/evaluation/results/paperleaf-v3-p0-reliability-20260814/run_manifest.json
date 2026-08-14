@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "evaluation_role": "diagnostic_not_blind",
+  "generated_at": "2026-08-14T06:22:59.0359171Z",
+  "feature_flag_default": false,
+  "provider": "DeepSeek",
+  "embedding": {
+    "provider": "fallback",
+    "model": "qwen3-embedding:0.6b",
+    "dimensions": 1024,
+    "revision": 2,
+    "input_format": "paper_context_v2",
+    "fingerprint": "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+  },
+  "timeouts_seconds": {
+    "specialist_branch": 60,
+    "specialist_total": 180
+  },
+  "raw_private_outputs": [
+    {
+      "file": "v3-p0-batch1-20260814.json",
+      "sha256": "42b6a381454f407656f2b067c69bdfd55e192252c3d045026e8fa2fee2bd99a2"
+    },
+    {
+      "file": "v3-p0-batch2-20260814.json",
+      "sha256": "b3156a13d6a20bff792a0837bb9bd29dcaefeb756557722096a37b442d56fd28"
+    },
+    {
+      "file": "v3-p0-schema-fallback-rerun-20260814.json",
+      "sha256": "3ec727ef7efd3951af85de525f632d8cb11c695311477dc7e44e8c428d1c1d19"
+    },
+    {
+      "file": "v3-p0-timeout-fallback-rerun-20260814.json",
+      "sha256": "d9525e51626677ca44d62a6c0cea012897c2e17cd0b73801de3a911fa8359494"
+    }
+  ],
+  "evidence_scope": "原始回答与逐 Run 数据保存在 gitignored private outputs；本目录只提交低敏聚合、配置和哈希。"
+}

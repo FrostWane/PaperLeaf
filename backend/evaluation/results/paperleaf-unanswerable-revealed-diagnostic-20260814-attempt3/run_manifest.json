@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "status": "failed_wrong_answers",
+  "evaluation_role": "diagnostic_not_blind",
+  "generated_at": "2026-08-14T04:06:17.378678+00:00",
+  "git_sha": "6a2327adbf7223818c5882616c3e9de57d129bae",
+  "source_answers_sha256": "688b7fbc0e6c8bd741f96ea7874f79e867a7d30cd0de1afa780a830a0f361cb5",
+  "answerability_dev_result_sha256": "25a5813437eae22a14848fda67366d6f82cc1f32175992fca86e4d4401a3bebb",
+  "case_count": 10,
+  "threshold_was_frozen_before_run": true,
+  "threshold_tuning_after_run_allowed": false,
+  "preflight": {
+    "status": "ready",
+    "reason": null,
+    "missing_papers": [],
+    "missing_chunks": [],
+    "stale_or_incompatible": [],
+    "embedding_contract": {
+      "provider": "fallback",
+      "model": "qwen3-embedding:0.6b",
+      "dimensions": 1024,
+      "revision": 2,
+      "input_format": "paper_context_v2",
+      "fingerprint": "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+    }
+  },
+  "artifacts": {
+    "per_query_results.jsonl": "1076da2d5c907167d413f3378637cf1d6f2b9e7df404d7cbac3fdaefe31e1736",
+    "metrics.json": "567b784ec567d07e7feaea28194dcb63551e573672796ce7edc58c8b08585eb6",
+    "label_adjudication.jsonl": "f9850a677fe9ce14babeaa1d543418cdd6ddc1c08cc4bc21de186735569dfbfb"
+  }
+}
