@@ -94,5 +94,56 @@ def test_combine_captures_requires_same_frozen_protocol() -> None:
     combined = combine_captures([first, second])
     assert [item["case_id"] for item in combined["pairs"]] == ["c1", "c2"]
     assert combined["capture_content_hashes"] == ["a", "b"]
+    assert len(combined["capture_content_hash"]) == 64
     with pytest.raises(ValueError, match="口径不一致"):
         combine_captures([first, {**second, "token_measurement": "provider_billed"}])
+
+
+def test_three_way_reports_latency_branches_and_conservative_estimated_cost() -> None:
+    variant = _variant(completed=True, support=(1, 1), citations=(1, 1))
+    variant["duration_ms"] = 300
+    variant["branches"] = {"planned": 3, "succeeded": 2, "failed": 0, "timed_out": 1}
+    variant["measurements"]["branch_metrics"] = {
+        "status": "measured",
+        "value": [
+            {
+                "input_tokens": 60,
+                "output_tokens": 10,
+                "error_category": "schema",
+            }
+        ],
+    }
+    capture = {
+        "capture_content_hash": "hash",
+        "token_measurement": "estimated_not_provider_billed_usage",
+        "pairs": [
+            {
+                "case_metrics": {"expected_claim_count": 1, "required_paper_count": 1},
+                "v1": variant,
+                "v2": variant,
+                "v3": variant,
+            }
+        ],
+    }
+    pricing = {
+        "model": "deepseek-v4-flash",
+        "input_cache_miss_usd_per_million": 0.14,
+        "output_usd_per_million": 0.28,
+    }
+    report = evaluate_three_way(capture, [], pricing_snapshot=pricing)
+    v3 = report["variants"]["v3"]
+    assert v3["latency_ms"] == {"p50": 300, "p95": 300}
+    assert v3["branches"]["success_rate"] == {
+        "numerator": 2,
+        "denominator": 3,
+        "value": 2 / 3,
+    }
+    assert v3["branches"]["timeout_rate"]["value"] == 1 / 3
+    assert v3["branch_error_categories"] == {"schema": 1}
+    assert v3["estimated_tokens"] == {
+        "input": 160,
+        "output": 30,
+        "coverage": "partial_model_calls",
+    }
+    assert v3["monetary_cost"]["status"] == "estimated_from_partial_token_telemetry"
+    assert v3["monetary_cost"]["value_usd"] == pytest.approx(0.0000308)

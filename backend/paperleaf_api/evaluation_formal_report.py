@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ COMPARISONS = (
     ("contextual_embedding", "multigranular_page_reranker", "页级多粒度重排"),
     ("production_baseline", "final_combined", "最终组合方案"),
 )
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -33,16 +36,12 @@ def _case_scores(case: dict[str, Any]) -> dict[str, float | None]:
     coverage = case["required_paper_coverage"]
     return {
         "page_recall": (
-            group["retrieved_pages"] / group["required_pages"]
-            if group["required_pages"]
-            else None
+            group["retrieved_pages"] / group["required_pages"] if group["required_pages"] else None
         ),
         "mrr": 1 / min(ranks) if ranks else 0.0,
         "complete_group_hit": float(group["complete_hit"]),
         "required_paper_coverage": (
-            coverage["numerator"] / coverage["denominator"]
-            if coverage["denominator"]
-            else None
+            coverage["numerator"] / coverage["denominator"] if coverage["denominator"] else None
         ),
     }
 
@@ -54,9 +53,7 @@ def _paired(
     right_by_id = {item["case_id"]: _case_scores(item)[metric] for item in candidate}
     if set(left_by_id) != set(right_by_id):
         raise RuntimeError("消融方案逐题 ID 不一致")
-    pairs = [
-        (left_by_id[case_id], right_by_id[case_id]) for case_id in sorted(left_by_id)
-    ]
+    pairs = [(left_by_id[case_id], right_by_id[case_id]) for case_id in sorted(left_by_id)]
     usable = [(left, right) for left, right in pairs if left is not None and right is not None]
     if not usable:
         return {"status": "not_measured", "reason": "no_eligible_cases"}
@@ -64,6 +61,88 @@ def _paired(
         [float(left) for left, _right in usable],
         [float(right) for _left, right in usable],
     )
+
+
+def _nearest_rank(values: list[int], quantile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(len(ordered) * quantile) - 1)]
+
+
+def _bucket_metrics(subset: list[dict[str, Any]]) -> dict[str, Any]:
+    answerable = [row for row in subset if row.get("answerable")]
+    page_numerator = sum(int(row["best_evidence_group"]["retrieved_pages"]) for row in answerable)
+    page_denominator = sum(int(row["best_evidence_group"]["required_pages"]) for row in answerable)
+    reciprocal_sum = 0.0
+    for row in answerable:
+        ranks = [
+            int(item["rank"])
+            for item in row["gold_page_ranks"]
+            if item.get("rank") is not None and int(item["rank"]) <= 5
+        ]
+        reciprocal_sum += 1 / min(ranks) if ranks else 0.0
+    group_hits = sum(bool(row["best_evidence_group"]["complete_hit"]) for row in answerable)
+    required_numerator = sum(int(row["required_paper_coverage"]["numerator"]) for row in subset)
+    required_denominator = sum(int(row["required_paper_coverage"]["denominator"]) for row in subset)
+    unanswerable = [row for row in subset if not row.get("answerable")]
+    false_retrievals = sum(bool(row.get("top_5")) for row in unanswerable)
+    latencies = [int(row["latency_ms"]) for row in subset]
+    return {
+        "case_count": len(subset),
+        "page_micro_recall_at_5": {
+            "numerator": page_numerator,
+            "denominator": page_denominator,
+            "value": page_numerator / page_denominator if page_denominator else None,
+        },
+        "mrr_at_5": {
+            "numerator": reciprocal_sum,
+            "denominator": len(answerable),
+            "value": reciprocal_sum / len(answerable) if answerable else None,
+        },
+        "complete_evidence_group_at_5": {
+            "numerator": group_hits,
+            "denominator": len(answerable),
+            "value": group_hits / len(answerable) if answerable else None,
+        },
+        "required_paper_coverage_at_5": {
+            "numerator": required_numerator,
+            "denominator": required_denominator,
+            "value": (required_numerator / required_denominator if required_denominator else None),
+        },
+        "unanswerable_false_retrieval_rate": {
+            "numerator": false_retrievals,
+            "denominator": len(unanswerable),
+            "value": false_retrievals / len(unanswerable) if unanswerable else None,
+        },
+        "latency_ms": {
+            "p50": _nearest_rank(latencies, 0.50),
+            "p95": _nearest_rank(latencies, 0.95),
+        },
+    }
+
+
+def _language_bucket_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """从冻结逐题结果补齐中英文桶，不重新运行检索。"""
+
+    return {
+        name: _bucket_metrics([row for row in rows if predicate(str(row.get("query", "")))])
+        for name, predicate in (
+            ("cjk_query", lambda query: bool(_CJK_RE.search(query))),
+            ("latin_query", lambda query: not _CJK_RE.search(query)),
+        )
+    }
+
+
+def _frozen_category_metrics(
+    rows: list[dict[str, Any]], category_by_id: dict[str, str]
+) -> dict[str, Any]:
+    return {
+        category: _bucket_metrics(
+            [row for row in rows if category_by_id.get(str(row["case_id"])) == category]
+        )
+        for category in sorted(set(category_by_id.values()))
+    }
 
 
 def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
@@ -106,9 +185,7 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
             "baseline": baseline,
             "candidate": candidate,
             "paired_bootstrap_95ci": {
-                metric: _paired(
-                    variants[baseline]["rows"], variants[candidate]["rows"], metric
-                )
+                metric: _paired(variants[baseline]["rows"], variants[candidate]["rows"], metric)
                 for metric in (
                     "page_recall",
                     "mrr",
@@ -117,6 +194,12 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
                 )
             },
         }
+    oracle_path = root / "ground_truth_oracle.jsonl"
+    category_by_id = (
+        {str(item["id"]): str(item["category"]) for item in _read_jsonl(oracle_path)}
+        if oracle_path.exists()
+        else {}
+    )
     output_metrics = {
         "schema_version": 1,
         "status": "retrieval_completed_human_review_pending",
@@ -126,7 +209,18 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
             "case_count": common_dataset[4],
             "chunk_snapshot_sha256": common_chunk_snapshot,
         },
-        "variants": {name: value["metrics"] for name, value in variants.items()},
+        "variants": {
+            name: {
+                **value["metrics"],
+                "by_query_language": _language_bucket_metrics(value["rows"]),
+                **(
+                    {"by_frozen_category": _frozen_category_metrics(value["rows"], category_by_id)}
+                    if category_by_id
+                    else {}
+                ),
+            }
+            for name, value in variants.items()
+        },
         "comparisons": comparisons,
     }
     (root / "per_query_results.jsonl").write_text(
@@ -147,9 +241,7 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
         "variants": {
             name: {
                 "run_manifest_sha256": sha256_file(root / name / "run_manifest.json"),
-                "per_query_results_sha256": sha256_file(
-                    root / name / "per_query_results.jsonl"
-                ),
+                "per_query_results_sha256": sha256_file(root / name / "per_query_results.jsonl"),
                 "metrics_sha256": sha256_file(root / name / "metrics.json"),
             }
             for name in FORMAL_VARIANTS

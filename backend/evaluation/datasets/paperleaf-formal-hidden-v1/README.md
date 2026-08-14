@@ -4,6 +4,11 @@
 冻结协议和构建回执；人工证据 oracle 在首次运行前保存在私有证据目录中，SHA-256
 已写入 `lock.json`。
 
+首次正式批次完成后，为便于第三方复核，已将运行前冻结的 oracle 原样发布为
+`backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/ground_truth_oracle.jsonl`。
+该文件 SHA-256 与 `lock.json` 中预先登记的值一致；数据集自此已揭盲，只能用于
+复核和诊断，不能再次产生“首次隐藏集”结论。
+
 数据集包含 70 篇未出现在既有 PaperLeaf RAG/QASPER 开发与评测集中的论文，问题
 与页级证据来自 QASPER 人工标注。固定配额为：
 

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import Counter
@@ -32,6 +33,13 @@ def _p95(values: list[int]) -> int | None:
     return ordered[max(0, math.ceil(len(ordered) * 0.95) - 1)]
 
 
+def _p50(values: list[int]) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(len(ordered) * 0.50) - 1)]
+
+
 def _measured(result: dict[str, Any], key: str) -> Any | None:
     value = dict(result.get("measurements", {})).get(key)
     if not isinstance(value, dict) or value.get("status") != "measured":
@@ -39,7 +47,9 @@ def _measured(result: dict[str, Any], key: str) -> Any | None:
     return value.get("value")
 
 
-def aggregate_capture(report: dict[str, Any]) -> dict[str, Any]:
+def aggregate_capture(
+    report: dict[str, Any], pricing_snapshot: dict[str, Any] | None = None
+) -> dict[str, Any]:
     metrics: dict[str, dict[str, Any]] = {}
     for version in VERSIONS:
         executed = completed = fallback = 0
@@ -51,6 +61,7 @@ def aggregate_capture(report: dict[str, Any]) -> dict[str, Any]:
         model_calls = tool_calls = 0
         estimated_input = estimated_output = 0
         branch_tokens_in = branch_tokens_out = 0
+        branches_planned = branches_succeeded = branches_failed = branches_timed_out = 0
         branch_errors: Counter[str] = Counter()
         for pair in report.get("pairs", []):
             result = pair.get(version, {})
@@ -59,6 +70,12 @@ def aggregate_capture(report: dict[str, Any]) -> dict[str, Any]:
             executed += 1
             completed += int(result.get("run_status") == "completed")
             fallback += int(bool(result.get("fallback_to_v1")))
+            branches = result.get("branches", {})
+            if isinstance(branches, dict):
+                branches_planned += int(branches.get("planned", 0) or 0)
+                branches_succeeded += int(branches.get("succeeded", 0) or 0)
+                branches_failed += int(branches.get("failed", 0) or 0)
+                branches_timed_out += int(branches.get("timed_out", 0) or 0)
             if isinstance(result.get("duration_ms"), int):
                 durations.append(max(0, result["duration_ms"]))
             citation = _measured(result, "citation_audit")
@@ -109,6 +126,32 @@ def aggregate_capture(report: dict[str, Any]) -> dict[str, Any]:
                     category = str(item.get("error_category") or "")
                     if category:
                         branch_errors[category] += 1
+        observed_input = estimated_input + branch_tokens_in
+        observed_output = estimated_output + branch_tokens_out
+        if pricing_snapshot:
+            input_rate = float(pricing_snapshot["input_cache_miss_usd_per_million"])
+            output_rate = float(pricing_snapshot["output_usd_per_million"])
+            estimated_cost = (
+                observed_input * input_rate + observed_output * output_rate
+            ) / 1_000_000
+            monetary_cost: dict[str, Any] = {
+                "status": "estimated_from_partial_token_telemetry",
+                "value_usd": estimated_cost,
+                "input_tokens_estimated": observed_input,
+                "output_tokens_estimated": observed_output,
+                "pricing_snapshot": pricing_snapshot,
+                "basis": (
+                    "PaperLeaf 已观测 Token 估算；全部输入按 cache miss 计价；"
+                    "未覆盖没有 Token 遥测的 planner/grader 调用，不是总成本或 Provider 账单"
+                ),
+            }
+        else:
+            monetary_cost = {
+                "status": "not_measured",
+                "value": None,
+                "currency": None,
+                "reason": "Provider 未持久化完整计费 Token，且未提供冻结价格快照",
+            }
         metrics[version] = {
             "executed_runs": executed,
             "completion_rate": _ratio(completed, executed),
@@ -118,15 +161,22 @@ def aggregate_capture(report: dict[str, Any]) -> dict[str, Any]:
             "expected_claim_evidence_coverage": _ratio(covered_claims, expected_claims),
             "required_paper_coverage": _ratio(cited_papers, expected_papers),
             "output_claim_support_rate": _ratio(supported_claims, output_claims),
-            "latency_ms": {"p95": _p95(durations)},
+            "latency_ms": {"p50": _p50(durations), "p95": _p95(durations)},
             "model_calls": model_calls,
             "tool_calls": tool_calls,
-            "estimated_tokens": {"input": estimated_input, "output": estimated_output},
-            "monetary_cost": {
-                "status": "not_measured",
-                "value": None,
-                "currency": None,
-                "reason": "Provider 未持久化完整计费 Token，且评测协议未冻结价格快照",
+            "estimated_tokens": {
+                "input": observed_input,
+                "output": observed_output,
+                "coverage": "partial_model_calls",
+            },
+            "monetary_cost": monetary_cost,
+            "branches": {
+                "planned": branches_planned,
+                "succeeded": branches_succeeded,
+                "failed": branches_failed,
+                "timed_out": branches_timed_out,
+                "success_rate": _ratio(branches_succeeded, branches_planned),
+                "timeout_rate": _ratio(branches_timed_out, branches_planned),
             },
             "specialist_branch_tokens": {"input": branch_tokens_in, "output": branch_tokens_out},
             "branch_error_categories": dict(branch_errors),
@@ -192,8 +242,9 @@ def evaluate_three_way(
     capture: dict[str, Any],
     blind_rows: list[dict[str, Any]],
     blind_key_rows: list[dict[str, Any]] | None = None,
+    pricing_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    variants = aggregate_capture(capture)
+    variants = aggregate_capture(capture, pricing_snapshot)
     human = aggregate_human_ratings(blind_rows, blind_key_rows)
     all_executed = all(variants[version]["executed_runs"] > 0 for version in VERSIONS)
     return {
@@ -224,7 +275,13 @@ def combine_captures(captures: list[dict[str, Any]]) -> dict[str, Any]:
     combined["capture_content_hashes"] = [
         str(capture.get("capture_content_hash", "")) for capture in captures
     ]
-    combined["capture_content_hash"] = None
+    combined["capture_content_hash"] = hashlib.sha256(
+        json.dumps(
+            combined["capture_content_hashes"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     combined["combined_capture_count"] = len(captures)
     return combined
 
@@ -234,6 +291,7 @@ def main() -> None:
     parser.add_argument("--capture", required=True, type=Path, action="append")
     parser.add_argument("--blind", required=True, type=Path, action="append")
     parser.add_argument("--blind-key", type=Path, action="append", default=[])
+    parser.add_argument("--pricing-snapshot", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     capture = combine_captures(
@@ -251,7 +309,12 @@ def main() -> None:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    result = evaluate_three_way(capture, blind_rows, blind_key_rows)
+    pricing_snapshot = (
+        json.loads(args.pricing_snapshot.read_text(encoding="utf-8"))
+        if args.pricing_snapshot
+        else None
+    )
+    result = evaluate_three_way(capture, blind_rows, blind_key_rows, pricing_snapshot)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(

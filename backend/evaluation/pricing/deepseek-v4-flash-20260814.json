@@ -1,0 +1,11 @@
+{
+  "provider": "DeepSeek",
+  "model": "deepseek-v4-flash",
+  "currency": "USD",
+  "input_cache_hit_usd_per_million": 0.0028,
+  "input_cache_miss_usd_per_million": 0.14,
+  "output_usd_per_million": 0.28,
+  "captured_at": "2026-08-14T00:00:00+08:00",
+  "source": "https://api-docs.deepseek.com/quick_start/pricing",
+  "estimation_policy": "PaperLeaf 未持久化所有模型调用的 Provider Token，也未区分 cache hit/miss；正式报告仅对已观测 Token 按 cache miss 价格计算情景估算，不作为总成本或实际账单。"
+}

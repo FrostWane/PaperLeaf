@@ -20,6 +20,7 @@ from paperleaf_api.evaluation_multi_agent_live import (
     normalize_branch_counts,
     normalize_execution_path,
     normalize_production_version,
+    parse_existing_run_specs,
     quality_decision,
     resolve_private_output_path,
     run_live_capture,
@@ -62,6 +63,20 @@ def test_normalizes_production_version_and_actual_execution_path() -> None:
         == "v3"
     )
     assert normalize_execution_path("future_v4", {}) == "not_measured"
+
+
+def test_existing_run_specs_are_complete_and_unambiguous() -> None:
+    assert parse_existing_run_specs(
+        ["sys-01:v1:run-1", "sys-01:v2:run-2", "sys-01:v3:run-3"]
+    ) == {
+        ("sys-01", "v1"): "run-1",
+        ("sys-01", "v2"): "run-2",
+        ("sys-01", "v3"): "run-3",
+    }
+    with pytest.raises(ValueError, match="不允许"):
+        parse_existing_run_specs(["sys-01:v1:run-1", "sys-01:v1:run-2"])
+    with pytest.raises(ValueError, match="必须为"):
+        parse_existing_run_specs(["sys-01:v4:run-4"])
 
 
 def test_three_variant_order_and_blind_package_are_deterministic() -> None:

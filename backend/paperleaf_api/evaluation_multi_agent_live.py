@@ -50,6 +50,21 @@ _ARXIV_VERSION_RE = re.compile(r"v\d+$", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
 
 
+def parse_existing_run_specs(specs: Sequence[str]) -> dict[tuple[str, str], str]:
+    """解析 ``case_id:variant:run_id``，用于只读恢复已完成的采集。"""
+
+    parsed: dict[tuple[str, str], str] = {}
+    for spec in specs:
+        parts = spec.split(":", 2)
+        if len(parts) != 3 or parts[1] not in {"v1", "v2", "v3"} or not parts[2].strip():
+            raise ValueError("--existing-run 必须为 case_id:v1|v2|v3:run_id")
+        key = (parts[0].strip(), parts[1])
+        if not key[0] or key in parsed:
+            raise ValueError("--existing-run 不允许空 case_id 或重复 case/variant")
+        parsed[key] = parts[2].strip()
+    return parsed
+
+
 def _sha256_json(value: Any) -> str:
     encoded = json.dumps(
         value,
@@ -611,6 +626,17 @@ async def _capture_variant(
     run, events, calls = await _load_run_facts(run_id)
     if run is None:
         return build_not_executed_variant(label, "提交返回 Run ID，但数据库未找到对应记录")
+    expected_version = RAW_V1 if label == "v1" else RAW_V2 if label == "v2" else RAW_V3
+    expected_scope = set(logical_to_local.values())
+    actual_scope = set(dict(run.scope_snapshot or {}).get("paper_ids", []) or [])
+    if run.user_id != owner_id:
+        return build_not_executed_variant(label, "既有 Run 不属于评测用户")
+    if run.orchestration_version != expected_version:
+        return build_not_executed_variant(label, "既有 Run 的编排版本与 variant 不一致")
+    if run.status not in TERMINAL_RUN_STATUSES:
+        return build_not_executed_variant(label, "既有 Run 尚未进入合法终态")
+    if actual_scope != expected_scope:
+        return build_not_executed_variant(label, "既有 Run 的冻结论文范围与评测题不一致")
     summary = dict(run.result_summary or {})
     trace = dict(run.harness_trace or {})
     citations = list(summary.get("citations", []) or [])
@@ -964,6 +990,7 @@ async def run_live_capture(
     preflight_only: bool = False,
     timeout_seconds: float = 300,
     variants: Sequence[Literal["v1", "v2", "v3"]] = ("v1", "v2", "v3"),
+    existing_run_ids: dict[tuple[str, str], str] | None = None,
     config: Settings = settings,
 ) -> dict[str, Any]:
     """执行真实采集；所有失败都写入报告，而不是补造 Run。"""
@@ -992,6 +1019,16 @@ async def run_live_capture(
     selected_variants = tuple(dict.fromkeys(variants))
     if not selected_variants or any(item not in {"v1", "v2", "v3"} for item in selected_variants):
         raise ValueError("variants 必须由 v1、v2、v3 组成")
+    expected_existing_keys = {
+        (case.id, label)
+        for case in selected
+        if case.expected_path != "pregraph_reject"
+        for label in selected_variants
+    }
+    if existing_run_ids is not None and set(existing_run_ids) != expected_existing_keys:
+        missing = sorted(expected_existing_keys - set(existing_run_ids))
+        extra = sorted(set(existing_run_ids) - expected_existing_keys)
+        raise ValueError(f"existing Run 映射必须完整且无额外项；missing={missing}, extra={extra}")
 
     base_report: dict[str, Any] = {
         "schema_version": 1,
@@ -1014,6 +1051,7 @@ async def run_live_capture(
             "维度、冲突和用户可见 partial 提示仍为 not_measured，禁止填零后送入 Go/No-Go"
         ),
         "pairs": [],
+        "capture_mode": "existing_runs_recovery" if existing_run_ids is not None else "new_runs",
     }
     try:
         preflight, owner_id, mapping = await _preflight(
@@ -1109,15 +1147,18 @@ async def run_live_capture(
                 pair[label] = build_not_executed_variant(label, "collection_snapshot_drift")
                 continue
             try:
-                run_id, error = await _submit_variant(
-                    repository=repository,
-                    owner_id=owner_id,
-                    case=case,
-                    label=label,
-                    logical_to_local=case_mapping,
-                    config=config,
-                    timeout_seconds=timeout_seconds,
-                )
+                if existing_run_ids is not None:
+                    run_id, error = existing_run_ids[(case.id, label)], None
+                else:
+                    run_id, error = await _submit_variant(
+                        repository=repository,
+                        owner_id=owner_id,
+                        case=case,
+                        label=label,
+                        logical_to_local=case_mapping,
+                        config=config,
+                        timeout_seconds=timeout_seconds,
+                    )
             except Exception as exc:
                 pair[label] = build_not_executed_variant(
                     label, f"submission_error:{type(exc).__name__}"
@@ -1176,6 +1217,12 @@ def main() -> None:
         default=("v1", "v2", "v3"),
         help="仅执行指定版本；恢复实验可使用 --variants v3",
     )
+    parser.add_argument(
+        "--existing-run",
+        action="append",
+        default=[],
+        help="只读恢复既有 Run，格式 case_id:v1|v2|v3:run_id；提供后禁止提交新 Run",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
@@ -1199,6 +1246,9 @@ def main() -> None:
             preflight_only=args.preflight_only,
             timeout_seconds=args.timeout_seconds,
             variants=args.variants,
+            existing_run_ids=(
+                parse_existing_run_specs(args.existing_run) if args.existing_run else None
+            ),
         )
     )
     print(

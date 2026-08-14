@@ -52,6 +52,8 @@ def _dimension_tags(case: FrozenEvaluationCase) -> tuple[str, ...]:
     tags = ["cross_paper" if len(case.paper_ids) > 1 else "single_paper"]
     if _CJK_RE.search(case.query):
         tags.append("cjk_query")
+    else:
+        tags.append("latin_query")
     if _TECHNICAL_RE.search(case.query):
         tags.append("technical_entity")
     anchors = " ".join(item.anchor for item in case.expected_evidence)
@@ -359,6 +361,7 @@ async def evaluate_production_cases(
         "single_paper",
         "cross_paper",
         "cjk_query",
+        "latin_query",
         "technical_entity",
         "table_or_formula",
         "long_evidence",

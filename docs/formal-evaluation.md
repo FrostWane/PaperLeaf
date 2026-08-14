@@ -12,9 +12,10 @@
 - `metrics.json`：带分子、分母的指标；
 - 聚合目录中的 `REPORT.md`：结果、置信区间、负结果和边界。
 
-正式隐藏集位于 `backend/evaluation/datasets/paperleaf-formal-hidden-v1`。私有 oracle
-不得上传到公开仓库；其 SHA-256 已冻结在 `lock.json`。原始运行结果可直接提交，或
-提交不可变对象地址和对应 SHA-256。
+正式隐藏集位于 `backend/evaluation/datasets/paperleaf-formal-hidden-v1`。首次正式运行
+前，oracle 必须私有保存，仅把 SHA-256 冻结在 `lock.json`；正式批次结束后可以公开
+oracle 供第三方复算，但该集合随即变为已揭盲数据，不能再次产生“首次隐藏集”结论。
+原始运行结果可直接提交，或提交不可变对象地址和对应 SHA-256。
 
 ## 预注册方案
 
@@ -38,6 +39,11 @@
 - 配对 Bootstrap 使用固定种子和 10000 次抽样；
 - LLM Judge 只能称辅助评审，不能写成人工准确率。
 
+多 Agent 对照中的 Token 是 PaperLeaf 确定性估算，不是 Provider 账单。估算成本使用
+`backend/evaluation/pricing/` 下按日期冻结的官方价格快照；由于当前没有持久化
+DeepSeek 的 cache hit/miss Token，且部分 planner/grader 调用没有 Token 遥测；报告只对
+已观测 Token 按 cache miss 计价，不能写成总成本、上界或实际消费金额。
+
 人工盲评至少需要真实人员完成 30 道答案的事实正确性、完整性、引用有用性与总体
 偏好。评分表未由真实人员填写前，整体结论保持 `human_review_pending`。
 
@@ -50,3 +56,7 @@
 Embedding 消融通过 `evaluation_corpus_prepare --force-reindex` 显式重建同一批 Chunk
 的向量。执行 plain 对照时使用 revision 1 / `chunk_text_v1`，随后恢复 revision 2 /
 `paper_context_v2`；两个空间不能混用，执行器会校验每篇论文的统一指纹。
+
+Worker 强杀恢复必须让租约自然过期，不得手工把 Job 改回队列。公开证据只保留脱敏
+event epoch、分支状态和次数，不导出 claim token；新 Worker 领取期间用旧 token 做
+一次受控迟到写入探针，只有被 fencing 拒绝且数据库无探针事件时才算通过。
