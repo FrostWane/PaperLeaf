@@ -169,7 +169,7 @@ class Settings:
     )
     answerability_enabled: bool = _bool("PAPERLEAF_ANSWERABILITY_ENABLED", True)
     answerability_min_confidence: float = float(
-        os.getenv("PAPERLEAF_ANSWERABILITY_MIN_CONFIDENCE", "0.72")
+        os.getenv("PAPERLEAF_ANSWERABILITY_MIN_CONFIDENCE", "0.50")
     )
     agent_answerability_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_AGENT_ANSWERABILITY_TIMEOUT_SECONDS", "20")

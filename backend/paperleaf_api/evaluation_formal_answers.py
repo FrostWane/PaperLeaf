@@ -29,6 +29,7 @@ from .evaluation_holdout import merge_questions_and_oracle, read_oracle, read_qu
 from .evaluation_multi_agent_live import _harness_flags
 from .evaluation_production import preflight_production_corpus
 from .models import AgentRun, AgentRunEvent, AgentToolCall, ChatMessage, Paper, PaperChunk
+from .rag.retrieval_config import freeze_retrieval_config
 from .repository import SQLAlchemyRepository
 
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
@@ -249,10 +250,12 @@ async def _run_case(
     owner_id: str,
     paper_id_map: dict[str, str],
     timeout_seconds: float,
+    title_prefix: str = "[正式评测]",
+    idempotency_prefix: str = "formal-answer",
 ) -> dict[str, Any]:
     local_scope = [paper_id_map[paper_id] for paper_id in case.paper_ids]
     chat_session = await repository.create_chat_session(
-        owner_id, f"[正式评测] {case.id}", "library", None, None
+        owner_id, f"{title_prefix} {case.id}", "library", None, None
     )
     scope_snapshot = {
         "type": "library",
@@ -262,6 +265,7 @@ async def _run_case(
         "web_enabled": False,
         "client_context": {},
         "harness": _harness_flags(settings),
+        "retrieval_config": freeze_retrieval_config(settings),
         "orchestration_version": ORCHESTRATION_VERSION,
     }
     request_hash = _sha256_json(
@@ -271,7 +275,7 @@ async def _run_case(
         chat_session.id,
         owner_id,
         case.query,
-        f"formal-answer-{case.id}-{secrets.token_hex(6)}",
+        f"{idempotency_prefix}-{case.id}-{secrets.token_hex(6)}",
         request_hash,
         scope_snapshot,
     )
