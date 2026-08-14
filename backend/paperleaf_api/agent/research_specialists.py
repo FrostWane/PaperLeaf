@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -85,6 +86,7 @@ class SpecialistUsage(BaseModel):
     output_reserve: int
     evidence_count: int
     dropped_evidence_count: int
+    schema_repair_count: int = Field(default=0, ge=0, le=1)
 
 
 class SpecialistAnalysis(BaseModel):
@@ -130,6 +132,37 @@ def _evidence_order(item: Evidence) -> tuple[str, float, int, str, str, str]:
     )
 
 
+def _normalized_evidence_aliases(value: Any) -> list[str] | None:
+    if isinstance(value, dict):
+        value = value.get("id", value.get("alias"))
+    if isinstance(value, str):
+        matches = re.findall(r"\bE\s*\d+\b", value, flags=re.IGNORECASE)
+        value = matches or [value]
+    if not isinstance(value, list | tuple):
+        return None
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            item = item.get("id", item.get("alias"))
+        match = re.fullmatch(r"[\[（(]?\s*[Ee]\s*(\d+)\s*[\]）)]?", str(item or ""))
+        if match:
+            alias = f"E{int(match.group(1))}"
+            if alias not in result:
+                result.append(alias)
+    return result or None
+
+
+def _normalized_confidence(value: Any) -> Any:
+    if value is None or value == "":
+        return 0.5
+    if isinstance(value, str) and value.strip().endswith("%"):
+        try:
+            return float(value.strip()[:-1]) / 100
+        except ValueError:
+            return value
+    return value
+
+
 def _parse_model_output(value: Any) -> SpecialistModelOutput:
     if isinstance(value, SpecialistModelOutput):
         return value
@@ -151,18 +184,46 @@ def _parse_model_output(value: Any) -> SpecialistModelOutput:
         raw = {"claims": raw}
     if isinstance(raw, dict) and isinstance(raw.get("result"), dict):
         raw = raw["result"]
+    if isinstance(raw, dict) and "claims" not in raw:
+        for alias in ("findings", "items", "statements"):
+            if isinstance(raw.get(alias), list):
+                raw = {"claims": raw[alias]}
+                break
+        else:
+            if any(key in raw for key in ("claim", "text", "statement", "finding")):
+                raw = {"claims": [raw]}
     if isinstance(raw, dict) and isinstance(raw.get("claims"), list):
         dimension_aliases = {
             "research question": "研究问题",
             "question": "研究问题",
+            "研究目标": "研究问题",
+            "研究问题与目标": "研究问题",
+            "问题": "研究问题",
             "method": "核心方法",
             "methods": "核心方法",
+            "方法": "核心方法",
+            "主要方法": "核心方法",
             "experimental setup": "实验设置",
             "experiment": "实验设置",
+            "实验": "实验设置",
+            "数据与实验": "实验设置",
             "result": "主要结果",
             "results": "主要结果",
+            "结果": "主要结果",
+            "实验结果": "主要结果",
             "limitation": "局限",
             "limitations": "局限",
+            "局限性": "局限",
+            "限制": "局限",
+        }
+        stance_aliases = {
+            "支持": "support",
+            "一致": "support",
+            "反对": "contradict",
+            "矛盾": "contradict",
+            "冲突": "contradict",
+            "不确定": "unclear",
+            "未知": "unclear",
         }
         normalized_claims: list[dict[str, Any]] = []
         for item in raw["claims"][:5]:
@@ -170,17 +231,29 @@ def _parse_model_output(value: Any) -> SpecialistModelOutput:
                 continue
             dimension = str(item.get("dimension", "")).strip()
             dimension = dimension_aliases.get(dimension.casefold(), dimension)
-            aliases = item.get("evidence_aliases", item.get("evidence_ids"))
-            if isinstance(aliases, str):
-                aliases = [aliases]
+            aliases = _normalized_evidence_aliases(
+                item.get(
+                    "evidence_aliases",
+                    item.get("evidence_ids", item.get("evidence", item.get("citations"))),
+                )
+            )
+            claim = item.get(
+                "claim",
+                item.get("text", item.get("statement", item.get("finding"))),
+            )
+            stance = str(item.get("stance", "unclear")).strip()
+            stance = stance_aliases.get(stance.casefold(), stance.casefold())
+            claim_key = item.get("claim_key")
+            if isinstance(claim_key, str) and not claim_key.strip():
+                claim_key = None
             normalized_claims.append(
                 {
                     "dimension": dimension,
-                    "claim_key": item.get("claim_key"),
-                    "claim": item.get("claim"),
+                    "claim_key": claim_key,
+                    "claim": claim,
                     "evidence_aliases": aliases,
-                    "stance": item.get("stance", "unclear"),
-                    "confidence": item.get("confidence"),
+                    "stance": stance,
+                    "confidence": _normalized_confidence(item.get("confidence")),
                 }
             )
         raw = {"claims": normalized_claims}
@@ -349,7 +422,32 @@ class EvidenceSpecialist:
             timeout=self.timeout_seconds,
         )
         await _ensure_lease(lease_guard)
-        parsed = _parse_model_output(raw)
+        repair_count = 0
+        try:
+            parsed = _parse_model_output(raw)
+        except SpecialistOutputError:
+            previous = raw.content if hasattr(raw, "content") else raw
+            if not isinstance(previous, str):
+                previous = json.dumps(previous, ensure_ascii=False, default=str)
+            repair_messages = prompt.messages + (
+                {"role": "assistant", "content": previous[:4000]},
+                {
+                    "role": "user",
+                    "content": (
+                        "上一次输出未通过结构校验。请仅修正格式，不增加事实：返回一个 JSON "
+                        "对象，顶层只有 claims；每条包含 dimension、claim、evidence_aliases、"
+                        "stance、confidence。dimension 只能使用允许的中文维度，证据只能使用"
+                        "上文真实存在的 E 编号。"
+                    ),
+                },
+            )
+            repair_count = 1
+            raw = await asyncio.wait_for(
+                self.model(repair_messages, max_output_tokens=prompt.usage.output_reserve),
+                timeout=self.timeout_seconds,
+            )
+            await _ensure_lease(lease_guard)
+            parsed = _parse_model_output(raw)
         provider_input_tokens, provider_output_tokens = _provider_usage(raw)
         allowed_dimensions = set(task.dimensions)
         validated: list[ValidatedSpecialistClaim] = []
@@ -409,6 +507,7 @@ class EvidenceSpecialist:
                 "output_tokens": output_tokens,
                 "provider_input_tokens": provider_input_tokens,
                 "provider_output_tokens": provider_output_tokens,
+                "schema_repair_count": repair_count,
             }
         )
         return SpecialistAnalysis(

@@ -191,3 +191,64 @@ def test_specialist_normalizes_common_json_shape_without_relaxing_alias_scope() 
         assert analysis.usage.output_reserve <= 640
 
     asyncio.run(scenario())
+
+
+def test_specialist_normalizes_provider_synonyms_and_repairs_schema_once() -> None:
+    async def normalized_scenario() -> None:
+        async def model(_messages: tuple[dict[str, str], ...], *, max_output_tokens: int):
+            assert max_output_tokens > 0
+            return {
+                "findings": [
+                    {
+                        "dimension": "主要方法",
+                        "text": "论文采用稀疏校准。",
+                        "citations": "[E1]",
+                        "stance": "支持",
+                        "confidence": "80%",
+                        "claim_key": "",
+                    }
+                ]
+            }
+
+        analysis = await EvidenceSpecialist(model, timeout_seconds=1).analyze(
+            _task(), [_evidence()]
+        )
+
+        assert analysis.claims[0].dimension == "核心方法"
+        assert analysis.claims[0].chunk_ids == ("private-chunk-id",)
+        assert analysis.claims[0].stance == "support"
+        assert analysis.claims[0].confidence == pytest.approx(0.8)
+        assert analysis.usage.schema_repair_count == 0
+
+    async def repair_scenario() -> None:
+        calls = 0
+
+        async def model(messages: tuple[dict[str, str], ...], *, max_output_tokens: int):
+            nonlocal calls
+            calls += 1
+            assert max_output_tokens > 0
+            if calls == 1:
+                return "这不是 JSON"
+            assert len(messages) == 4
+            return {
+                "claims": [
+                    {
+                        "dimension": "核心方法",
+                        "claim": "论文采用稀疏校准。",
+                        "evidence_aliases": ["E1"],
+                        "stance": "support",
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+        analysis = await EvidenceSpecialist(model, timeout_seconds=1).analyze(
+            _task(), [_evidence()]
+        )
+
+        assert calls == 2
+        assert analysis.usage.schema_repair_count == 1
+        assert analysis.claims[0].chunk_ids == ("private-chunk-id",)
+
+    asyncio.run(normalized_scenario())
+    asyncio.run(repair_scenario())

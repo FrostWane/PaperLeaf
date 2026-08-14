@@ -489,6 +489,9 @@ async def _emit_scout_finished(
             "output_tokens": int(envelope.get("usage", {}).get("output_tokens", 0)),
             "provider_input_tokens": envelope.get("usage", {}).get("provider_input_tokens"),
             "provider_output_tokens": envelope.get("usage", {}).get("provider_output_tokens"),
+            "schema_repair_count": int(
+                envelope.get("usage", {}).get("schema_repair_count", 0)
+            ),
             "duration_ms": int(envelope.get("duration_ms", 0)),
             "recovered": recovered,
         },
@@ -568,6 +571,7 @@ async def _merge_node(
                 "output_tokens": int(usage.get("output_tokens", 0)),
                 "provider_input_tokens": usage.get("provider_input_tokens"),
                 "provider_output_tokens": usage.get("provider_output_tokens"),
+                "schema_repair_count": int(usage.get("schema_repair_count", 0)),
                 "error_code": task_result.get("finding", {}).get("error_code"),
             }
         )

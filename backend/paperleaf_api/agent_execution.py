@@ -546,6 +546,9 @@ def _parallel_compare_trace(
                 "output_tokens": max(0, int(item.get("output_tokens", 0) or 0)),
                 "provider_input_tokens": item.get("provider_input_tokens"),
                 "provider_output_tokens": item.get("provider_output_tokens"),
+                "schema_repair_count": max(
+                    0, int(item.get("schema_repair_count", 0) or 0)
+                ),
                 "error_category": (
                     "timeout"
                     if str(item.get("status")) == "timeout"

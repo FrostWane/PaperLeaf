@@ -199,6 +199,7 @@ def test_graph_preserves_cross_paper_conflicts_and_branch_metrics() -> None:
         assert all(item["evidence_count"] == 1 for item in result.branch_metrics)
         assert all(item["input_tokens"] > 0 for item in result.branch_metrics)
         assert all(item["output_tokens"] > 0 for item in result.branch_metrics)
+        assert all(item["schema_repair_count"] == 0 for item in result.branch_metrics)
 
     asyncio.run(scenario())
 
