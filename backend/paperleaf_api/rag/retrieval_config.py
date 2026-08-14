@@ -70,12 +70,22 @@ def freeze_retrieval_config(config: Any) -> dict[str, Any]:
         "answerability_enabled": bool(config.answerability_enabled),
         "answerability_min_confidence": float(config.answerability_min_confidence),
         "embedding": {
-            "enabled": bool(config.embedding_enabled),
-            "provider": str(config.embedding_provider),
-            "model": str(config.embedding_model),
-            "dimensions": config.embedding_dimensions,
-            "index_revision": int(config.embedding_index_revision),
-            "input_format": str(config.embedding_input_format),
+            "enabled": bool(config.embedding_enabled and contract is not None),
+            "provider": (
+                contract.provider if contract is not None else str(config.embedding_provider)
+            ),
+            "model": contract.model if contract is not None else str(config.embedding_model),
+            "dimensions": (
+                contract.dimensions if contract is not None else config.embedding_dimensions
+            ),
+            "index_revision": (
+                contract.revision if contract is not None else int(config.embedding_index_revision)
+            ),
+            "input_format": (
+                contract.input_format
+                if contract is not None
+                else str(config.embedding_input_format)
+            ),
             "fingerprint": contract.fingerprint if contract is not None else None,
         },
     }

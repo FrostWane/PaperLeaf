@@ -4,6 +4,8 @@ import pytest
 
 from paperleaf_api.agent.tools import LibrarySearchInput, SQLLibrarySearch
 from paperleaf_api.config import settings
+from paperleaf_api.embedding_contract import EmbeddingContract
+from paperleaf_api.rag import retrieval_config as retrieval_config_module
 from paperleaf_api.rag.retrieval_config import (
     freeze_retrieval_config,
     resolve_git_sha,
@@ -30,6 +32,29 @@ def test_retrieval_config_rejects_tampering() -> None:
 
     with pytest.raises(ValueError, match="指纹不一致"):
         retrieval_config_overlay(settings, snapshot)
+
+
+def test_frozen_retrieval_config_uses_selected_embedding_contract(monkeypatch) -> None:
+    contract = EmbeddingContract(
+        provider="fallback",
+        model="qwen3-embedding:0.6b",
+        dimensions=1024,
+        revision=2,
+        input_format="paper_context_v2",
+        fingerprint="f" * 64,
+    )
+    monkeypatch.setattr(
+        retrieval_config_module,
+        "configured_embedding_contract",
+        lambda _config, _router: contract,
+    )
+
+    snapshot = freeze_retrieval_config(settings)
+
+    assert snapshot["embedding"]["provider"] == "fallback"
+    assert snapshot["embedding"]["model"] == "qwen3-embedding:0.6b"
+    assert snapshot["embedding"]["dimensions"] == 1024
+    assert snapshot["embedding"]["fingerprint"] == "f" * 64
 
 
 def test_sql_library_search_reads_run_frozen_config(monkeypatch) -> None:
