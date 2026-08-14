@@ -1121,6 +1121,202 @@
           "p50": 449,
           "p95": 6406
         }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 56,
+            "denominator": 110,
+            "value": 0.509090909090909
+          },
+          "mrr_at_5": {
+            "numerator": 26.56666666666666,
+            "denominator": 50,
+            "value": 0.5313333333333332
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 20,
+            "denominator": 50,
+            "value": 0.4
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 90,
+            "denominator": 90,
+            "value": 1.0
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 567,
+            "p95": 6667
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 46,
+            "denominator": 49,
+            "value": 0.9387755102040817
+          },
+          "mrr_at_5": {
+            "numerator": 25.93333333333333,
+            "denominator": 40,
+            "value": 0.6483333333333332
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 37,
+            "denominator": 40,
+            "value": 0.925
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 329,
+            "p95": 436
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 38,
+            "denominator": 90,
+            "value": 0.4222222222222222
+          },
+          "mrr_at_5": {
+            "numerator": 13.816666666666668,
+            "denominator": 30,
+            "value": 0.4605555555555556
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 2,
+            "denominator": 30,
+            "value": 0.06666666666666667
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 90,
+            "denominator": 90,
+            "value": 1.0
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 502,
+            "p95": 6667
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 18,
+            "denominator": 19,
+            "value": 0.9473684210526315
+          },
+          "mrr_at_5": {
+            "numerator": 7.25,
+            "denominator": 10,
+            "value": 0.725
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 9,
+            "denominator": 10,
+            "value": 0.9
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 322,
+            "p95": 436
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 46,
+            "denominator": 50,
+            "value": 0.92
+          },
+          "mrr_at_5": {
+            "numerator": 31.433333333333326,
+            "denominator": 50,
+            "value": 0.6286666666666665
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 46,
+            "denominator": 50,
+            "value": 0.92
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 381,
+            "p95": 6421
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 302,
+            "p95": 408
+          }
+        }
       }
     },
     "plain_embedding_control": {
@@ -2232,6 +2428,202 @@
           "p50": 331,
           "p95": 476
         }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 47,
+            "denominator": 110,
+            "value": 0.42727272727272725
+          },
+          "mrr_at_5": {
+            "numerator": 26.61666666666666,
+            "denominator": 50,
+            "value": 0.5323333333333332
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 18,
+            "denominator": 50,
+            "value": 0.36
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 56,
+            "denominator": 90,
+            "value": 0.6222222222222222
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 417,
+            "p95": 616
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 42,
+            "denominator": 48,
+            "value": 0.875
+          },
+          "mrr_at_5": {
+            "numerator": 24.616666666666664,
+            "denominator": 40,
+            "value": 0.6154166666666666
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 34,
+            "denominator": 40,
+            "value": 0.85
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 293,
+            "p95": 396
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 29,
+            "denominator": 90,
+            "value": 0.32222222222222224
+          },
+          "mrr_at_5": {
+            "numerator": 12.866666666666667,
+            "denominator": 30,
+            "value": 0.42888888888888893
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 30,
+            "value": 0.0
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 56,
+            "denominator": 90,
+            "value": 0.6222222222222222
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 431,
+            "p95": 483
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 16,
+            "denominator": 18,
+            "value": 0.8888888888888888
+          },
+          "mrr_at_5": {
+            "numerator": 7.166666666666666,
+            "denominator": 10,
+            "value": 0.7166666666666666
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 8,
+            "denominator": 10,
+            "value": 0.8
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 320,
+            "p95": 356
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 44,
+            "denominator": 50,
+            "value": 0.88
+          },
+          "mrr_at_5": {
+            "numerator": 31.199999999999992,
+            "denominator": 50,
+            "value": 0.6239999999999999
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 44,
+            "denominator": 50,
+            "value": 0.88
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 288,
+            "p95": 616
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 293,
+            "p95": 420
+          }
+        }
       }
     },
     "contextual_embedding": {
@@ -3342,6 +3734,202 @@
           "sample_count": 99,
           "p50": 330,
           "p95": 594
+        }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 50,
+            "denominator": 110,
+            "value": 0.45454545454545453
+          },
+          "mrr_at_5": {
+            "numerator": 27.983333333333324,
+            "denominator": 50,
+            "value": 0.5596666666666664
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 18,
+            "denominator": 50,
+            "value": 0.36
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 48,
+            "denominator": 90,
+            "value": 0.5333333333333333
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 441,
+            "p95": 613
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 44,
+            "denominator": 49,
+            "value": 0.8979591836734694
+          },
+          "mrr_at_5": {
+            "numerator": 25.599999999999998,
+            "denominator": 40,
+            "value": 0.6399999999999999
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 35,
+            "denominator": 40,
+            "value": 0.875
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 301,
+            "p95": 394
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 32,
+            "denominator": 90,
+            "value": 0.35555555555555557
+          },
+          "mrr_at_5": {
+            "numerator": 14.566666666666668,
+            "denominator": 30,
+            "value": 0.48555555555555563
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 30,
+            "value": 0.0
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 48,
+            "denominator": 90,
+            "value": 0.5333333333333333
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 476,
+            "p95": 600
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 18,
+            "denominator": 19,
+            "value": 0.9473684210526315
+          },
+          "mrr_at_5": {
+            "numerator": 6.533333333333333,
+            "denominator": 10,
+            "value": 0.6533333333333333
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 9,
+            "denominator": 10,
+            "value": 0.9
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 330,
+            "p95": 420
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 44,
+            "denominator": 50,
+            "value": 0.88
+          },
+          "mrr_at_5": {
+            "numerator": 32.483333333333334,
+            "denominator": 50,
+            "value": 0.6496666666666667
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 44,
+            "denominator": 50,
+            "value": 0.88
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 297,
+            "p95": 613
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 318,
+            "p95": 389
+          }
         }
       }
     },
@@ -4457,6 +5045,202 @@
           "sample_count": 99,
           "p50": 341,
           "p95": 1235
+        }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 49,
+            "denominator": 110,
+            "value": 0.44545454545454544
+          },
+          "mrr_at_5": {
+            "numerator": 22.566666666666663,
+            "denominator": 50,
+            "value": 0.45133333333333325
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 21,
+            "denominator": 50,
+            "value": 0.42
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 90,
+            "denominator": 90,
+            "value": 1.0
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 982,
+            "p95": 1386
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 44,
+            "denominator": 49,
+            "value": 0.8979591836734694
+          },
+          "mrr_at_5": {
+            "numerator": 25.599999999999998,
+            "denominator": 40,
+            "value": 0.6399999999999999
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 35,
+            "denominator": 40,
+            "value": 0.875
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 292,
+            "p95": 398
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 31,
+            "denominator": 90,
+            "value": 0.34444444444444444
+          },
+          "mrr_at_5": {
+            "numerator": 9.149999999999999,
+            "denominator": 30,
+            "value": 0.30499999999999994
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 3,
+            "denominator": 30,
+            "value": 0.1
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 90,
+            "denominator": 90,
+            "value": 1.0
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 1054,
+            "p95": 1336
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 18,
+            "denominator": 19,
+            "value": 0.9473684210526315
+          },
+          "mrr_at_5": {
+            "numerator": 6.533333333333333,
+            "denominator": 10,
+            "value": 0.6533333333333333
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 9,
+            "denominator": 10,
+            "value": 0.9
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 291,
+            "p95": 373
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 44,
+            "denominator": 50,
+            "value": 0.88
+          },
+          "mrr_at_5": {
+            "numerator": 32.483333333333334,
+            "denominator": 50,
+            "value": 0.6496666666666667
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 44,
+            "denominator": 50,
+            "value": 0.88
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 293,
+            "p95": 611
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 369,
+            "p95": 452
+          }
         }
       }
     },
@@ -5575,6 +6359,202 @@
           "p50": 413,
           "p95": 6434
         }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 49,
+            "denominator": 110,
+            "value": 0.44545454545454544
+          },
+          "mrr_at_5": {
+            "numerator": 30.633333333333322,
+            "denominator": 50,
+            "value": 0.6126666666666665
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 19,
+            "denominator": 50,
+            "value": 0.38
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 50,
+            "denominator": 90,
+            "value": 0.5555555555555556
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 523,
+            "p95": 6658
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 46,
+            "denominator": 49,
+            "value": 0.9387755102040817
+          },
+          "mrr_at_5": {
+            "numerator": 25.93333333333333,
+            "denominator": 40,
+            "value": 0.6483333333333332
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 37,
+            "denominator": 40,
+            "value": 0.925
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 324,
+            "p95": 450
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 30,
+            "denominator": 90,
+            "value": 0.3333333333333333
+          },
+          "mrr_at_5": {
+            "numerator": 15.85,
+            "denominator": 30,
+            "value": 0.5283333333333333
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 30,
+            "value": 0.0
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 50,
+            "denominator": 90,
+            "value": 0.5555555555555556
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 496,
+            "p95": 6658
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 18,
+            "denominator": 19,
+            "value": 0.9473684210526315
+          },
+          "mrr_at_5": {
+            "numerator": 7.25,
+            "denominator": 10,
+            "value": 0.725
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 9,
+            "denominator": 10,
+            "value": 0.9
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 314,
+            "p95": 466
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 47,
+            "denominator": 50,
+            "value": 0.94
+          },
+          "mrr_at_5": {
+            "numerator": 33.46666666666666,
+            "denominator": 50,
+            "value": 0.6693333333333332
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 47,
+            "denominator": 50,
+            "value": 0.94
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 352,
+            "p95": 6434
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 302,
+            "p95": 426
+          }
+        }
       }
     },
     "multigranular_page_reranker": {
@@ -6688,6 +7668,202 @@
           "sample_count": 99,
           "p50": 341,
           "p95": 556
+        }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 50,
+            "denominator": 110,
+            "value": 0.45454545454545453
+          },
+          "mrr_at_5": {
+            "numerator": 27.26666666666666,
+            "denominator": 50,
+            "value": 0.5453333333333332
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 18,
+            "denominator": 50,
+            "value": 0.36
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 51,
+            "denominator": 90,
+            "value": 0.5666666666666667
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 473,
+            "p95": 740
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 46,
+            "denominator": 49,
+            "value": 0.9387755102040817
+          },
+          "mrr_at_5": {
+            "numerator": 23.03333333333333,
+            "denominator": 40,
+            "value": 0.5758333333333333
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 37,
+            "denominator": 40,
+            "value": 0.925
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 301,
+            "p95": 378
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 32,
+            "denominator": 90,
+            "value": 0.35555555555555557
+          },
+          "mrr_at_5": {
+            "numerator": 13.849999999999998,
+            "denominator": 30,
+            "value": 0.4616666666666666
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 30,
+            "value": 0.0
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 51,
+            "denominator": 90,
+            "value": 0.5666666666666667
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 489,
+            "p95": 571
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 18,
+            "denominator": 19,
+            "value": 0.9473684210526315
+          },
+          "mrr_at_5": {
+            "numerator": 5.666666666666666,
+            "denominator": 10,
+            "value": 0.5666666666666667
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 9,
+            "denominator": 10,
+            "value": 0.9
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 297,
+            "p95": 420
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 46,
+            "denominator": 50,
+            "value": 0.92
+          },
+          "mrr_at_5": {
+            "numerator": 30.783333333333328,
+            "denominator": 50,
+            "value": 0.6156666666666666
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 46,
+            "denominator": 50,
+            "value": 0.92
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 315,
+            "p95": 740
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 321,
+            "p95": 365
+          }
         }
       }
     },
@@ -7805,6 +8981,202 @@
           "sample_count": 99,
           "p50": 902,
           "p95": 6415
+        }
+      },
+      "by_query_language": {
+        "cjk_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 51,
+            "denominator": 110,
+            "value": 0.4636363636363636
+          },
+          "mrr_at_5": {
+            "numerator": 22.65,
+            "denominator": 50,
+            "value": 0.45299999999999996
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 20,
+            "denominator": 50,
+            "value": 0.4
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 90,
+            "denominator": 90,
+            "value": 1.0
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 1161,
+            "p95": 6461
+          }
+        },
+        "latin_query": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 47,
+            "denominator": 49,
+            "value": 0.9591836734693877
+          },
+          "mrr_at_5": {
+            "numerator": 22.433333333333334,
+            "denominator": 40,
+            "value": 0.5608333333333333
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 38,
+            "denominator": 40,
+            "value": 0.95
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 330,
+            "p95": 441
+          }
+        }
+      },
+      "by_frozen_category": {
+        "cross_paper": {
+          "case_count": 30,
+          "page_micro_recall_at_5": {
+            "numerator": 32,
+            "denominator": 90,
+            "value": 0.35555555555555557
+          },
+          "mrr_at_5": {
+            "numerator": 9.45,
+            "denominator": 30,
+            "value": 0.315
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 1,
+            "denominator": 30,
+            "value": 0.03333333333333333
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 90,
+            "denominator": 90,
+            "value": 1.0
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 1056,
+            "p95": 9224
+          }
+        },
+        "multi_evidence": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 18,
+            "denominator": 19,
+            "value": 0.9473684210526315
+          },
+          "mrr_at_5": {
+            "numerator": 5.333333333333333,
+            "denominator": 10,
+            "value": 0.5333333333333333
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 9,
+            "denominator": 10,
+            "value": 0.9
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 322,
+            "p95": 348
+          }
+        },
+        "single_paper": {
+          "case_count": 50,
+          "page_micro_recall_at_5": {
+            "numerator": 48,
+            "denominator": 50,
+            "value": 0.96
+          },
+          "mrr_at_5": {
+            "numerator": 30.299999999999994,
+            "denominator": 50,
+            "value": 0.6059999999999999
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 48,
+            "denominator": 50,
+            "value": 0.96
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "latency_ms": {
+            "p50": 411,
+            "p95": 6415
+          }
+        },
+        "unanswerable": {
+          "case_count": 10,
+          "page_micro_recall_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "mrr_at_5": {
+            "numerator": 0.0,
+            "denominator": 0,
+            "value": null
+          },
+          "complete_evidence_group_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "required_paper_coverage_at_5": {
+            "numerator": 0,
+            "denominator": 0,
+            "value": null
+          },
+          "unanswerable_false_retrieval_rate": {
+            "numerator": 10,
+            "denominator": 10,
+            "value": 1.0
+          },
+          "latency_ms": {
+            "p50": 339,
+            "p95": 420
+          }
         }
       }
     }

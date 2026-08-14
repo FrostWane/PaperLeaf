@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "status": "completed_human_review_pending",
+  "evaluation_kind": "multi_agent_three_way",
+  "git_sha": "9e4ff3faf192a2f3e78737cd7ef9404f5e8eb5af",
+  "docker_image_digest": "sha256:7f471680be1f43c7b313246d62a9c38b224241c54cc0e1dca21529613c7fc644",
+  "run_window": {
+    "test_capture_generated_at": "2026-08-14T05:11:08+08:00",
+    "dev_capture_generated_at": "2026-08-14T08:06:28+08:00"
+  },
+  "dataset": {
+    "id": "paperleaf-multi-agent-compare-v1",
+    "annotation_status": "draft",
+    "quality_claims_allowed": false,
+    "manifest_sha256": "e6e58afa11cc808db7feda862f449373dcbd47e2e3d22119164c941a4b83d775",
+    "cases_sha256": "49f4e5d5a9bc86dd5d9c4c640e61c894de614392d7be5262e06bb2c059de20b1",
+    "executed_task_count": 30,
+    "executed_run_count": 90
+  },
+  "corpus": {
+    "paper_count": 20,
+    "chunk_count": 2773,
+    "chunking_strategies": [
+      "structure_aware_v2"
+    ],
+    "embedding_fingerprints": [
+      "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+    ],
+    "embedding_dimensions": 1024,
+    "embedding_revision": 2,
+    "embedding_input_format": "paper_context_v2",
+    "test_corpus_snapshot_sha256": "d3dd4b0a3188cad7364abc28e40109ef833719e0bf818317c339d7f8a50655f2",
+    "dev_corpus_snapshot_sha256": "67048ff429c929971c23fb621920b09849405de69b3471c2f25d55d355a4d964"
+  },
+  "models": {
+    "chat_model": "deepseek-v4-flash",
+    "embedding_model": "qwen3-embedding:0.6b",
+    "model_config_sha256": "4bb9fafc1b12c6f76fd8a141f8a19ac00b7ef7172940b7ac13a7dbd07b0adf2e",
+    "token_measurement": "estimated_not_provider_billed_usage"
+  },
+  "configuration": {
+    "variants": [
+      "single_agent_v1",
+      "compare_map_reduce_v2",
+      "specialist_subgraph_v3"
+    ],
+    "max_branches": 3,
+    "map_reduce_branch_timeout_seconds": 20,
+    "map_reduce_total_timeout_seconds": 45,
+    "specialist_branch_timeout_seconds": 45,
+    "specialist_total_timeout_seconds": 150,
+    "parent_token_budget": 12000,
+    "model_context_tokens": 32768
+  },
+  "artifacts": {
+    "test-capture.json": "6e41cc49664f19d6e34a77f27f0990faab8058ed8159a69708fc10aa2bd69029",
+    "dev-capture.json": "9260ae82dfb6e8f02623e93556649fcdf5bde9d8a9d1bb0f8421f26715414f51",
+    "metrics.json": "ddc7f6981609ff2f9e8254d07de7cf88947fcc4ae9f78e215a25fd6929ef5adc",
+    "test-blind-review.jsonl": "bd470a5151452f7fefcea44b9390672313c616344d316b7418dce1df7ab1b81c",
+    "dev-blind-review.jsonl": "cd0ca1a1eaff58c354ba6965aedd51d2b56b0e48da9b43d7209643e04b3a9ea1",
+    "worker-recovery-capture.json": "16d6032ac61e0c7fa29eadc9ce1fc3bda527993debe4e03a98af4fb13b305d6f",
+    "worker-recovery.json": "d8f21a01d2268b417a6369ef431a6a5ed0a4941bc2cdeea51a8db87827f8e0f6"
+  },
+  "worker_recovery": {
+    "status": "passed",
+    "run_id": "5987dd89-cf15-4a43-8771-f9a77582f9a6",
+    "job_attempts": 2,
+    "pre_kill_succeeded_subtasks": [
+      "s1",
+      "s3"
+    ],
+    "post_reclaim_started_subtasks": [
+      "s2"
+    ],
+    "pre_kill_success_reexecutions": 0,
+    "stale_claim_write_rejected": true
+  },
+  "human_review": {
+    "status": "pending",
+    "completed_reviews": 0,
+    "minimum_reviews": 30
+  }
+}

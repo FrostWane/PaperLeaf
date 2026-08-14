@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "evidence_level": "real_worker_kill_and_postgresql_checkpoint",
+  "status": "passed",
+  "run": {
+    "run_id": "5987dd89-cf15-4a43-8771-f9a77582f9a6",
+    "orchestration_version": "specialist_subgraph_v3",
+    "status": "completed",
+    "error_code": null,
+    "duration_ms": 227056
+  },
+  "job": {
+    "job_id": "8f37d1a1-d8ed-4760-92e5-405556e48599",
+    "status": "completed",
+    "attempts": 2,
+    "max_attempts": 3
+  },
+  "claim_token_policy": {
+    "tokens_exported": false,
+    "event_epochs_are_truncated_sha256": true,
+    "stale_claim_probe_rejected": true
+  },
+  "checkpoint_recovery": {
+    "event_epochs": [
+      "eec2a14a1c",
+      "71991d91eb"
+    ],
+    "pre_kill_succeeded_subtasks": [
+      "s1",
+      "s3"
+    ],
+    "pre_kill_unfinished_subtasks": [
+      "s2"
+    ],
+    "post_reclaim_started_subtasks": [
+      "s2"
+    ],
+    "later_success_count_for_pre_kill_subtasks": {
+      "s1": 0,
+      "s3": 0
+    },
+    "recovered_event_count": 0
+  },
+  "checks": {
+    "run_reached_terminal_state": true,
+    "job_reclaimed_after_kill": true,
+    "multiple_claim_epochs_observed": true,
+    "successful_pre_kill_branches_not_reexecuted": true,
+    "checkpoint_resume_only_unfinished_branches": true,
+    "event_sequences_unique_and_ordered": true,
+    "stale_claim_write_rejected": true
+  },
+  "events": [
+    {
+      "sequence": 4,
+      "event": "node_started",
+      "node": "plan_comparison",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": null,
+      "status": null,
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:04.497145+00:00"
+    },
+    {
+      "sequence": 5,
+      "event": "node_finished",
+      "node": "plan_comparison",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": null,
+      "status": "completed",
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:04.508732+00:00"
+    },
+    {
+      "sequence": 6,
+      "event": "node_started",
+      "node": "compare_subtask",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": "s1",
+      "status": null,
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:04.519452+00:00"
+    },
+    {
+      "sequence": 7,
+      "event": "node_started",
+      "node": "compare_subtask",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": "s2",
+      "status": null,
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:04.524357+00:00"
+    },
+    {
+      "sequence": 8,
+      "event": "node_started",
+      "node": "compare_subtask",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": "s3",
+      "status": null,
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:04.528574+00:00"
+    },
+    {
+      "sequence": 9,
+      "event": "node_finished",
+      "node": "compare_subtask",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": "s3",
+      "status": "succeeded",
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:31.854332+00:00"
+    },
+    {
+      "sequence": 10,
+      "event": "node_finished",
+      "node": "compare_subtask",
+      "event_epoch": "eec2a14a1c",
+      "subtask_id": "s1",
+      "status": "succeeded",
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:14:34.198300+00:00"
+    },
+    {
+      "sequence": 11,
+      "event": "node_started",
+      "node": "compare_subtask",
+      "event_epoch": "71991d91eb",
+      "subtask_id": "s2",
+      "status": null,
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:44:58.651289+00:00"
+    },
+    {
+      "sequence": 12,
+      "event": "node_finished",
+      "node": "compare_subtask",
+      "event_epoch": "71991d91eb",
+      "subtask_id": "s2",
+      "status": "timeout",
+      "recovered": false,
+      "error_category": "timeout",
+      "created_at": "2026-08-14T00:45:43.678708+00:00"
+    },
+    {
+      "sequence": 13,
+      "event": "node_started",
+      "node": "merge_comparison",
+      "event_epoch": "71991d91eb",
+      "subtask_id": null,
+      "status": null,
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:45:43.692335+00:00"
+    },
+    {
+      "sequence": 14,
+      "event": "node_finished",
+      "node": "merge_comparison",
+      "event_epoch": "71991d91eb",
+      "subtask_id": null,
+      "status": "partial",
+      "recovered": false,
+      "error_category": null,
+      "created_at": "2026-08-14T00:45:43.703026+00:00"
+    }
+  ]
+}

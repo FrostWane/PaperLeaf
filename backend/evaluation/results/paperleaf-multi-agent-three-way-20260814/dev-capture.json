@@ -1,0 +1,1032 @@
+{
+  "schema_version": 1,
+  "capture_kind": "paperleaf_multi_agent_live",
+  "generated_at": "2026-08-14T00:06:28.971031+00:00",
+  "dataset": {
+    "id": "paperleaf-multi-agent-compare-v1",
+    "version": "2026-08-12-draft.1",
+    "annotation_status": "draft",
+    "quality_claims_allowed": false,
+    "split": "dev",
+    "selected_case_count": 2
+  },
+  "evidence_level": "real_infrastructure_and_model_runs",
+  "quality_decision": "quality_pending",
+  "quality_note": "未完成人工盲评；本报告不得用于声称 v2/v3 质量优于 v1",
+  "token_measurement": "estimated_not_provider_billed_usage",
+  "offline_evaluator_compatible": false,
+  "offline_evaluator_note": "维度、冲突和用户可见 partial 提示仍为 not_measured，禁止填零后送入 Go/No-Go",
+  "pairs": [
+    {
+      "case_id": "sys-01",
+      "review_query": "比较 RAG、ReAct、Toolformer 与思维链如何让语言模型获得参数之外的能力。",
+      "order": [
+        "v2",
+        "v3",
+        "v1"
+      ],
+      "query_hash": "caa5685fae547a1df7e1ff3a764afd00ce1d2ef197916e0f0f60d73df8a47ba9",
+      "scope_hash": "54eec621f2b8e799c839fde60fa0351aa7471a2d61fb30002df1549f3238e00c",
+      "collection_snapshot_hash": "44a553b6a8e11c7d19faeee65ca5788f30869179737d8e84c906e3d98d49f703",
+      "model_config_hash": "4bb9fafc1b12c6f76fd8a141f8a19ac00b7ef7172940b7ac13a7dbd07b0adf2e",
+      "input_hash": "5e81f6ab2c106a5e73f081cc5c0c5ddc1492a136fbcd674ba4944d469383bad0",
+      "case_metrics": {
+        "expected_claim_count": 4,
+        "required_paper_count": 4
+      },
+      "v2": {
+        "variant": "v2",
+        "execution_status": "executed",
+        "run_id": "b44ba6f7-dfd0-4ca1-bb68-0885bc0af670",
+        "run_status": "completed",
+        "error_code": null,
+        "raw_orchestration_version": "compare_map_reduce_v2",
+        "orchestration_version": "v2",
+        "executed_path": "v2",
+        "duration_ms": 162927,
+        "first_verified_delta_ms": 163199,
+        "branches": {
+          "planned": 3,
+          "succeeded": 3,
+          "failed": 0,
+          "timed_out": 0,
+          "raw_failed_including_timeout": 0
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": false,
+        "estimated_input_tokens": {
+          "status": "measured",
+          "value": 10420,
+          "basis": "harness_trace.context_budget.final_input_tokens"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 412,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 13,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 0,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "### 已核验要点\n- RAG 用检索到的外部文档补充非参数知识 [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p5:c2]。\n- Toolformer 让模型自监督学会调用外部 API [chunk:2e866c4e-b5cc-4d58-8917-c94440270aa5:p10:c2]。\n- ReAct 则把内部推理与外部行动交错协同 [chunk:ceb24ccd-7b51-45be-94b7-fd2117aac159:p2:c13]。\n- 小模型仍然失败 [chunk:5bdb9873-71af-4bb2-a684-e8ab5e35734f:p8:c1]。\n- 但正如 ReAct 论文所指出的，这种推理是静态黑盒——模型只用内部表征生成想法、不接地外部世界，因此无法反应式推理或更新知识，容易产生事实幻觉和错误传播 [chunk:ceb24ccd-7b51-45be-94b7-fd2117aac159:p2:c13]。\n- RAG 结合参数化生成模型与检索机制，在四个开放域问答任务上取得当时的新 SOTA ，并且相比 BART 幻觉更少、生成更事实正确的文本 [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p5:c2][chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p6:c4]。\n- 在 ALFWorld 交互环境中，最佳 ReAct 试验平均成功率达 71%，显著高于仅行动基线的最佳 45% [chunk:ceb24ccd-7b51-45be-94b7-fd2117aac159:p8:c4]。",
+        "citations": [
+          {
+            "chunk_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p5:c2",
+            "paper_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+            "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "physical_page": 5,
+            "excerpt": "Results\n\n4.1 Open-domain Question Answering Table 1 shows results for RAG along with state-of-the-art models. On all four open-domain QA tasks, RAG sets a new state of the art (only on the T5-comparable split for TQA). RAG combines the generation ﬂexibility of the “closed-book” (parametric only) approaches and the perf",
+            "viewer_url": "/api/v1/papers/5d7ac797-db77-4808-9ff1-a6d5e75f3c04/file#page=5"
+          },
+          {
+            "chunk_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5:p10:c2",
+            "paper_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5",
+            "paper_title": "Toolformer: Language Models Can Teach Themselves to Use Tools",
+            "physical_page": 10,
+            "excerpt": "85 patients (23%) were hospitalised alive and admitted to a hospital ward. Of them, <API> Calcula-\n\ntor(85 / 23) →3.70 </API> 65% had a cardiac aetiology [. . .] −0.02\n\nBut hey, after the <API> Calendar() →Today is Saturday, June 25, 2011. </API> Disneyland ﬁasco with the ﬁre drill, I think it’s safe to say Chewey won’",
+            "viewer_url": "/api/v1/papers/2e866c4e-b5cc-4d58-8917-c94440270aa5/file#page=10"
+          },
+          {
+            "chunk_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159:p2:c13",
+            "paper_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159",
+            "paper_title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+            "physical_page": 2,
+            "excerpt": "<RXDUHLQWKHPLGGOHRIDURRP/RRNLQJTXLFNO\\DURXQG\n\n\\RX\\RXVHHDFDELQHWDFDELQHWDFRIIHHPDFKLQH\n\nDFRXQWHUWRSDVWRYHEXUQHUDQGDWRDVWHU\n\n<RXUWDVNLVWR3XWVRPHSHSSHUVKDNHURQDGUDZHU\n\n$OI:RUOG\n\n+RWVSRW4$\n\nFigure 1: (1) Comparison of 4 prompting methods, (a) Standard, (b) Chain-of-thought (CoT, Reason Only), (c) Act-only, and (d) ReAct (R",
+            "viewer_url": "/api/v1/papers/ceb24ccd-7b51-45be-94b7-fd2117aac159/file#page=2"
+          },
+          {
+            "chunk_id": "5bdb9873-71af-4bb2-a684-e8ab5e35734f:p8:c1",
+            "paper_id": "5bdb9873-71af-4bb2-a684-e8ab5e35734f",
+            "paper_title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+            "physical_page": 8,
+            "excerpt": "Our experimental setup uses the same methods and models as in the prior two sections. We again manually compose chains of thought for the few-shot exemplars for each task, which are given in Figure 3. Results. The results of these in-domain and OOD evaluations are shown in Figure 8 for PaLM, with results for LaMDA show",
+            "viewer_url": "/api/v1/papers/5bdb9873-71af-4bb2-a684-e8ab5e35734f/file#page=8"
+          },
+          {
+            "chunk_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p6:c4",
+            "paper_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+            "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "physical_page": 6,
+            "excerpt": "BART\n\n15.1 19.7 38.2 41.6 64.0 81.1 RAG-Tok. 17.3 22.2 40.1 41.5 72.5 89.5 RAG-Seq. 14.7 21.4 40.8 44.2 to more effective marginalization over documents. Furthermore, RAG can generate correct answers even when the correct answer is not in any retrieved document, achieving 11.8% accuracy in such cases for NQ, where an e",
+            "viewer_url": "/api/v1/papers/5d7ac797-db77-4808-9ff1-a6d5e75f3c04/file#page=6"
+          },
+          {
+            "chunk_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159:p8:c4",
+            "paper_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159",
+            "paper_title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+            "physical_page": 8,
+            "excerpt": "Results\n\nReAct outperforms Act on both ALFWorld (Table 3) and Webshop (Table 4). On ALFWorld, the best ReAct trial achieves an average success rate of 71%, signiﬁcantly outperforming the best Act (45%) and BUTLER (37%) trials. In fact, even the worse ReAct trial (48%) beats the best trial of both methods. Moreover, the",
+            "viewer_url": "/api/v1/papers/ceb24ccd-7b51-45be-94b7-fd2117aac159/file#page=8"
+          }
+        ],
+        "frozen_result_hash": "b14cbe87a34502c29ce5b141c5c57c7fa1fb3478ff1b791197388b5e323fdfa4",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 6,
+              "correct_page_citations": 6,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [
+                "arxiv:2005.11401v4",
+                "arxiv:2302.04761v1",
+                "arxiv:2210.03629v3",
+                "arxiv:2201.11903v6"
+              ],
+              "covered_source_case_ids": []
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "measured",
+            "value": {
+              "supported": 7,
+              "total": 7
+            },
+            "basis": "result_summary.evidence_quality"
+          },
+          "context_budget_exceeded": {
+            "status": "measured",
+            "value": false,
+            "basis": "harness_trace.context_budget"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有可审计的分支 claim/stance，不能推断冲突召回"
+          },
+          "branch_metrics": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有 Specialist 分支"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      },
+      "v3": {
+        "variant": "v3",
+        "execution_status": "executed",
+        "run_id": "f3a3c14d-a766-4e02-b908-7a671bc62d8b",
+        "run_status": "completed",
+        "error_code": null,
+        "raw_orchestration_version": "specialist_subgraph_v3",
+        "orchestration_version": "v3",
+        "executed_path": "v3",
+        "duration_ms": 111387,
+        "first_verified_delta_ms": 111936,
+        "branches": {
+          "planned": 3,
+          "succeeded": 2,
+          "failed": 0,
+          "timed_out": 1,
+          "raw_failed_including_timeout": 1
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": true,
+        "estimated_input_tokens": {
+          "status": "measured",
+          "value": 6425,
+          "basis": "harness_trace.context_budget.final_input_tokens"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 540,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 14,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 0,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "### 已核验要点\n- RAG 将预训练 seq2seq 的参数化记忆与维基百科密集向量索引的非参数化记忆结合，由预训练神经检索器访问外部知识 [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p1:c1]。\n- RAG 有两种变体：RAG-Sequence 用同一个检索文档生成完整序列，RAG-Token 可为每个目标 token 使用不同文档 [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p3:c0]。\n- RAG 在三个开放域问答任务上达到最先进水平，优于参数化 seq2seq 模型和任务特定的检索-抽取架构 [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p1:c1]。\n- ReAct 把推理与行动整合进语言模型，由模型自行决定思考和行动的异步发生，从而适配问答、事实验证、文本游戏和网页导航等不同任务 [chunk:ceb24ccd-7b51-45be-94b7-fd2117aac159:p4:c0]。\n- ReAct 仅凭 1 到 6 个上下文示例即可泛化到新任务实例，并持续优于仅推理或仅行动的基线 [chunk:ceb24ccd-7b51-45be-94b7-fd2117aac159:p4:c0]。\n- DATESET 的提升完全来自日历工具（54.8% 示例使用），TEMPLAMA 的提升主要来自维基百科搜索和问答工具（日历仅 0.2%） [chunk:2e866c4e-b5cc-4d58-8917-c94440270aa5:p8:c5]。\n- Toolformer 无法链式使用工具，因为每个工具的 API 调用是独立生成的 [chunk:2e866c4e-b5cc-4d58-8917-c94440270aa5:p11:c1]。\n- Toolformer 也不允许交互式使用工具，例如浏览搜索引擎的多个结果或细化查询 [chunk:2e866c4e-b5cc-4d58-8917-c94440270aa5:p11:c1]。",
+        "citations": [
+          {
+            "chunk_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p1:c1",
+            "paper_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+            "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "physical_page": 1,
+            "excerpt": "Abstract\n\nLarge pre-trained language models have been shown to store factual knowledge in their parameters, and achieve state-of-the-art results when ﬁne-tuned on down- stream NLP tasks. However, their ability to access and precisely manipulate knowl- edge is still limited, and hence on knowledge-intensive tasks, their",
+            "viewer_url": "/api/v1/papers/5d7ac797-db77-4808-9ff1-a6d5e75f3c04/file#page=1"
+          },
+          {
+            "chunk_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p3:c0",
+            "paper_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+            "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "physical_page": 3,
+            "excerpt": "by θ that generates a current token based on a context of the previous i −1 tokens y1:i−1, the original input x and a retrieved passage z. To train the retriever and generator end-to-end, we treat the retrieved document as a latent variable. We propose two models that marginalize over the latent documents in different ",
+            "viewer_url": "/api/v1/papers/5d7ac797-db77-4808-9ff1-a6d5e75f3c04/file#page=3"
+          },
+          {
+            "chunk_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159:p4:c0",
+            "paper_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159",
+            "paper_title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+            "physical_page": 4,
+            "excerpt": "Published as a conference paper at ICLR 2023 appear sparsely in the most relevant positions of a trajectory, so we let the language model decide the asynchronous occurrence of thoughts and actions for itself. Since decision making and reasoning capabilities are integrated into a large language model, ReAct enjoys sever",
+            "viewer_url": "/api/v1/papers/ceb24ccd-7b51-45be-94b7-fd2117aac159/file#page=4"
+          },
+          {
+            "chunk_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5:p8:c5",
+            "paper_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5",
+            "paper_title": "Toolformer: Language Models Can Teach Themselves to Use Tools",
+            "physical_page": 8,
+            "excerpt": "Results shown in Table 7 illustrate that Tool-\n\nformer outperforms all baselines for both TEM- PLAMA and DATESET. However, closer inspec- tion shows that improvements on TEMPLAMA can not be attributed to the calendar tool, which is only used for 0.2% of all examples, but mostly to the Wikipedia search and question answ",
+            "viewer_url": "/api/v1/papers/2e866c4e-b5cc-4d58-8917-c94440270aa5/file#page=8"
+          },
+          {
+            "chunk_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5:p11:c1",
+            "paper_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5",
+            "paper_title": "Toolformer: Language Models Can Teach Themselves to Use Tools",
+            "physical_page": 11,
+            "excerpt": "Limitations\n\nWhile our approach enables LMs to learn how to use a variety of tools in a self-supervised way, there are some clear limitations to what can be achieved with our method in its current form. One such limi- tation is the inability of Toolformer to use tools in a chain (i.e., using the output of one tool as a",
+            "viewer_url": "/api/v1/papers/2e866c4e-b5cc-4d58-8917-c94440270aa5/file#page=11"
+          }
+        ],
+        "frozen_result_hash": "7617a5f1db53a393ac0a15a88589d153db4e38570e72e7b31e0f7ca8fd821bb0",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 5,
+              "correct_page_citations": 5,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [
+                "arxiv:2005.11401v4",
+                "arxiv:2210.03629v3",
+                "arxiv:2302.04761v1"
+              ],
+              "covered_source_case_ids": []
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "measured",
+            "value": {
+              "supported": 8,
+              "total": 8
+            },
+            "basis": "result_summary.evidence_quality"
+          },
+          "context_budget_exceeded": {
+            "status": "measured",
+            "value": false,
+            "basis": "harness_trace.context_budget"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "measured",
+            "value": 0,
+            "basis": "harness_trace.specialist_conflict_set_count"
+          },
+          "branch_metrics": {
+            "status": "measured",
+            "value": [
+              {
+                "subtask_id": "s1",
+                "status": "succeeded",
+                "duration_ms": 34262,
+                "evidence_count": 3,
+                "claim_count": 8,
+                "input_tokens": 2899,
+                "output_tokens": 1023,
+                "provider_input_tokens": 2314,
+                "provider_output_tokens": 3473,
+                "error_category": null
+              },
+              {
+                "subtask_id": "s2",
+                "status": "timeout",
+                "duration_ms": 45003,
+                "evidence_count": 0,
+                "claim_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "provider_input_tokens": null,
+                "provider_output_tokens": null,
+                "error_category": "timeout"
+              },
+              {
+                "subtask_id": "s3",
+                "status": "succeeded",
+                "duration_ms": 13088,
+                "evidence_count": 3,
+                "claim_count": 8,
+                "input_tokens": 2829,
+                "output_tokens": 933,
+                "provider_input_tokens": 2096,
+                "provider_output_tokens": 1364,
+                "error_category": null
+              }
+            ],
+            "basis": "harness_trace.branch_metrics"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      },
+      "v1": {
+        "variant": "v1",
+        "execution_status": "executed",
+        "run_id": "24c5b271-c597-4c36-882e-055d8bb75e65",
+        "run_status": "completed",
+        "error_code": null,
+        "raw_orchestration_version": "single_agent_v1",
+        "orchestration_version": "v1",
+        "executed_path": "v1",
+        "duration_ms": 103470,
+        "first_verified_delta_ms": 104007,
+        "branches": {
+          "planned": 0,
+          "succeeded": 0,
+          "failed": 0,
+          "timed_out": 0,
+          "raw_failed_including_timeout": 0
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": false,
+        "estimated_input_tokens": {
+          "status": "measured",
+          "value": 7318,
+          "basis": "harness_trace.context_budget.final_input_tokens"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 174,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 7,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 1,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "### 已核验要点\n- 实现上，开放域问答用 15 个检索文档（RAG-Token）、50 个检索文档（RAG-Sequence），Open-MSMarco 和 Jeopardy 用 10 个文档，并用 FAISS 建立文档索引 [``] [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p17:c0]。\n- ReAct 通过与 Wikipedia API 交互获得外部信息：检索结果支撑推理，推理结果又决定下一步检索什么，形成“推理—行动”协同 [``] [chunk:ceb24ccd-7b51-45be-94b7-fd2117aac159:p4:c1]。",
+        "citations": [
+          {
+            "chunk_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p17:c0",
+            "paper_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+            "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "physical_page": 17,
+            "excerpt": "Appendices for Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks A Implementation Details For Open-domain QA we report test numbers using 15 retrieved documents for RAG-Token models. For RAG-Sequence models, we report test results using 50 retrieved documents, and we use the Thorough Decoding approach si",
+            "viewer_url": "/api/v1/papers/5d7ac797-db77-4808-9ff1-a6d5e75f3c04/file#page=17"
+          },
+          {
+            "chunk_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159:p4:c1",
+            "paper_id": "ceb24ccd-7b51-45be-94b7-fd2117aac159",
+            "paper_title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+            "physical_page": 4,
+            "excerpt": "KNOWLEDGE-INTENSIVE REASONING TASKS\n\nWe begin with knowledge-intensive reasoning tasks like multi-hop question answering and fact veriﬁcation. As shown in Figure 1(1d), by interacting with a Wikipedia API, ReAct is able to retrieve information to support reasoning, while also use reasoning to target what to retrieve ne",
+            "viewer_url": "/api/v1/papers/ceb24ccd-7b51-45be-94b7-fd2117aac159/file#page=4"
+          }
+        ],
+        "frozen_result_hash": "087e5605226c2e57361cb35cb684b9574f0d20b55eccdbb6156261e200881858",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 2,
+              "correct_page_citations": 2,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [
+                "arxiv:2005.11401v4",
+                "arxiv:2210.03629v3"
+              ],
+              "covered_source_case_ids": []
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "measured",
+            "value": {
+              "supported": 2,
+              "total": 2
+            },
+            "basis": "result_summary.evidence_quality"
+          },
+          "context_budget_exceeded": {
+            "status": "measured",
+            "value": false,
+            "basis": "harness_trace.context_budget"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有可审计的分支 claim/stance，不能推断冲突召回"
+          },
+          "branch_metrics": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有 Specialist 分支"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "sys-02",
+      "review_query": "比较 BERT、GPT-3、LLaMA 与 Llama 2 的训练范式、规模和对齐方式。",
+      "order": [
+        "v2",
+        "v3",
+        "v1"
+      ],
+      "query_hash": "a3b9ba84b4e5b52a834b70b393d8e821e5975749873474b2327f13ef6d18f0b9",
+      "scope_hash": "f771dde4917c528fd90b5701f31b6920a339438f0c9f8a432628619f8956803c",
+      "collection_snapshot_hash": "133e59b206fc03c69f0b5fa91f7d03014e70d073d754703622c7f20c8b684311",
+      "model_config_hash": "4bb9fafc1b12c6f76fd8a141f8a19ac00b7ef7172940b7ac13a7dbd07b0adf2e",
+      "input_hash": "5539110d83b9155ca86aa7bd383dc925fb5b95b48bb4a1d04ae18a7155cfe4bb",
+      "case_metrics": {
+        "expected_claim_count": 4,
+        "required_paper_count": 4
+      },
+      "v2": {
+        "variant": "v2",
+        "execution_status": "executed",
+        "run_id": "cec83b10-20b5-412c-b409-48c445a0a96e",
+        "run_status": "completed",
+        "error_code": null,
+        "raw_orchestration_version": "compare_map_reduce_v2",
+        "orchestration_version": "v2",
+        "executed_path": "v2",
+        "duration_ms": 140117,
+        "first_verified_delta_ms": 140520,
+        "branches": {
+          "planned": 3,
+          "succeeded": 3,
+          "failed": 0,
+          "timed_out": 0,
+          "raw_failed_including_timeout": 0
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": false,
+        "estimated_input_tokens": {
+          "status": "measured",
+          "value": 13807,
+          "basis": "harness_trace.context_budget.final_input_tokens"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 766,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 13,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 0,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "### 已核验要点\n- 整体上，这四个模型展示了训练范式的演进：从 BERT 的“预训练+微调”、GPT-3 的上下文少样本学习 ，到 LLaMA 的指令微调  与 Llama 2 的 SFT+RLHF 对齐 [chunk:86d36a62-70e0-4874-acc2-30ab274833f1:p3:c7][chunk:7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1:p19:c1][chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p7:c1][chunk:5533c299-86f0-4f41-88fe-c5356bc26af1:p77:c0]。\n- 参数量也从 BERT 的约 1 亿级  扩大到 GPT-3 的 1750 亿 ，再回到 LLaMA 与 Llama 2 的 70 亿至 700 亿量级 [chunk:86d36a62-70e0-4874-acc2-30ab274833f1:p3:c7][chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p18:c1][chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p5:c0][chunk:5533c299-86f0-4f41-88fe-c5356bc26af1:p77:c0]。\n- BERT 采用“预训练+微调”两阶段框架，使用多层双向 Transformer encoder，微调时用下游标注数据更新全部参数 [chunk:86d36a62-70e0-4874-acc2-30ab274833f1:p3:c7]。\n- BERT-base 和 BERT-large 分别为 110M 和 340M 参数 [chunk:86d36a62-70e0-4874-acc2-30ab274833f1:p3:c7]。\n- GPT-3 是 175B 参数的语言模型 [chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p18:c1]。\n- 其 few-shot 方式是在上下文中提供 32 个示例，而不进行任何梯度更新 [chunk:7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1:p19:c1]。\n- LLaMA 提供 7B、13B、33B、65B 多个规模 [chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p5:c0]。\n- 其中 LLaMA-13B 在大多数基准上超过 GPT-3，尽管参数量小约 10 倍 [chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p5:c0]。\n- LLaMA 额外实验了指令微调（LLaMA-I）：很轻量的指令微调即可将 MMLU 分数提升到 68.9%，优于同量级已有指令微调模型 [chunk:3ef5fd16-5974-407a-a1b9-1e3de58820ef:p7:c1]。\n- Llama 2 的微调版本使用监督微调（SFT）和基于人类反馈的强化学习（RLHF），以对齐人类对有用性与安全性的偏好 [chunk:5533c299-86f0-4f41-88fe-c5356bc26af1:p77:c0]。\n- Llama 2 70B 在 MMLU 和 GSM8K 上接近 GPT-3.5，但在代码基准上仍有显著差距 [chunk:5533c299-86f0-4f41-88fe-c5356bc26af1:p8:c1]。",
+        "citations": [
+          {
+            "chunk_id": "86d36a62-70e0-4874-acc2-30ab274833f1:p3:c7",
+            "paper_id": "86d36a62-70e0-4874-acc2-30ab274833f1",
+            "paper_title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+            "physical_page": 3,
+            "excerpt": "BERT\n\nWe introduce BERT and its detailed implementa- tion in this section. There are two steps in our framework: pre-training and ﬁne-tuning. Dur- ing pre-training, the model is trained on unlabeled data over different pre-training tasks. For ﬁne- tuning, the BERT model is ﬁrst initialized with the pre-trained paramete",
+            "viewer_url": "/api/v1/papers/86d36a62-70e0-4874-acc2-30ab274833f1/file#page=3"
+          },
+          {
+            "chunk_id": "7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1:p19:c1",
+            "paper_id": "7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1",
+            "paper_title": "Language Models are Few-Shot Learners",
+            "physical_page": 19,
+            "excerpt": "COPA\n\nRTE Average Accuracy Accuracy F1 Accuracy Accuracy Fine-tuned SOTA 89.0 91.0 96.9 93.9 94.8 92.5 Fine-tuned BERT-Large 69.0 77.4 83.6 75.7 70.6 71.7 GPT-3 Few-Shot 71.8 76.4 75.6 52.0 92.0 69.0 WiC WSC MultiRC MultiRC ReCoRD ReCoRD Accuracy Accuracy Accuracy F1a Accuracy F1 Fine-tuned SOTA 76.1 93.8 62.3 88.2 92.",
+            "viewer_url": "/api/v1/papers/7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1/file#page=19"
+          },
+          {
+            "chunk_id": "3ef5fd16-5974-407a-a1b9-1e3de58820ef:p7:c1",
+            "paper_id": "3ef5fd16-5974-407a-a1b9-1e3de58820ef",
+            "paper_title": "LLaMA: Open and Efficient Foundation Language Models",
+            "physical_page": 7,
+            "excerpt": "STEM\n\nSocial Sciences Other Average GPT-NeoX 20B 29.8 34.9 33.7 37.7 33.6 GPT-3 175B 40.8 36.7 50.4 48.8 43.9 Gopher 280B 56.2 47.4 71.9 66.1 60.0 Chinchilla 70B 63.6 54.9 79.3 73.9 67.5 PaLM 8B 25.6 23.8 24.1 27.8 25.4 62B 59.5 41.9 62.7 55.8 53.7 540B 77.0 55.6 81.0 69.6 69.3 LLaMA 7B 34.0 30.5 38.3 38.1 35.1 13B 45.",
+            "viewer_url": "/api/v1/papers/3ef5fd16-5974-407a-a1b9-1e3de58820ef/file#page=7"
+          },
+          {
+            "chunk_id": "5533c299-86f0-4f41-88fe-c5356bc26af1:p77:c0",
+            "paper_id": "5533c299-86f0-4f41-88fe-c5356bc26af1",
+            "paper_title": "Llama 2: Open Foundation and Fine-Tuned Chat Models",
+            "physical_page": 77,
+            "excerpt": "A.7 Model Card Table 52 presents a model card (Mitchell et al., 2018; Anil et al., 2023) that summarizes details of the models. Model Details Model Developers Meta AI Variations Llama 2 comes in a range of parameter sizes—7B, 13B, and 70B—as well as pretrained and fine-tuned variations. Input Models input text only. Ou",
+            "viewer_url": "/api/v1/papers/5533c299-86f0-4f41-88fe-c5356bc26af1/file#page=77"
+          },
+          {
+            "chunk_id": "3ef5fd16-5974-407a-a1b9-1e3de58820ef:p18:c1",
+            "paper_id": "3ef5fd16-5974-407a-a1b9-1e3de58820ef",
+            "paper_title": "LLaMA: Open and Efficient Foundation Language Models",
+            "physical_page": 18,
+            "excerpt": "MMLU\n\nGPT-3 Gopher Chinchilla LLaMA LLaMA-I 175B 280B 70B 7B 13B 33B 65B 65B",
+            "viewer_url": "/api/v1/papers/3ef5fd16-5974-407a-a1b9-1e3de58820ef/file#page=18"
+          },
+          {
+            "chunk_id": "3ef5fd16-5974-407a-a1b9-1e3de58820ef:p5:c0",
+            "paper_id": "3ef5fd16-5974-407a-a1b9-1e3de58820ef",
+            "paper_title": "LLaMA: Open and Efficient Foundation Language Models",
+            "physical_page": 5,
+            "excerpt": "HellaSwag (Zellers et al., 2019), WinoGrande (Sak- aguchi et al., 2021), ARC easy and challenge (Clark et al., 2018) and OpenBookQA (Mihaylov et al., 2018). These datasets include Cloze and Winograd style tasks, as well as multiple choice question an- swering. We evaluate in the zero-shot setting as done in the languag",
+            "viewer_url": "/api/v1/papers/3ef5fd16-5974-407a-a1b9-1e3de58820ef/file#page=5"
+          },
+          {
+            "chunk_id": "5533c299-86f0-4f41-88fe-c5356bc26af1:p8:c1",
+            "paper_id": "5533c299-86f0-4f41-88fe-c5356bc26af1",
+            "paper_title": "Llama 2: Open Foundation and Fine-Tuned Chat Models",
+            "physical_page": 8,
+            "excerpt": "results on MMLU and BBH by ≈5 and ≈8 points, respectively, compared to Llama 1 65B. Llama 2 7B and 30B\n\nmodels outperform MPT models of the corresponding size on all categories besides code benchmarks. For the Falcon models, Llama 2 7B and 34B outperform Falcon 7B and 40B models on all categories of benchmarks. Additio",
+            "viewer_url": "/api/v1/papers/5533c299-86f0-4f41-88fe-c5356bc26af1/file#page=8"
+          }
+        ],
+        "frozen_result_hash": "e03eafb18b910d6c91284a2ec96db4a1e1ea692fb9b0a107beaeb284442ecce6",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 7,
+              "correct_page_citations": 7,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [
+                "arxiv:1810.04805v2",
+                "arxiv:2005.14165v4",
+                "arxiv:2302.13971v1",
+                "arxiv:2307.09288v2"
+              ],
+              "covered_source_case_ids": []
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "measured",
+            "value": {
+              "supported": 11,
+              "total": 11
+            },
+            "basis": "result_summary.evidence_quality"
+          },
+          "context_budget_exceeded": {
+            "status": "measured",
+            "value": false,
+            "basis": "harness_trace.context_budget"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有可审计的分支 claim/stance，不能推断冲突召回"
+          },
+          "branch_metrics": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有 Specialist 分支"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      },
+      "v3": {
+        "variant": "v3",
+        "execution_status": "executed",
+        "run_id": "5a8b5144-c127-401a-b046-6a37277c9eb6",
+        "run_status": "failed",
+        "error_code": "MODEL_TIMEOUT",
+        "raw_orchestration_version": "specialist_subgraph_v3",
+        "orchestration_version": "v3",
+        "executed_path": "v3",
+        "duration_ms": 166167,
+        "first_verified_delta_ms": null,
+        "branches": {
+          "planned": 3,
+          "succeeded": 2,
+          "failed": 0,
+          "timed_out": 1,
+          "raw_failed_including_timeout": 1
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": true,
+        "estimated_input_tokens": {
+          "status": "not_measured",
+          "value": null,
+          "reason": "最终输入 Token 估算未持久化"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 0,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 12,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 0,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "",
+        "citations": [],
+        "frozen_result_hash": "79da823acca7f4633cb9e1587682860c38258003f00dae48530aac2f329b9e7e",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 0,
+              "correct_page_citations": 0,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [],
+              "covered_source_case_ids": []
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "回答未产生可审计的主张支持计数"
+          },
+          "context_budget_exceeded": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "生产 Run 未持久化最终输入与 hard limit"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "measured",
+            "value": 0,
+            "basis": "harness_trace.specialist_conflict_set_count"
+          },
+          "branch_metrics": {
+            "status": "measured",
+            "value": [
+              {
+                "subtask_id": "s1",
+                "status": "succeeded",
+                "duration_ms": 21993,
+                "evidence_count": 3,
+                "claim_count": 8,
+                "input_tokens": 2346,
+                "output_tokens": 1056,
+                "provider_input_tokens": 2158,
+                "provider_output_tokens": 1972,
+                "error_category": null
+              },
+              {
+                "subtask_id": "s2",
+                "status": "timeout",
+                "duration_ms": 45001,
+                "evidence_count": 0,
+                "claim_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "provider_input_tokens": null,
+                "provider_output_tokens": null,
+                "error_category": "timeout"
+              },
+              {
+                "subtask_id": "s3",
+                "status": "succeeded",
+                "duration_ms": 42756,
+                "evidence_count": 3,
+                "claim_count": 8,
+                "input_tokens": 2668,
+                "output_tokens": 919,
+                "provider_input_tokens": 2294,
+                "provider_output_tokens": 5809,
+                "error_category": null
+              }
+            ],
+            "basis": "harness_trace.branch_metrics"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      },
+      "v1": {
+        "variant": "v1",
+        "execution_status": "executed",
+        "run_id": "1e2e0cc3-6a23-4120-843a-5a95c199c7d9",
+        "run_status": "completed",
+        "error_code": null,
+        "raw_orchestration_version": "single_agent_v1",
+        "orchestration_version": "v1",
+        "executed_path": "v1",
+        "duration_ms": 89657,
+        "first_verified_delta_ms": 89813,
+        "branches": {
+          "planned": 0,
+          "succeeded": 0,
+          "failed": 0,
+          "timed_out": 0,
+          "raw_failed_including_timeout": 0
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": false,
+        "estimated_input_tokens": {
+          "status": "measured",
+          "value": 10158,
+          "basis": "harness_trace.context_budget.final_input_tokens"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 76,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 7,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 1,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "### 已核验要点\n- 规模上，GPT-3 175B 参数模型的预训练消耗数千 PFLOP/s-days 算力，而 1.5B 参数的 GPT-2 仅需数十量级 [chunk:7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1:p39:c0]。",
+        "citations": [
+          {
+            "chunk_id": "7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1:p39:c0",
+            "paper_id": "7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1",
+            "paper_title": "Language Models are Few-Shot Learners",
+            "physical_page": 39,
+            "excerpt": "6.2.4 Future Bias and Fairness Challenges We have presented this preliminary analysis to share some of the biases we found in order to motivate further research, and to highlight the inherent difﬁculties in characterizing biases in large-scale generative models; we expect this to be an area of continuous research for u",
+            "viewer_url": "/api/v1/papers/7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1/file#page=39"
+          }
+        ],
+        "frozen_result_hash": "f42e2bf59a35d7b737e32079becc783a8fca54adb3dcda46ff4795b3736d8cec",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 1,
+              "correct_page_citations": 1,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [
+                "arxiv:2005.14165v4"
+              ],
+              "covered_source_case_ids": []
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "measured",
+            "value": {
+              "supported": 1,
+              "total": 1
+            },
+            "basis": "result_summary.evidence_quality"
+          },
+          "context_budget_exceeded": {
+            "status": "measured",
+            "value": false,
+            "basis": "harness_trace.context_budget"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有可审计的分支 claim/stance，不能推断冲突召回"
+          },
+          "branch_metrics": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "v1/v2 没有 Specialist 分支"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      }
+    }
+  ],
+  "capture_mode": "existing_runs_recovery",
+  "preflight": {
+    "status": "passed",
+    "dataset_id": "paperleaf-multi-agent-compare-v1",
+    "owner_id": "2003e290-8e74-4f58-8f9e-55a1a9c29dc6",
+    "required_paper_count": 8,
+    "mapped_paper_count": 8,
+    "paper_mapping": {
+      "arxiv:1810.04805v2": "86d36a62-70e0-4874-acc2-30ab274833f1",
+      "arxiv:2005.11401v4": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+      "arxiv:2005.14165v4": "7a9ca0f1-bfb6-41cb-9879-6696c1bd5ee1",
+      "arxiv:2201.11903v6": "5bdb9873-71af-4bb2-a684-e8ab5e35734f",
+      "arxiv:2210.03629v3": "ceb24ccd-7b51-45be-94b7-fd2117aac159",
+      "arxiv:2302.04761v1": "2e866c4e-b5cc-4d58-8917-c94440270aa5",
+      "arxiv:2302.13971v1": "3ef5fd16-5974-407a-a1b9-1e3de58820ef",
+      "arxiv:2307.09288v2": "5533c299-86f0-4f41-88fe-c5356bc26af1"
+    },
+    "corpus_snapshot_hash": "67048ff429c929971c23fb621920b09849405de69b3471c2f25d55d355a4d964",
+    "missing_paper_ids": [],
+    "invalid_paper_ids": [],
+    "case_readiness": {
+      "case_count": 2,
+      "ready_case_count": 2,
+      "ready_v1_case_count": 0,
+      "ready_v2_case_count": 2,
+      "fixture_required_case_count": 0,
+      "cases": [
+        {
+          "case_id": "sys-01",
+          "split": "dev",
+          "expected_path": "v2",
+          "ready": true,
+          "missing_paper_ids": [],
+          "invalid_paper_ids": [],
+          "reasons": []
+        },
+        {
+          "case_id": "sys-02",
+          "split": "dev",
+          "expected_path": "v2",
+          "ready": true,
+          "missing_paper_ids": [],
+          "invalid_paper_ids": [],
+          "reasons": []
+        }
+      ]
+    },
+    "feature_flags": {
+      "skills_enabled": true,
+      "multi_agent_enabled": true,
+      "specialist_agents_enabled": true
+    },
+    "reasons": []
+  },
+  "execution_status": "completed",
+  "executed_run_count": 6,
+  "capture_content_hash": "bf279d5667c3089b88124275ec68c14049f366fbfb720e152745933de96e6f7b",
+  "blind_review_package": {
+    "path": "/app/outputs/private/formal-multi-agent/dev-capture-blind.jsonl",
+    "private_key_path": "/app/outputs/private/formal-multi-agent/dev-capture-blind-key.jsonl",
+    "case_count": 2,
+    "status": "awaiting_human_review",
+    "reviewer_package_contains_version_mapping": false
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "status": "automatic_evidence_complete_human_review_pending",
+  "dataset": {
+    "paper_count": 70,
+    "case_count": 100,
+    "oracle_sha256": "5aa635a0d9830e9853b96fa979c5fe93088a4f000f4d9ec81c048bd334fd90ea",
+    "category_counts": {
+      "single_paper": 50,
+      "multi_evidence": 10,
+      "unanswerable": 10,
+      "cross_paper": 30
+    }
+  },
+  "retrieval_layers": {
+    "diagnostic": {
+      "variant_count": 7,
+      "case_count_per_variant": 90,
+      "chunk_snapshot_sha256": "8b8cd2025c87d8d69a61ebf1f6be3cd576148224aef7c6599c3ec0633a638ff2",
+      "embedding_fingerprints": [
+        "31bcf2da4221f401ecce7005b5a0f9f29326302dda21e2c8386ee62a6f591916",
+        "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+      ]
+    },
+    "hidden": {
+      "variant_count": 7,
+      "case_count_per_variant": 100,
+      "chunk_snapshot_sha256": "a230883447feb687d245e7f08c2d452f94fd78c8466f5fa4edddff420e4dca64",
+      "embedding_fingerprints": [
+        "31bcf2da4221f401ecce7005b5a0f9f29326302dda21e2c8386ee62a6f591916",
+        "eb237054cb61daf21b7c7a6d1e4e6522247e5dc09d75e67c7db92b1c233c8b3a"
+      ]
+    }
+  },
+  "end_to_end": {
+    "executed_cases": 100,
+    "human_review_status": "pending"
+  },
+  "multi_agent": {
+    "task_count": 30,
+    "run_count": 90,
+    "human_review_status": "pending",
+    "worker_recovery_status": "passed"
+  },
+  "artifacts": {
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/run_manifest.json": "61d335b2353a09864c5e218d56b530b66fe030b8da7db591c65c6a9af32736bb",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/metrics.json": "5ec3401b389f58518e31ff6920594391267bdbf598490ffc7b6383cfbb006ee8",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/per_query_results.jsonl": "c4cf023c478c2311f970a28613b64ffe755bedba81902e2eb6a21f0118ad8879",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/ground_truth_oracle.jsonl": "5aa635a0d9830e9853b96fa979c5fe93088a4f000f4d9ec81c048bd334fd90ea",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/end_to_end_answers/run_manifest.json": "ea279988236726426d78c42aad39a295cbe286e67ac0ae839fa53d39d4a898ff",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/end_to_end_answers/metrics.json": "b8c1c39c118ee6103037df28c13f98bc0a9daa055596331f91f14706e353f4e3",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/end_to_end_answers/per_query_answers.jsonl": "688b7fbc0e6c8bd741f96ea7874f79e867a7d30cd0de1afa780a830a0f361cb5",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/end_to_end_answers/human_blind_review.jsonl": "0eb397e5ae620e55eebd279c3998de1909e78cd8132fa2bcc28b6762606c0df4",
+    "backend/evaluation/results/paperleaf-rag-production-diagnostic-20260814/run_manifest.json": "15cd1b4d82633cc26201773d9f356cfceddfa842e40cfb0565364b0b68e5fd85",
+    "backend/evaluation/results/paperleaf-rag-production-diagnostic-20260814/metrics.json": "aee660bce3c346146a5547ae42c6197cc8f138938182164a13dae32178d60af5",
+    "backend/evaluation/results/paperleaf-rag-production-diagnostic-20260814/per_query_results.jsonl": "07f4360777a4d22d4fb0b64125da454fc46b3ed3df05e70ff6d5dc638aba4a44",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/test-capture.json": "6e41cc49664f19d6e34a77f27f0990faab8058ed8159a69708fc10aa2bd69029",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/dev-capture.json": "9260ae82dfb6e8f02623e93556649fcdf5bde9d8a9d1bb0f8421f26715414f51",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/metrics.json": "ddc7f6981609ff2f9e8254d07de7cf88947fcc4ae9f78e215a25fd6929ef5adc",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/run_manifest.json": "b175073478333bd0fd250c25d50e74229f56dfed66d8fc2c5dcefbdd7478511f",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/test-blind-review.jsonl": "bd470a5151452f7fefcea44b9390672313c616344d316b7418dce1df7ab1b81c",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/dev-blind-review.jsonl": "cd0ca1a1eaff58c354ba6965aedd51d2b56b0e48da9b43d7209643e04b3a9ea1",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/worker-recovery-capture.json": "16d6032ac61e0c7fa29eadc9ce1fc3bda527993debe4e03a98af4fb13b305d6f",
+    "backend/evaluation/results/paperleaf-multi-agent-three-way-20260814/worker-recovery.json": "d8f21a01d2268b417a6369ef431a6a5ed0a4941bc2cdeea51a8db87827f8e0f6"
+  }
+}

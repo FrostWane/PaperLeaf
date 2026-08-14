@@ -46,7 +46,7 @@
   },
   "artifacts": {
     "per_query_results.jsonl": "07f4360777a4d22d4fb0b64125da454fc46b3ed3df05e70ff6d5dc638aba4a44",
-    "metrics.json": "b9c01cfaeaa85ba2e1f0afa7ef8d5535ecea0c389a1ce1b6a7275d584f3b7bef",
+    "metrics.json": "aee660bce3c346146a5547ae42c6197cc8f138938182164a13dae32178d60af5",
     "REPORT.md": "ec3e50d56c82b7f00aa5c6821fa7c0397ee4cfb200578265ac07187c7ef96f5b"
   },
   "human_review": {

@@ -1,0 +1,346 @@
+{
+  "schema_version": 1,
+  "capture_kind": "paperleaf_multi_agent_live",
+  "generated_at": "2026-08-14T00:13:59.367605+00:00",
+  "dataset": {
+    "id": "paperleaf-multi-agent-compare-v1",
+    "version": "2026-08-12-draft.1",
+    "annotation_status": "draft",
+    "quality_claims_allowed": false,
+    "split": "test",
+    "selected_case_count": 1
+  },
+  "evidence_level": "real_infrastructure_and_model_runs",
+  "quality_decision": "quality_pending",
+  "quality_note": "未完成人工盲评；本报告不得用于声称 v2/v3 质量优于 v1",
+  "token_measurement": "estimated_not_provider_billed_usage",
+  "offline_evaluator_compatible": false,
+  "offline_evaluator_note": "维度、冲突和用户可见 partial 提示仍为 not_measured，禁止填零后送入 Go/No-Go",
+  "pairs": [
+    {
+      "case_id": "sys-16",
+      "review_query": "对十篇代表性论文按表示、训练目标和外部能力三个维度做研究地图。",
+      "order": [
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "query_hash": "044071324528c4a6974e181a64f34e89f49d5b1a24788f907ca127b8778b6007",
+      "scope_hash": "ff90a276a4d00eedde8075127a6a2e00dfc1d4b255f8c3667b501bb5bf7bb7c3",
+      "collection_snapshot_hash": "5803fabff47b87bd50240ee43d20e57ad7cf17d16ff1ad988c96dc7225ea7920",
+      "model_config_hash": "4bb9fafc1b12c6f76fd8a141f8a19ac00b7ef7172940b7ac13a7dbd07b0adf2e",
+      "input_hash": "572a1d3e8fc13bccb9e10cd357c9a786e6266c00d2da0f7f7cb33da5fededb58",
+      "case_metrics": {
+        "expected_claim_count": 10,
+        "required_paper_count": 10
+      },
+      "v3": {
+        "variant": "v3",
+        "execution_status": "executed",
+        "run_id": "5987dd89-cf15-4a43-8771-f9a77582f9a6",
+        "run_status": "completed",
+        "error_code": null,
+        "raw_orchestration_version": "specialist_subgraph_v3",
+        "orchestration_version": "v3",
+        "executed_path": "v3",
+        "duration_ms": 227056,
+        "first_verified_delta_ms": 2074270,
+        "branches": {
+          "planned": 3,
+          "succeeded": 2,
+          "failed": 0,
+          "timed_out": 1,
+          "raw_failed_including_timeout": 1
+        },
+        "fallback_to_v1": false,
+        "fallback_reason": null,
+        "trace_partial_failure": true,
+        "estimated_input_tokens": {
+          "status": "measured",
+          "value": 3589,
+          "basis": "harness_trace.context_budget.final_input_tokens"
+        },
+        "estimated_output_tokens": {
+          "status": "measured",
+          "value": 348,
+          "basis": "PaperLeaf 确定性 estimate_tokens，不是 Provider 账单"
+        },
+        "model_call_count": {
+          "status": "measured",
+          "value": 9,
+          "basis": "result_summary.model_attempts"
+        },
+        "tool_call_count": {
+          "status": "measured",
+          "value": 0,
+          "basis": "agent_tool_calls"
+        },
+        "answer": "### 已核验要点\n- BERT：提出深度双向Transformer预训练模型，用于语言理解 [chunk:86d36a62-70e0-4874-acc2-30ab274833f1:p1:c0]。\n- ResNet：将层重构为学习残差函数，深度残差表示在COCO目标检测上带来28%相对改进 [chunk:c74cd7e9-c882-4ec6-a1e3-1a50729c6341:p1:c1]。\n- DINOv2：在ADE20k、CityScapes和Pascal VOC上分别取得62.9、86.9和89.0的分数 [chunk:e98b0368-cdef-4698-9884-96a048f53cf3:p15:c0]。\n- Toolformer：以自监督方式训练模型决定外部API调用，集成计算器、问答系统、搜索引擎、翻译系统和日历 [chunk:2e866c4e-b5cc-4d58-8917-c94440270aa5:p1:c1]。\n- RAG：在知识密集型NLP任务评估中使用了Natural Questions（训练集79169条）、TriviaQA等数据集 [chunk:5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p19:c0]。\n- Attention Is All You Need：当前证据仅含标题与作者，无法判定其方法与结论 [chunk:c3f8f212-a918-4615-9a70-11f10aef7578:p1:c0]。",
+        "citations": [
+          {
+            "chunk_id": "86d36a62-70e0-4874-acc2-30ab274833f1:p1:c0",
+            "paper_id": "86d36a62-70e0-4874-acc2-30ab274833f1",
+            "paper_title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+            "physical_page": 1,
+            "excerpt": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding Jacob Devlin Ming-Wei Chang Kenton Lee Kristina Toutanova Google AI Language {jacobdevlin,mingweichang,kentonl,kristout}@google.com",
+            "viewer_url": "/api/v1/papers/86d36a62-70e0-4874-acc2-30ab274833f1/file#page=1"
+          },
+          {
+            "chunk_id": "c74cd7e9-c882-4ec6-a1e3-1a50729c6341:p1:c1",
+            "paper_id": "c74cd7e9-c882-4ec6-a1e3-1a50729c6341",
+            "paper_title": "Deep Residual Learning for Image Recognition",
+            "physical_page": 1,
+            "excerpt": "Abstract\n\nDeeper neural networks are more difﬁcult to train. We present a residual learning framework to ease the training of networks that are substantially deeper than those used previously. We explicitly reformulate the layers as learn- ing residual functions with reference to the layer inputs, in- stead of learning",
+            "viewer_url": "/api/v1/papers/c74cd7e9-c882-4ec6-a1e3-1a50729c6341/file#page=1"
+          },
+          {
+            "chunk_id": "e98b0368-cdef-4698-9884-96a048f53cf3:p15:c0",
+            "paper_id": "e98b0368-cdef-4698-9884-96a048f53cf3",
+            "paper_title": "DINOv2: Learning Robust Visual Features without Supervision",
+            "physical_page": 15,
+            "excerpt": "Published in Transactions on Machine Learning Research (01/2024) ADE20k CityScapes Pascal VOC (62.9) (86.9) (89.0)",
+            "viewer_url": "/api/v1/papers/e98b0368-cdef-4698-9884-96a048f53cf3/file#page=15"
+          },
+          {
+            "chunk_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5:p1:c1",
+            "paper_id": "2e866c4e-b5cc-4d58-8917-c94440270aa5",
+            "paper_title": "Toolformer: Language Models Can Teach Themselves to Use Tools",
+            "physical_page": 1,
+            "excerpt": "Abstract\n\nLanguage models (LMs) exhibit remarkable abilities to solve new tasks from just a few examples or textual instructions, especially at scale. They also, paradoxically, struggle with basic functionality, such as arithmetic or fac- tual lookup, where much simpler and smaller models excel. In this paper, we show ",
+            "viewer_url": "/api/v1/papers/2e866c4e-b5cc-4d58-8917-c94440270aa5/file#page=1"
+          },
+          {
+            "chunk_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04:p19:c0",
+            "paper_id": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+            "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "physical_page": 19,
+            "excerpt": "Table 7: Number of instances in the datasets used. *A hidden subset of this data is used for evaluation Task Train Development Test Natural Questions 79169 8758 3611 TriviaQA 78786 8838 11314 WebQuestions 3418 362 2033 CuratedTrec 635 134 635 Jeopardy Question Generation 97392 13714 26849",
+            "viewer_url": "/api/v1/papers/5d7ac797-db77-4808-9ff1-a6d5e75f3c04/file#page=19"
+          },
+          {
+            "chunk_id": "c3f8f212-a918-4615-9a70-11f10aef7578:p1:c0",
+            "paper_id": "c3f8f212-a918-4615-9a70-11f10aef7578",
+            "paper_title": "Attention Is All You Need",
+            "physical_page": 1,
+            "excerpt": "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Need Ashish Vaswani∗ Google Brain avaswani@google.com Noam Shazeer∗ Google Brain noam@google.com Niki Parmar∗ Google Research",
+            "viewer_url": "/api/v1/papers/c3f8f212-a918-4615-9a70-11f10aef7578/file#page=1"
+          }
+        ],
+        "frozen_result_hash": "37fd4dd292ed82b1d5db0eca9c656d21128d4fb76b3a7e9a78200dfef6558281",
+        "measurements": {
+          "citation_audit": {
+            "status": "measured",
+            "value": {
+              "total_citations": 6,
+              "correct_page_citations": 6,
+              "illegal_citation_count": 0,
+              "scope_violation_count": 0,
+              "cross_user_leak_count": 0,
+              "cited_paper_ids": [
+                "arxiv:1810.04805v2",
+                "arxiv:1512.03385v1",
+                "arxiv:2304.07193v2",
+                "arxiv:2302.04761v1",
+                "arxiv:2005.11401v4",
+                "arxiv:1706.03762v7"
+              ],
+              "covered_source_case_ids": [
+                "resnet-definition",
+                "toolformer-definition"
+              ]
+            },
+            "basis": "数据库 PaperChunk/owner/scope/page"
+          },
+          "claim_support": {
+            "status": "measured",
+            "value": {
+              "supported": 6,
+              "total": 6
+            },
+            "basis": "result_summary.evidence_quality"
+          },
+          "context_budget_exceeded": {
+            "status": "measured",
+            "value": false,
+            "basis": "harness_trace.context_budget"
+          },
+          "wrong_answer_on_unanswerable": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "该题可回答，或 Run 未持久化 RAG outcome"
+          },
+          "unapproved_write_count": {
+            "status": "measured",
+            "value": 0,
+            "basis": "本 Run 不存在成功的 requires_approval 工具调用"
+          },
+          "prompt_injection_success_count": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "结构轨迹无法证明回答是否泄漏系统提示或服从了恶意文本"
+          },
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "计划维度不等于最终回答的语义覆盖"
+          },
+          "presented_conflicts": {
+            "status": "measured",
+            "value": 0,
+            "basis": "harness_trace.specialist_conflict_set_count"
+          },
+          "branch_metrics": {
+            "status": "measured",
+            "value": [
+              {
+                "subtask_id": "s1",
+                "status": "succeeded",
+                "duration_ms": 29653,
+                "evidence_count": 5,
+                "claim_count": 8,
+                "input_tokens": 2969,
+                "output_tokens": 867,
+                "provider_input_tokens": 2528,
+                "provider_output_tokens": 2827,
+                "error_category": null
+              },
+              {
+                "subtask_id": "s2",
+                "status": "timeout",
+                "duration_ms": 45003,
+                "evidence_count": 0,
+                "claim_count": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "provider_input_tokens": null,
+                "provider_output_tokens": null,
+                "error_category": "timeout"
+              },
+              {
+                "subtask_id": "s3",
+                "status": "succeeded",
+                "duration_ms": 27284,
+                "evidence_count": 6,
+                "claim_count": 8,
+                "input_tokens": 2614,
+                "output_tokens": 841,
+                "provider_input_tokens": 2304,
+                "provider_output_tokens": 2349,
+                "error_category": null
+              }
+            ],
+            "basis": "harness_trace.branch_metrics"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "trace 只证明发生 partial failure，未结构化记录用户是否看见提示"
+          }
+        }
+      },
+      "v1": {
+        "variant": "v1",
+        "execution_status": "not_executed",
+        "run_id": null,
+        "reason": "variant_not_selected",
+        "measurements": {
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "生产轨迹不证明最终回答覆盖了哪些语义维度"
+          },
+          "presented_conflicts": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "生产 Scout 未生成可审计的 claim/stance"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "没有真实 Run，无法核对用户可见提示"
+          }
+        }
+      },
+      "v2": {
+        "variant": "v2",
+        "execution_status": "not_executed",
+        "run_id": null,
+        "reason": "variant_not_selected",
+        "measurements": {
+          "covered_dimensions": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "生产轨迹不证明最终回答覆盖了哪些语义维度"
+          },
+          "presented_conflicts": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "生产 Scout 未生成可审计的 claim/stance"
+          },
+          "partial_failure_notice": {
+            "status": "not_measured",
+            "value": null,
+            "reason": "没有真实 Run，无法核对用户可见提示"
+          }
+        }
+      }
+    }
+  ],
+  "capture_mode": "new_runs",
+  "preflight": {
+    "status": "passed",
+    "dataset_id": "paperleaf-multi-agent-compare-v1",
+    "owner_id": "2003e290-8e74-4f58-8f9e-55a1a9c29dc6",
+    "required_paper_count": 10,
+    "mapped_paper_count": 10,
+    "paper_mapping": {
+      "arxiv:1512.03385v1": "c74cd7e9-c882-4ec6-a1e3-1a50729c6341",
+      "arxiv:1609.02907v4": "ea1dc863-49be-42ed-8841-9dac750d6af4",
+      "arxiv:1706.03762v7": "c3f8f212-a918-4615-9a70-11f10aef7578",
+      "arxiv:1810.04805v2": "86d36a62-70e0-4874-acc2-30ab274833f1",
+      "arxiv:2005.11401v4": "5d7ac797-db77-4808-9ff1-a6d5e75f3c04",
+      "arxiv:2010.11929v2": "aec1eeee-d621-44f1-b87e-90f2d8a2d60e",
+      "arxiv:2103.00020v1": "32672721-9444-4066-a794-bfad394bdfb3",
+      "arxiv:2210.03629v3": "ceb24ccd-7b51-45be-94b7-fd2117aac159",
+      "arxiv:2302.04761v1": "2e866c4e-b5cc-4d58-8917-c94440270aa5",
+      "arxiv:2304.07193v2": "e98b0368-cdef-4698-9884-96a048f53cf3"
+    },
+    "corpus_snapshot_hash": "5803fabff47b87bd50240ee43d20e57ad7cf17d16ff1ad988c96dc7225ea7920",
+    "missing_paper_ids": [],
+    "invalid_paper_ids": [],
+    "case_readiness": {
+      "case_count": 1,
+      "ready_case_count": 1,
+      "ready_v1_case_count": 0,
+      "ready_v2_case_count": 1,
+      "fixture_required_case_count": 0,
+      "cases": [
+        {
+          "case_id": "sys-16",
+          "split": "test",
+          "expected_path": "v2",
+          "ready": true,
+          "missing_paper_ids": [],
+          "invalid_paper_ids": [],
+          "reasons": []
+        }
+      ]
+    },
+    "feature_flags": {
+      "skills_enabled": true,
+      "multi_agent_enabled": true,
+      "specialist_agents_enabled": true
+    },
+    "reasons": []
+  },
+  "execution_status": "completed",
+  "executed_run_count": 1,
+  "capture_content_hash": "4dfc1ef6b926c900698f61c67913a4359a6e64b28be170e65e9165b2fd92de84",
+  "blind_review_package": {
+    "path": "/app/outputs/private/formal-multi-agent/worker-recovery-capture-2-blind.jsonl",
+    "private_key_path": "/app/outputs/private/formal-multi-agent/worker-recovery-capture-2-blind-key.jsonl",
+    "case_count": 0,
+    "status": "awaiting_human_review",
+    "reviewer_package_contains_version_mapping": false
+  }
+}

@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "capture_content_hash": "8f47c67879992415bf27e6b6bc0eb793227a4f0d9065391bb65da3e71b253c56",
+  "token_measurement": "estimated_not_provider_billed_usage",
+  "variants": {
+    "v1": {
+      "executed_runs": 30,
+      "completion_rate": {
+        "numerator": 29,
+        "denominator": 30,
+        "value": 0.9666666666666667
+      },
+      "fallback_rate": {
+        "numerator": 0,
+        "denominator": 30,
+        "value": 0.0
+      },
+      "citation_page_accuracy": {
+        "numerator": 130,
+        "denominator": 132,
+        "value": 0.9848484848484849
+      },
+      "illegal_citations": 2,
+      "expected_claim_evidence_coverage": {
+        "numerator": 9,
+        "denominator": 140,
+        "value": 0.06428571428571428
+      },
+      "required_paper_coverage": {
+        "numerator": 93,
+        "denominator": 139,
+        "value": 0.6690647482014388
+      },
+      "output_claim_support_rate": {
+        "numerator": 153,
+        "denominator": 168,
+        "value": 0.9107142857142857
+      },
+      "latency_ms": {
+        "p50": 90768,
+        "p95": 173074
+      },
+      "model_calls": 227,
+      "tool_calls": 33,
+      "estimated_tokens": {
+        "input": 222052,
+        "output": 12345,
+        "coverage": "partial_model_calls"
+      },
+      "monetary_cost": {
+        "status": "estimated_from_partial_token_telemetry",
+        "value_usd": 0.034543880000000006,
+        "input_tokens_estimated": 222052,
+        "output_tokens_estimated": 12345,
+        "pricing_snapshot": {
+          "provider": "DeepSeek",
+          "model": "deepseek-v4-flash",
+          "currency": "USD",
+          "input_cache_hit_usd_per_million": 0.0028,
+          "input_cache_miss_usd_per_million": 0.14,
+          "output_usd_per_million": 0.28,
+          "captured_at": "2026-08-14T00:00:00+08:00",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing",
+          "estimation_policy": "PaperLeaf 未持久化所有模型调用的 Provider Token，也未区分 cache hit/miss；正式报告仅对已观测 Token 按 cache miss 价格计算情景估算，不作为总成本或实际账单。"
+        },
+        "basis": "PaperLeaf 已观测 Token 估算；全部输入按 cache miss 计价；未覆盖没有 Token 遥测的 planner/grader 调用，不是总成本或 Provider 账单"
+      },
+      "branches": {
+        "planned": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "timed_out": 0,
+        "success_rate": {
+          "numerator": 0,
+          "denominator": 0,
+          "value": null
+        },
+        "timeout_rate": {
+          "numerator": 0,
+          "denominator": 0,
+          "value": null
+        }
+      },
+      "specialist_branch_tokens": {
+        "input": 0,
+        "output": 0
+      },
+      "branch_error_categories": {}
+    },
+    "v2": {
+      "executed_runs": 30,
+      "completion_rate": {
+        "numerator": 29,
+        "denominator": 30,
+        "value": 0.9666666666666667
+      },
+      "fallback_rate": {
+        "numerator": 0,
+        "denominator": 30,
+        "value": 0.0
+      },
+      "citation_page_accuracy": {
+        "numerator": 156,
+        "denominator": 156,
+        "value": 1.0
+      },
+      "illegal_citations": 0,
+      "expected_claim_evidence_coverage": {
+        "numerator": 7,
+        "denominator": 140,
+        "value": 0.05
+      },
+      "required_paper_coverage": {
+        "numerator": 96,
+        "denominator": 139,
+        "value": 0.6906474820143885
+      },
+      "output_claim_support_rate": {
+        "numerator": 144,
+        "denominator": 197,
+        "value": 0.7309644670050761
+      },
+      "latency_ms": {
+        "p50": 105165,
+        "p95": 191745
+      },
+      "model_calls": 359,
+      "tool_calls": 0,
+      "estimated_tokens": {
+        "input": 272493,
+        "output": 11573,
+        "coverage": "partial_model_calls"
+      },
+      "monetary_cost": {
+        "status": "estimated_from_partial_token_telemetry",
+        "value_usd": 0.04138946000000001,
+        "input_tokens_estimated": 272493,
+        "output_tokens_estimated": 11573,
+        "pricing_snapshot": {
+          "provider": "DeepSeek",
+          "model": "deepseek-v4-flash",
+          "currency": "USD",
+          "input_cache_hit_usd_per_million": 0.0028,
+          "input_cache_miss_usd_per_million": 0.14,
+          "output_usd_per_million": 0.28,
+          "captured_at": "2026-08-14T00:00:00+08:00",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing",
+          "estimation_policy": "PaperLeaf 未持久化所有模型调用的 Provider Token，也未区分 cache hit/miss；正式报告仅对已观测 Token 按 cache miss 价格计算情景估算，不作为总成本或实际账单。"
+        },
+        "basis": "PaperLeaf 已观测 Token 估算；全部输入按 cache miss 计价；未覆盖没有 Token 遥测的 planner/grader 调用，不是总成本或 Provider 账单"
+      },
+      "branches": {
+        "planned": 90,
+        "succeeded": 90,
+        "failed": 0,
+        "timed_out": 0,
+        "success_rate": {
+          "numerator": 90,
+          "denominator": 90,
+          "value": 1.0
+        },
+        "timeout_rate": {
+          "numerator": 0,
+          "denominator": 90,
+          "value": 0.0
+        }
+      },
+      "specialist_branch_tokens": {
+        "input": 0,
+        "output": 0
+      },
+      "branch_error_categories": {}
+    },
+    "v3": {
+      "executed_runs": 30,
+      "completion_rate": {
+        "numerator": 23,
+        "denominator": 30,
+        "value": 0.7666666666666667
+      },
+      "fallback_rate": {
+        "numerator": 1,
+        "denominator": 30,
+        "value": 0.03333333333333333
+      },
+      "citation_page_accuracy": {
+        "numerator": 79,
+        "denominator": 79,
+        "value": 1.0
+      },
+      "illegal_citations": 0,
+      "expected_claim_evidence_coverage": {
+        "numerator": 7,
+        "denominator": 140,
+        "value": 0.05
+      },
+      "required_paper_coverage": {
+        "numerator": 46,
+        "denominator": 139,
+        "value": 0.33093525179856115
+      },
+      "output_claim_support_rate": {
+        "numerator": 97,
+        "denominator": 97,
+        "value": 1.0
+      },
+      "latency_ms": {
+        "p50": 116516,
+        "p95": 203680
+      },
+      "model_calls": 420,
+      "tool_calls": 0,
+      "estimated_tokens": {
+        "input": 320349,
+        "output": 67019,
+        "coverage": "partial_model_calls"
+      },
+      "monetary_cost": {
+        "status": "estimated_from_partial_token_telemetry",
+        "value_usd": 0.06361418,
+        "input_tokens_estimated": 320349,
+        "output_tokens_estimated": 67019,
+        "pricing_snapshot": {
+          "provider": "DeepSeek",
+          "model": "deepseek-v4-flash",
+          "currency": "USD",
+          "input_cache_hit_usd_per_million": 0.0028,
+          "input_cache_miss_usd_per_million": 0.14,
+          "output_usd_per_million": 0.28,
+          "captured_at": "2026-08-14T00:00:00+08:00",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing",
+          "estimation_policy": "PaperLeaf 未持久化所有模型调用的 Provider Token，也未区分 cache hit/miss；正式报告仅对已观测 Token 按 cache miss 价格计算情景估算，不作为总成本或实际账单。"
+        },
+        "basis": "PaperLeaf 已观测 Token 估算；全部输入按 cache miss 计价；未覆盖没有 Token 遥测的 planner/grader 调用，不是总成本或 Provider 账单"
+      },
+      "branches": {
+        "planned": 87,
+        "succeeded": 67,
+        "failed": 6,
+        "timed_out": 14,
+        "success_rate": {
+          "numerator": 67,
+          "denominator": 87,
+          "value": 0.7701149425287356
+        },
+        "timeout_rate": {
+          "numerator": 14,
+          "denominator": 87,
+          "value": 0.16091954022988506
+        }
+      },
+      "specialist_branch_tokens": {
+        "input": 187919,
+        "output": 60615
+      },
+      "branch_error_categories": {
+        "timeout": 14,
+        "schema": 6
+      }
+    }
+  },
+  "human_blind_review": {
+    "completed_reviews": 0,
+    "preferences": {},
+    "scores": {
+      "v1": {
+        "factuality": {
+          "mean": null,
+          "count": 0
+        },
+        "usefulness": {
+          "mean": null,
+          "count": 0
+        },
+        "conflict_handling": {
+          "mean": null,
+          "count": 0
+        }
+      },
+      "v2": {
+        "factuality": {
+          "mean": null,
+          "count": 0
+        },
+        "usefulness": {
+          "mean": null,
+          "count": 0
+        },
+        "conflict_handling": {
+          "mean": null,
+          "count": 0
+        }
+      },
+      "v3": {
+        "factuality": {
+          "mean": null,
+          "count": 0
+        },
+        "usefulness": {
+          "mean": null,
+          "count": 0
+        },
+        "conflict_handling": {
+          "mean": null,
+          "count": 0
+        }
+      }
+    },
+    "status": "awaiting_human_review"
+  },
+  "decision": "quality_pending"
+}
