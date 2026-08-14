@@ -1909,6 +1909,10 @@ async def execute_agent_run(
                 result_summary={"answer": "", "citations": []},
             )
             return
+    # Retrieval 配置是每个 Run 的冻结输入。LangGraph Checkpoint 或旧图状态
+    # 即使没有回传该字段，终态 trace 也必须使用本次 Run 的快照，不能退回
+    # 当前部署配置或写成 unknown。
+    result["retrieval_config"] = retrieval_config
     model_attempts = [item.as_dict() for item in attempts]
     stage_timings = dict(result.get("stage_timings_ms", {}))
     if result.get("provider_policy"):

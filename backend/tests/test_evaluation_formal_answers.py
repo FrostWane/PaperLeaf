@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from paperleaf_api.evaluation_formal_answers import (
+    _evaluation_client_message_id,
     aggregate_answer_metrics,
     audit_answer_citations,
     build_evaluation_repository,
@@ -11,6 +12,15 @@ from paperleaf_api.evaluation_formal_answers import (
     validate_answer_protocol,
 )
 from paperleaf_api.repository import SQLAlchemyRepository
+
+
+def test_evaluation_client_message_id_is_bounded_and_unique() -> None:
+    first = _evaluation_client_message_id("prefix-" * 40, "case-" * 80)
+    second = _evaluation_client_message_id("prefix-" * 40, "case-" * 80)
+
+    assert len(first) <= 100
+    assert first.startswith("eval-")
+    assert first != second
 
 
 def test_audit_answer_citations_checks_scope_page_and_gold() -> None:

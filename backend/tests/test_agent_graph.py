@@ -767,6 +767,57 @@ def test_answerability_gate_stops_adjacent_evidence_before_answer_generation() -
     assert "没有直接提供所问信息" in result["answer"]
 
 
+def test_answerability_gate_still_runs_for_local_function_tool_evidence() -> None:
+    calls = 0
+
+    async def should_not_answer(query, evidence):
+        nonlocal calls
+        calls += 1
+        return await answerer(query, evidence)
+
+    async def unanswerable(query, evidence):
+        assert evidence
+        return AnswerabilityDecision(
+            answerable=False,
+            confidence=0.99,
+            reason_code="missing_fact",
+        )
+
+    graph = build_agent_graph(
+        EmptyRetriever(),
+        should_not_answer,
+        answerability_grader=unanswerable,
+        answerability_min_confidence=0.5,
+    )
+    result = asyncio.run(
+        graph.ainvoke(
+            {
+                "user_id": "u1",
+                "query": "论文没有报告的预算是多少？",
+                "selected_paper_ids": ["p1"],
+                "selected_skill": "paper_qa",
+                "tool_mode_active": True,
+                "pre_retrieved_evidence": [
+                    Evidence("local-c1", "p1", "库内论文", 1, "只描述了研究方法")
+                ],
+                "tool_context_entries": [
+                    {
+                        "kind": "result",
+                        "tool_call_id": "local-1",
+                        "tool": "search_current_paper",
+                        "content": '{"status":"succeeded"}',
+                    }
+                ],
+            },
+            {"recursion_limit": 8},
+        )
+    )
+
+    assert calls == 0
+    assert result["answerability_status"] == "unanswerable"
+    assert result["citations"] == []
+
+
 def test_answerability_gate_allows_direct_evidence() -> None:
     async def answerable(query, evidence):
         return AnswerabilityDecision(

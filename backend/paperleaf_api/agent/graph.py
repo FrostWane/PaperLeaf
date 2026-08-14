@@ -1247,7 +1247,15 @@ class AgentRuntime:
     async def grade_answerability(self, state: AgentState) -> AgentState:
         """判断证据是否直接回答当前问题；分类器故障时保持原链路可用。"""
 
-        if state.get("tool_mode_active") and state.get("tool_context_entries"):
+        # 只有外部推荐元数据不接受“PDF 是否直接回答问题”的判定。库内
+        # search_library/search_current_paper/get_page_text 即使由 Function Tool
+        # 返回，仍然必须经过 answerability 门禁；否则 Tool Mode 会让所有
+        # 不可回答题绕过拒答判断。
+        if (
+            state.get("selected_skill") == "find_related_papers"
+            and state.get("tool_mode_active")
+            and state.get("tool_context_entries")
+        ):
             return {
                 "answerability_status": "not_checked",
                 "answerability_confidence": None,

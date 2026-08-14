@@ -243,6 +243,13 @@ def _is_abstained(outcome: str, answer: str) -> bool:
     return not answer.strip()
 
 
+def _evaluation_client_message_id(prefix: str, case_id: str) -> str:
+    """生成满足数据库 varchar(100) 约束、且每次提交唯一的评测消息 ID。"""
+
+    stable = hashlib.sha256(f"{prefix}\0{case_id}".encode()).hexdigest()[:20]
+    return f"eval-{stable}-{secrets.token_hex(6)}"
+
+
 async def _run_case(
     *,
     repository: SQLAlchemyRepository,
@@ -275,7 +282,7 @@ async def _run_case(
         chat_session.id,
         owner_id,
         case.query,
-        f"{idempotency_prefix}-{case.id}-{secrets.token_hex(6)}",
+        _evaluation_client_message_id(idempotency_prefix, case.id),
         request_hash,
         scope_snapshot,
     )
