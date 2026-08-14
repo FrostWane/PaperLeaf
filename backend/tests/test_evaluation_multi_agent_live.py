@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from paperleaf_api.config import Settings
 from paperleaf_api.evaluation_multi_agent import MultiAgentCase, MultiAgentManifest
 from paperleaf_api.evaluation_multi_agent_live import (
     RAW_V1,
@@ -15,6 +16,7 @@ from paperleaf_api.evaluation_multi_agent_live import (
     build_blind_review_rows,
     build_case_readiness_matrix,
     build_not_executed_variant,
+    build_variant_scope_snapshot,
     expected_variant_order,
     normalize_arxiv_id,
     normalize_branch_counts,
@@ -29,6 +31,23 @@ from paperleaf_api.evaluation_multi_agent_live import (
 EVALUATION_ROOT = Path(__file__).parents[1] / "evaluation"
 DATASET_ROOT = EVALUATION_ROOT / "multi-agent-compare-v1"
 SOURCE_ROOT = EVALUATION_ROOT / "datasets" / "paperleaf-rag-v1"
+
+
+def test_live_variant_scope_freezes_retrieval_and_harness(monkeypatch) -> None:
+    git_sha = "a" * 40
+    monkeypatch.setenv("PAPERLEAF_GIT_SHA", git_sha)
+    snapshot = build_variant_scope_snapshot(
+        local_ids=["paper-1", "paper-2", "paper-3"],
+        raw_version=RAW_V3,
+        config=Settings(),
+    )
+
+    assert snapshot["orchestration_version"] == RAW_V3
+    assert snapshot["paper_ids"] == ["paper-1", "paper-2", "paper-3"]
+    assert snapshot["retrieval_config"]["git_sha"] == git_sha
+    assert snapshot["retrieval_config"]["git_sha_verified"] is True
+    assert len(snapshot["retrieval_config"]["fingerprint"]) == 64
+    assert "specialist_agents_enabled" in snapshot["harness"]
 
 
 def test_normalizes_production_version_and_actual_execution_path() -> None:

@@ -39,6 +39,7 @@ from .evaluation_multi_agent import (
     validate_source_hashes,
 )
 from .models import AgentRun, AgentRunEvent, AgentToolCall, Paper, PaperChunk, PaperStatus
+from .rag.retrieval_config import freeze_retrieval_config
 from .repository import SQLAlchemyRepository
 
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
@@ -753,6 +754,24 @@ async def _capture_variant(
     }
 
 
+def build_variant_scope_snapshot(
+    *, local_ids: Sequence[str], raw_version: str, config: Settings
+) -> dict[str, Any]:
+    """冻结真实 A/B Run 的完整检索与 Harness 配置。"""
+
+    return {
+        "type": "library",
+        "paper_id": None,
+        "collection_id": None,
+        "paper_ids": local_ids,
+        "web_enabled": False,
+        "client_context": {},
+        "harness": _harness_flags(config),
+        "retrieval_config": freeze_retrieval_config(config),
+        "orchestration_version": raw_version,
+    }
+
+
 async def _submit_variant(
     *,
     repository: SQLAlchemyRepository,
@@ -772,16 +791,11 @@ async def _submit_variant(
         None,
         None,
     )
-    scope_snapshot = {
-        "type": "library",
-        "paper_id": None,
-        "collection_id": None,
-        "paper_ids": local_ids,
-        "web_enabled": False,
-        "client_context": {},
-        "harness": _harness_flags(config),
-        "orchestration_version": raw_version,
-    }
+    scope_snapshot = build_variant_scope_snapshot(
+        local_ids=local_ids,
+        raw_version=raw_version,
+        config=config,
+    )
     request_hash = _sha256_json(
         {"session_id": chat_session.id, "content": case.query, "scope_snapshot": scope_snapshot}
     )
