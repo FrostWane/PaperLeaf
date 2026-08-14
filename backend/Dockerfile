@@ -1,11 +1,8 @@
 FROM registry-1.docker.io/library/python:3.11-slim
 
-ARG PAPERLEAF_GIT_SHA=unknown
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PAPERLEAF_GIT_SHA=${PAPERLEAF_GIT_SHA}
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 RUN groupadd --system --gid 1001 paperleaf \
@@ -15,6 +12,10 @@ RUN groupadd --system --gid 1001 paperleaf \
 COPY pyproject.toml README.md ./
 COPY paperleaf_api/__init__.py ./paperleaf_api/__init__.py
 RUN pip install --no-cache-dir .
+
+# Git SHA 只影响运行时代码层，不能击穿稳定的 Python 依赖缓存。
+ARG PAPERLEAF_GIT_SHA=unknown
+ENV PAPERLEAF_GIT_SHA=${PAPERLEAF_GIT_SHA}
 
 # 再复制运行时代码与迁移。API、Worker、Migrate 共用此 Dockerfile/context，可复用上述层。
 COPY paperleaf_api ./paperleaf_api
