@@ -18,6 +18,7 @@ from typing import Any, Generic, Literal, TypeVar
 ModelPurpose = Literal[
     "answer",
     "query_rewrite",
+    "answerability",
     "evidence_support",
     "research_scout",
     "summary",

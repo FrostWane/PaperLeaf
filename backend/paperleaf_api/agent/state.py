@@ -23,6 +23,7 @@ class AgentState(TypedDict, total=False):
     scope_paper_texts: list[str]
     excluded_recommendation_entities: list[str]
     provider_policy: dict[str, Any]
+    retrieval_config: dict[str, Any]
     provider_fallback_reason: str | None
     web_enabled: bool
     client_context: dict[str, Any]
@@ -52,6 +53,9 @@ class AgentState(TypedDict, total=False):
     arxiv_candidates: list[dict[str, Any]]
     evidence_grade: Literal["sufficient", "insufficient"]
     evidence_quality: dict[str, Any]
+    answerability_status: Literal["answerable", "unanswerable", "not_checked"]
+    answerability_confidence: float | None
+    answerability_reason: str | None
     tool_steps: int
     pending_action: dict[str, Any] | None
     citations: list[CitationClaim]

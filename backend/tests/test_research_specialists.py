@@ -167,3 +167,27 @@ def test_prompt_selection_is_deterministic_and_drops_foreign_scope() -> None:
     assert list(first.evidence_by_alias) == ["E1", "E2"]
     assert [item.chunk_id for item in first.evidence_by_alias.values()] == ["c1", "c2"]
     assert "越权证据" not in first.messages[1]["content"]
+
+
+def test_specialist_normalizes_common_json_shape_without_relaxing_alias_scope() -> None:
+    async def scenario() -> None:
+        async def model(_messages: tuple[dict[str, str], ...], *, max_output_tokens: int):
+            assert max_output_tokens <= 640
+            return """结果如下：
+```json
+{"result":{"claims":[{"dimension":"method","claim":"使用稀疏校准",
+"evidence_ids":"E1","stance":"support","confidence":"0.88",
+"explanation":"不应进入持久状态"}]}}
+```"""
+
+        analysis = await EvidenceSpecialist(model, timeout_seconds=1).analyze(
+            _task(token_budget=4096), [_evidence()]
+        )
+
+        assert len(analysis.claims) == 1
+        assert analysis.claims[0].dimension == "核心方法"
+        assert analysis.claims[0].chunk_ids == ("private-chunk-id",)
+        assert analysis.usage.input_tokens <= 2400
+        assert analysis.usage.output_reserve <= 640
+
+    asyncio.run(scenario())

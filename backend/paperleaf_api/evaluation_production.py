@@ -454,6 +454,64 @@ def paired_bootstrap_interval(
     }
 
 
+def paired_ratio_bootstrap_interval(
+    baseline: Sequence[tuple[int, int]],
+    candidate: Sequence[tuple[int, int]],
+    *,
+    samples: int = 10_000,
+    seed: int = 20260814,
+) -> dict[str, Any]:
+    """逐题成对重采样，并在每次抽样后重新汇总 micro 分子和分母。"""
+
+    if len(baseline) != len(candidate) or not baseline:
+        raise ValueError("配对 ratio Bootstrap 要求两个等长非空序列")
+    if samples < 1000:
+        raise ValueError("正式 Bootstrap 至少抽样 1000 次")
+    if any(denominator <= 0 for _numerator, denominator in (*baseline, *candidate)):
+        raise ValueError("配对 ratio Bootstrap 的分母必须为正数")
+
+    baseline_numerator = sum(item[0] for item in baseline)
+    baseline_denominator = sum(item[1] for item in baseline)
+    candidate_numerator = sum(item[0] for item in candidate)
+    candidate_denominator = sum(item[1] for item in candidate)
+    observed_delta = (
+        candidate_numerator / candidate_denominator
+        - baseline_numerator / baseline_denominator
+    )
+    rng = random.Random(seed)
+    sample_count = len(baseline)
+    deltas: list[float] = []
+    for _ in range(samples):
+        indexes = [rng.randrange(sample_count) for _ in range(sample_count)]
+        left_numerator = sum(baseline[index][0] for index in indexes)
+        left_denominator = sum(baseline[index][1] for index in indexes)
+        right_numerator = sum(candidate[index][0] for index in indexes)
+        right_denominator = sum(candidate[index][1] for index in indexes)
+        deltas.append(
+            right_numerator / right_denominator - left_numerator / left_denominator
+        )
+    deltas.sort()
+    return {
+        "sample_count": sample_count,
+        "bootstrap_samples": samples,
+        "baseline": {
+            "numerator": baseline_numerator,
+            "denominator": baseline_denominator,
+            "value": baseline_numerator / baseline_denominator,
+        },
+        "candidate": {
+            "numerator": candidate_numerator,
+            "denominator": candidate_denominator,
+            "value": candidate_numerator / candidate_denominator,
+        },
+        "mean_delta": observed_delta,
+        "ci95_lower": deltas[int(samples * 0.025)],
+        "ci95_upper": deltas[min(samples - 1, int(samples * 0.975))],
+        "seed": seed,
+        "estimand": "paired_case_resampled_micro_ratio_delta",
+    }
+
+
 async def preflight_production_corpus(
     manifest: EvaluationDatasetManifest,
     *,

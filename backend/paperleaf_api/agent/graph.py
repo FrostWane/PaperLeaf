@@ -30,6 +30,10 @@ from ..rag.retrieval_quality import (
     apply_answer_support,
     assess_evidence,
 )
+from .answerability import (
+    AnswerabilityGrader,
+    no_op_answerability_grader,
+)
 from .context_budget import enforce_context_envelope
 from .discovery_policy import requested_paper_count
 from .provider_policy import (
@@ -999,6 +1003,8 @@ class AgentRuntime:
         quality_policy: EvidenceQualityPolicy,
         answer_quality_policy: AnswerQualityPolicy,
         support_grader: EvidenceSupportGrader,
+        answerability_grader: AnswerabilityGrader,
+        answerability_min_confidence: float,
     ) -> None:
         self.retriever = retriever
         self.answerer = answerer
@@ -1007,6 +1013,8 @@ class AgentRuntime:
         self.quality_policy = quality_policy
         self.answer_quality_policy = answer_quality_policy
         self.support_grader = support_grader
+        self.answerability_grader = answerability_grader
+        self.answerability_min_confidence = answerability_min_confidence
 
     async def validate_request(self, state: AgentState) -> AgentState:
         query = str(state.get("query", "")).strip()
@@ -1062,6 +1070,7 @@ class AgentRuntime:
                     1 < len(state.get("selected_paper_ids", [])) <= 10
                     and str(state.get("scope", "")) in {"collection", "library"}
                 ),
+                retrieval_config=dict(state.get("retrieval_config", {}) or {}),
             )
         )
         if state.get("selection_scope_locked"):
@@ -1103,10 +1112,18 @@ class AgentRuntime:
         )
         timings = dict(state.get("stage_timings_ms", {}))
         timings["evidence_grading"] = round((time.perf_counter() - started_at) * 1000)
+        answerability = await self.grade_answerability(
+            {
+                **state,
+                "evidence_grade": quality.grade,
+                "evidence_quality": quality.as_dict(),
+            }
+        )
         return {
             "evidence_grade": quality.grade,
             "evidence_quality": quality.as_dict(),
             "stage_timings_ms": timings,
+            **answerability,
         }
 
     async def generate_answer(self, state: AgentState) -> AgentState:
@@ -1225,6 +1242,55 @@ class AgentRuntime:
             "displayed_recommendation_entities": displayed_entities,
             "context_usage": context_usage,
             "stage_timings_ms": timings,
+        }
+
+    async def grade_answerability(self, state: AgentState) -> AgentState:
+        """判断证据是否直接回答当前问题；分类器故障时保持原链路可用。"""
+
+        if state.get("tool_mode_active") and state.get("tool_context_entries"):
+            return {
+                "answerability_status": "not_checked",
+                "answerability_confidence": None,
+                "answerability_reason": "external_metadata",
+            }
+        decision = self.answerability_grader(
+            str(state.get("query", "")), list(state.get("retrieved_evidence", []))
+        )
+        if inspect.isawaitable(decision):
+            decision = await decision
+        if decision.answerable is None:
+            return {
+                "answerability_status": "not_checked",
+                "answerability_confidence": decision.confidence,
+                "answerability_reason": decision.reason_code,
+            }
+        frozen = dict(state.get("retrieval_config", {}) or {})
+        threshold = float(
+            frozen.get("answerability_min_confidence", self.answerability_min_confidence)
+        )
+        passed = bool(decision.answerable and (decision.confidence or 0.0) >= threshold)
+        if passed:
+            return {
+                "answerability_status": "answerable",
+                "answerability_confidence": decision.confidence,
+                "answerability_reason": decision.reason_code,
+            }
+        quality = dict(state.get("evidence_quality", {}) or {})
+        quality.update(
+            {
+                "grade": "insufficient",
+                "reason_code": "question_not_answered_by_evidence",
+                "summary": "当前证据与问题相关，但没有直接提供所问信息",
+                "answerability_confidence": decision.confidence,
+                "answerability_reason": decision.reason_code,
+            }
+        )
+        return {
+            "answerability_status": "unanswerable",
+            "answerability_confidence": decision.confidence,
+            "answerability_reason": decision.reason_code,
+            "evidence_grade": "insufficient",
+            "evidence_quality": quality,
         }
 
     async def grade_answer_support(self, state: AgentState) -> AgentState:
@@ -1498,6 +1564,15 @@ class AgentRuntime:
     async def abstain(self, state: AgentState) -> AgentState:
         quality = state.get("evidence_quality", {})
         summary = str(quality.get("summary", "当前文献库中没有足够证据"))
+        if state.get("answerability_status") == "unanswerable":
+            return {
+                "answer": (
+                    f"{summary}。我没有用相邻事实代替答案；你可以换个问法、"
+                    "扩大文献范围，或启用学术搜索。"
+                ),
+                "citations": [],
+                "status": "completed",
+            }
         return {
             "answer": f"{summary}，因此本次不生成结论。你可以调整问题或允许搜索 arXiv。",
             "citations": [],
@@ -1648,6 +1723,9 @@ class AgentRuntime:
             except Exception:
                 # 联网增强失败不应替代基础 AI 对话；继续让模型用自然语言说明证据边界。
                 pass
+        if state.get("answerability_status") == "unanswerable":
+            state.update(await self.abstain(state))
+            return state
         state.update(await self.generate_answer(state))
         state.update(await self.validate_answer_citations(state))
         if not state.get("citation_validation_passed"):
@@ -1680,6 +1758,8 @@ def build_agent_graph(
     quality_policy: EvidenceQualityPolicy | None = None,
     answer_quality_policy: AnswerQualityPolicy | None = None,
     support_grader: EvidenceSupportGrader | None = None,
+    answerability_grader: AnswerabilityGrader | None = None,
+    answerability_min_confidence: float | None = None,
 ) -> Any:
     """构建受控图。
 
@@ -1704,6 +1784,12 @@ def build_agent_graph(
             min_model_support_confidence=settings.answer_min_support_confidence,
         ),
         support_grader=support_grader or no_op_evidence_support_grader,
+        answerability_grader=answerability_grader or no_op_answerability_grader,
+        answerability_min_confidence=(
+            settings.answerability_min_confidence
+            if answerability_min_confidence is None
+            else answerability_min_confidence
+        ),
     )
     if not use_langgraph:
         return CompatibleGraph(runtime)
@@ -1741,10 +1827,15 @@ def build_agent_graph(
                 and not (state.get("tool_mode_active") and state.get("tool_context_entries"))
                 and provider_can_run(state.get("provider_policy"), "arxiv")[0]
             )
-            else "generate"
+            else (
+                "abstain"
+                if state.get("answerability_status") == "unanswerable"
+                else "generate"
+            )
         ),
         {
             "generate": "generate_answer",
+            "abstain": "abstain",
             "search_arxiv": "search_arxiv",
         },
     )

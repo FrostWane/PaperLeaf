@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -737,6 +737,7 @@ class ToolExecutionContext:
     provider_policy: dict[str, Any] = field(default_factory=dict)
     verified_selection_page: int | None = None
     selection_scope_locked: bool = False
+    retrieval_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -1544,6 +1545,7 @@ class FunctionToolHarness:
                     ensure_paper_coverage=(
                         name == "search_library" and 1 < len(paper_ids) <= 10
                     ),
+                    retrieval_config=context.retrieval_config,
                 )
             )
             if context.selection_scope_locked and context.verified_selection_page is not None:
@@ -1598,28 +1600,62 @@ class FunctionToolHarness:
             if text is None:
                 raise PermissionError("页面不存在或无权访问")
             paper = await self.repository.get_owned_paper(effective_paper_id, context.user_id)
-            evidence = Evidence(
-                chunk_id=f"page:{effective_paper_id}:p{request.physical_page}",
-                paper_id=effective_paper_id,
-                paper_title=str(getattr(paper, "title", "论文原文")),
-                physical_page=request.physical_page,
-                text=text,
-                retrieval_score=1.0,
-                retrieval_channels=("page_text",),
-                channel_scores=(("page_text", 1.0),),
+            page_loader = getattr(self.retriever, "page_selection_evidence", None)
+            page_evidence: list[Evidence] = []
+            if page_loader is not None:
+                page_evidence = list(
+                    await page_loader(
+                        user_id=context.user_id,
+                        paper_id=effective_paper_id,
+                        physical_page=request.physical_page,
+                        selected_text=text[:4000],
+                        limit=20,
+                    )
+                )
+            if not page_evidence:
+                retrieved = await self.retriever(
+                    LibrarySearchInput(
+                        user_id=context.user_id,
+                        query=text[:4000] or "page text",
+                        paper_ids=[effective_paper_id],
+                        limit=20,
+                        retrieval_config=context.retrieval_config,
+                    )
+                )
+                page_evidence = [
+                    item
+                    for item in retrieved
+                    if item.paper_id == effective_paper_id
+                    and item.physical_page == request.physical_page
+                    and not item.chunk_id.startswith("page:")
+                ]
+            if not page_evidence:
+                raise RuntimeError("PAGE_CHUNKS_UNAVAILABLE")
+            evidence = tuple(
+                replace(
+                    item,
+                    retrieval_channels=tuple(
+                        dict.fromkeys((*item.retrieval_channels, "page_text"))
+                    ),
+                    retrieval_processors=tuple(
+                        dict.fromkeys((*item.retrieval_processors, "page_chunk_resolution"))
+                    ),
+                )
+                for item in page_evidence
             )
             return _ExecutedTool(
                 {
-                    "paper_title": evidence.paper_title,
+                    "paper_title": str(getattr(paper, "title", "论文原文")),
                     "physical_page": request.physical_page,
                     "excerpt": text[:1200],
+                    "evidence_count": len(evidence),
                     "argument_resolution": (
                         "trusted_current_paper_title"
                         if effective_paper_id != request.paper_id
                         else "exact_paper_id"
                     ),
                 },
-                (evidence,),
+                evidence,
             )
         if name in {"search_arxiv", "find_related_papers"}:
             request = ArxivToolInput.model_validate(parsed.model_dump())

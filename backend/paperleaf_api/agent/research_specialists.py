@@ -55,7 +55,7 @@ class SpecialistModelOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    claims: tuple[SpecialistClaim, ...] = Field(min_length=1, max_length=8)
+    claims: tuple[SpecialistClaim, ...] = Field(min_length=1, max_length=5)
 
 
 class ValidatedSpecialistClaim(BaseModel):
@@ -119,11 +119,11 @@ class SpecialistPrompt:
     usage: SpecialistUsage
 
 
-def _evidence_order(item: Evidence) -> tuple[str, int, float, str, str, str]:
+def _evidence_order(item: Evidence) -> tuple[str, float, int, str, str, str]:
     return (
         item.paper_id,
-        item.physical_page,
         -float(item.retrieval_score),
+        item.physical_page,
         item.chunk_id,
         item.paper_title,
         item.text,
@@ -141,10 +141,49 @@ def _parse_model_output(value: Any) -> SpecialistModelOutput:
         if content.startswith("```"):
             content = content.removeprefix("```json").removeprefix("```")
             content = content.removesuffix("```").strip()
+        if not content.startswith("{") and "{" in content and "}" in content:
+            content = content[content.find("{") : content.rfind("}") + 1]
         try:
             raw = json.loads(content)
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise SpecialistOutputError("SPECIALIST_INVALID_JSON") from error
+    if isinstance(raw, list):
+        raw = {"claims": raw}
+    if isinstance(raw, dict) and isinstance(raw.get("result"), dict):
+        raw = raw["result"]
+    if isinstance(raw, dict) and isinstance(raw.get("claims"), list):
+        dimension_aliases = {
+            "research question": "研究问题",
+            "question": "研究问题",
+            "method": "核心方法",
+            "methods": "核心方法",
+            "experimental setup": "实验设置",
+            "experiment": "实验设置",
+            "result": "主要结果",
+            "results": "主要结果",
+            "limitation": "局限",
+            "limitations": "局限",
+        }
+        normalized_claims: list[dict[str, Any]] = []
+        for item in raw["claims"][:5]:
+            if not isinstance(item, dict):
+                continue
+            dimension = str(item.get("dimension", "")).strip()
+            dimension = dimension_aliases.get(dimension.casefold(), dimension)
+            aliases = item.get("evidence_aliases", item.get("evidence_ids"))
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            normalized_claims.append(
+                {
+                    "dimension": dimension,
+                    "claim_key": item.get("claim_key"),
+                    "claim": item.get("claim"),
+                    "evidence_aliases": aliases,
+                    "stance": item.get("stance", "unclear"),
+                    "confidence": item.get("confidence"),
+                }
+            )
+        raw = {"claims": normalized_claims}
     try:
         return SpecialistModelOutput.model_validate(raw)
     except ValidationError as error:
@@ -224,17 +263,18 @@ def build_specialist_prompt(task: ResearchTask, evidence: Sequence[Evidence]) ->
     header = (
         f"分支目标：{objective}\n"
         f"允许的比较维度：{'、'.join(task.dimensions)}\n"
-        "请提取最多 8 条有证据支持的中文候选主张。\n\n证据：\n"
+        "请提取最多 5 条有证据支持的中文候选主张。\n\n证据：\n"
     )
-    output_reserve = max(128, min(1024, task.token_budget // 4))
+    output_reserve = max(128, min(640, task.token_budget // 5))
     fixed_tokens = estimate_tokens(system) + estimate_tokens(header)
-    evidence_budget = task.token_budget - output_reserve - fixed_tokens
+    input_ceiling = min(task.token_budget - output_reserve, 2400)
+    evidence_budget = input_ceiling - fixed_tokens
     if evidence_budget < 64:
         raise SpecialistBudgetError("SPECIALIST_CONTEXT_BUDGET_TOO_SMALL")
 
     selected: list[tuple[str, Evidence, str]] = []
     used = 0
-    for index, item in enumerate(unique.values(), start=1):
+    for index, item in enumerate(list(unique.values())[:5], start=1):
         alias = f"E{index}"
         rendered = (
             f"[{alias}｜论文:{item.paper_title[:200]}｜物理页:{item.physical_page}]\n"

@@ -574,6 +574,7 @@ async def _execute_parallel_compare(
     paper_ids: list[str],
     retriever: Any,
     harness_flags: dict[str, Any],
+    retrieval_config: dict[str, Any],
     event_epoch: str,
 ) -> ResearchSynthesisResult:
     """在父 Run 内执行有界只读 Map-Reduce，并发活动通过安全事件公开。"""
@@ -624,6 +625,7 @@ async def _execute_parallel_compare(
                 limit=min(18, max(8, len(task.paper_ids) * 5)),
                 ensure_paper_coverage=True,
                 per_paper_query_mode="paper_specific",
+                retrieval_config=retrieval_config,
             )
         )
         return ScoutResult(evidence=tuple(evidence))
@@ -804,6 +806,7 @@ async def execute_agent_run(
         return
     run = started
     snapshot = dict(run.scope_snapshot or {})
+    retrieval_config = dict(snapshot.get("retrieval_config", {}) or {})
     scope = str(snapshot.get("type", "library"))
     resumed_action = snapshot.get("resumed_action")
     resume_decision = str(snapshot.get("resume_decision", ""))
@@ -1095,6 +1098,7 @@ async def execute_agent_run(
         "task_frame_source": resolution.task_frame_source,
         "task_frame_confidence": resolution.task_frame_confidence,
         "provider_policy": {},
+        "retrieval_config": retrieval_config,
     }
     updated_run = await repository.update_agent_skill(
         run.id,
@@ -1236,6 +1240,7 @@ async def execute_agent_run(
                         query=selected_text,
                         paper_ids=[selection_paper_id],
                         limit=6,
+                        retrieval_config=retrieval_config,
                     )
                 )
                 initial["selection_evidence"] = [
@@ -1306,6 +1311,7 @@ async def execute_agent_run(
                             limit=min(18, max(8, len(task.paper_ids) * 5)),
                             ensure_paper_coverage=True,
                             per_paper_query_mode="paper_specific",
+                            retrieval_config=retrieval_config,
                         )
                     )
 
@@ -1571,6 +1577,7 @@ async def execute_agent_run(
                             paper_ids=[str(value) for value in snapshot.get("paper_ids", [])],
                             retriever=function_tool_harness.retriever,
                             harness_flags=harness_flags,
+                            retrieval_config=retrieval_config,
                             event_epoch=compare_event_epoch,
                         ),
                     )
@@ -1702,6 +1709,7 @@ async def execute_agent_run(
                         ),
                         discovery_task=discovery_task,
                         provider_policy=provider_policy,
+                        retrieval_config=retrieval_config,
                         verified_selection_page=(
                             int(selection_page) if selection_page is not None else None
                         ),

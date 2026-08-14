@@ -18,6 +18,7 @@ from typing import Protocol
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .agent.answerability import build_configured_answerability_grader
 from .agent.function_tools import FunctionToolHarness
 from .agent.graph import (
     build_agent_graph,
@@ -1319,6 +1320,8 @@ def build_worker_agent_graph(checkpointer: object | None = None) -> object:
             min_model_support_confidence=settings.answer_min_support_confidence,
         ),
         support_grader=build_configured_evidence_support_grader(settings, model_router),
+        answerability_grader=build_configured_answerability_grader(settings, model_router),
+        answerability_min_confidence=settings.answerability_min_confidence,
     )
 
 

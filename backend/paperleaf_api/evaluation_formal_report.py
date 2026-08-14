@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .evaluation_formal_protocol import FORMAL_VARIANTS
-from .evaluation_production import paired_bootstrap_interval
+from .evaluation_production import paired_bootstrap_interval, paired_ratio_bootstrap_interval
 
 COMPARISONS = (
     ("plain_embedding_control", "contextual_embedding", "上下文化 Embedding"),
@@ -43,7 +43,7 @@ def _case_scores(case: dict[str, Any]) -> dict[str, float | None]:
     ranks = [item["rank"] for item in case["gold_page_ranks"] if item["rank"] is not None]
     coverage = case["required_paper_coverage"]
     return {
-        "page_recall": (
+        "page_macro_recall": (
             group["retrieved_pages"] / group["required_pages"] if group["required_pages"] else None
         ),
         "mrr": 1 / min(ranks) if ranks else 0.0,
@@ -52,6 +52,34 @@ def _case_scores(case: dict[str, Any]) -> dict[str, float | None]:
             coverage["numerator"] / coverage["denominator"] if coverage["denominator"] else None
         ),
     }
+
+
+def _paired_page_micro_recall(
+    baseline: list[dict[str, Any]], candidate: list[dict[str, Any]]
+) -> dict[str, Any]:
+    left_by_id = {
+        str(item["case_id"]): (
+            int(item["best_evidence_group"]["retrieved_pages"]),
+            int(item["best_evidence_group"]["required_pages"]),
+        )
+        for item in baseline
+        if int(item["best_evidence_group"]["required_pages"]) > 0
+    }
+    right_by_id = {
+        str(item["case_id"]): (
+            int(item["best_evidence_group"]["retrieved_pages"]),
+            int(item["best_evidence_group"]["required_pages"]),
+        )
+        for item in candidate
+        if int(item["best_evidence_group"]["required_pages"]) > 0
+    }
+    if set(left_by_id) != set(right_by_id):
+        raise RuntimeError("消融方案可回答题 ID 不一致")
+    case_ids = sorted(left_by_id)
+    return paired_ratio_bootstrap_interval(
+        [left_by_id[case_id] for case_id in case_ids],
+        [right_by_id[case_id] for case_id in case_ids],
+    )
 
 
 def _paired(
@@ -193,13 +221,20 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
             "baseline": baseline,
             "candidate": candidate,
             "paired_bootstrap_95ci": {
-                metric: _paired(variants[baseline]["rows"], variants[candidate]["rows"], metric)
-                for metric in (
-                    "page_recall",
-                    "mrr",
-                    "complete_group_hit",
-                    "required_paper_coverage",
-                )
+                "page_micro_recall": _paired_page_micro_recall(
+                    variants[baseline]["rows"], variants[candidate]["rows"]
+                ),
+                **{
+                    metric: _paired(
+                        variants[baseline]["rows"], variants[candidate]["rows"], metric
+                    )
+                    for metric in (
+                        "page_macro_recall",
+                        "mrr",
+                        "complete_group_hit",
+                        "required_paper_coverage",
+                    )
+                },
             },
         }
     oracle_path = root / "ground_truth_oracle.jsonl"
@@ -299,9 +334,9 @@ def _write_report(
         "",
         "## 检索结果",
         "",
-        "| 方案 | 页级 micro Recall@5 | MRR@5 | 完整证据组@5 | "
+        "| 方案 | 页级 micro Recall@5 | 页级 macro Recall@5 | MRR@5 | 完整证据组@5 | "
         "跨论文 required-paper coverage@5 | warm p95 |",
-        "|---|---:|---:|---:|---:|---:|",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for name in FORMAL_VARIANTS:
         metrics = variants[name]["metrics"]
@@ -311,6 +346,7 @@ def _write_report(
                 (
                     name,
                     _pct(metrics["page_micro_recall_at_k"]["value"]),
+                    _pct(metrics["evidence_page_recall_at_k"]["value"]),
                     _pct(metrics["retrieval_mrr_at_k"]["value"]),
                     _pct(metrics["evidence_group_recall_at_k"]["value"]),
                     _pct(metrics["required_paper_coverage_at_k"]["value"]),
@@ -322,9 +358,25 @@ def _write_report(
     lines.extend(
         [
             "",
+            "页级 micro Recall@5 的分母是所有可回答题最佳可接受证据组中的证据页总数；"
+            "页级 macro Recall@5 的分母是可回答题数，每题等权。二者不得混写。",
+            "",
             "## 配对 Bootstrap",
             "",
             "差值为候选减基线；区间跨 0 时不得声称稳定提升。",
+            "",
+        ]
+    )
+    baseline_micro = variants["production_baseline"]["metrics"]["page_micro_recall_at_k"]
+    final_micro = variants["final_combined"]["metrics"]["page_micro_recall_at_k"]
+    lines.extend(
+        [
+            "### 生产基线与最终组合的 micro 结论",
+            "",
+            f"页级 micro Recall@5 为 {_pct(baseline_micro['value'])} "
+            f"（{baseline_micro['numerator']}/{baseline_micro['denominator']}）→ "
+            f"{_pct(final_micro['value'])} "
+            f"（{final_micro['numerator']}/{final_micro['denominator']}）。",
             "",
         ]
     )

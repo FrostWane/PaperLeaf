@@ -209,6 +209,60 @@ def balance_evidence_by_paper(
     return selected
 
 
+def merge_paper_subquery_evidence(
+    candidates: Sequence[Evidence],
+    *,
+    paper_ids: Sequence[str],
+    limit: int,
+) -> list[Evidence]:
+    """按论文内页排序后，以“前三篇各 1 + 全局剩余”合并跨论文 Top-K。
+
+    K=5 且 scope 为三篇论文时，配额严格为 1+1+1+2。保底位只覆盖服务端
+    冻结顺序中的前三篇；剩余位置按各论文内去重后的分数统一竞争。
+    """
+
+    if limit <= 0:
+        raise ValueError("limit 必须为正数")
+    scope = list(dict.fromkeys(str(value) for value in paper_ids if str(value)))
+    scope_order = {paper_id: index for index, paper_id in enumerate(scope)}
+    grouped: dict[str, list[Evidence]] = {paper_id: [] for paper_id in scope}
+    seen_pages: set[tuple[str, int]] = set()
+    for item in candidates:
+        page_key = (item.paper_id, item.physical_page)
+        if item.paper_id not in grouped or page_key in seen_pages:
+            continue
+        seen_pages.add(page_key)
+        grouped[item.paper_id].append(item)
+    for paper_id in scope:
+        grouped[paper_id].sort(
+            key=lambda item: (-item.retrieval_score, item.physical_page, item.chunk_id)
+        )
+
+    selected: list[Evidence] = []
+    selected_chunks: set[str] = set()
+    for paper_id in scope[: min(3, limit)]:
+        if grouped[paper_id]:
+            item = grouped[paper_id][0]
+            selected.append(item)
+            selected_chunks.add(item.chunk_id)
+    residual = sorted(
+        (
+            item
+            for paper_id in scope
+            for item in grouped[paper_id]
+            if item.chunk_id not in selected_chunks
+        ),
+        key=lambda item: (
+            -item.retrieval_score,
+            scope_order[item.paper_id],
+            item.physical_page,
+            item.chunk_id,
+        ),
+    )
+    selected.extend(residual[: max(0, limit - len(selected))])
+    return selected[:limit]
+
+
 def sentence_windows(
     text: str,
     *,

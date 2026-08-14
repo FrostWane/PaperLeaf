@@ -56,6 +56,20 @@ class FakeRetriever:
             )
         ]
 
+    async def page_selection_evidence(
+        self, *, user_id, paper_id, physical_page, selected_text, limit
+    ):
+        return [
+            Evidence(
+                f"{paper_id}:p{physical_page}:c0",
+                paper_id,
+                "测试论文",
+                physical_page,
+                selected_text,
+                retrieval_channels=("verified_selection",),
+            )
+        ]
+
 
 def test_graph_returns_structured_candidates_without_parsing_markdown_titles() -> None:
     contexts = [
@@ -380,7 +394,8 @@ def test_page_tool_resolves_unique_trusted_title_to_current_paper_id() -> None:
 
         result = await harness.run("解释选文", context)
 
-        assert [item.chunk_id for item in result.evidence] == ["page:p1:p1"]
+        assert [item.chunk_id for item in result.evidence] == ["p1:p1:c0"]
+        assert all(not item.chunk_id.startswith("page:") for item in result.evidence)
         record = next(iter(repository.agent_tool_calls.values()))
         assert record.status == "succeeded"
         assert result.calls[0]["argument_resolution"] == "trusted_current_paper_title"

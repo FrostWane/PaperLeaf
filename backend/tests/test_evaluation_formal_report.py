@@ -14,7 +14,7 @@ def test_case_scores_use_best_group_and_cross_paper_coverage() -> None:
         }
     )
     assert scores == {
-        "page_recall": 2 / 3,
+        "page_macro_recall": 2 / 3,
         "mrr": 0.5,
         "complete_group_hit": 0.0,
         "required_paper_coverage": 2 / 3,

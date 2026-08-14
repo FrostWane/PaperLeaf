@@ -31,6 +31,11 @@ KNOWN_CHANNELS = {
     "vector",
     "sentence_reranker",
     "scoped_overview",
+    "page_text",
+    "verified_selection",
+    "selection_neighbor",
+    "multigranular_reranker",
+    "legacy_sentence_reranker",
     "demo",
 }
 KNOWN_SCOPES = {"paper", "selection", "collection", "library"}
@@ -38,6 +43,10 @@ KNOWN_PROCESSORS = {
     "per_paper_balance",
     "weak_query_rewrite",
     "sentence_window_rerank",
+    "multigranular_page_rerank",
+    "legacy_sentence_window_rerank",
+    "page_chunk_resolution",
+    "paper_subquery_merge_1_1_1_plus_2",
 }
 KNOWN_REWRITE_REASONS = {
     "no_candidates",
@@ -73,6 +82,11 @@ CHANNEL_LABELS = {
     "vector": "向量检索",
     "sentence_reranker": "短句窗重排",
     "scoped_overview": "单篇跨页概览",
+    "page_text": "指定页原文",
+    "verified_selection": "已核对选文",
+    "selection_neighbor": "选文相邻证据",
+    "multigranular_reranker": "页级多粒度重排",
+    "legacy_sentence_reranker": "旧短句窗重排",
     "demo": "演示检索",
     "none": "未命中通道",
     "other": "其他通道",
@@ -81,6 +95,10 @@ PROCESSOR_LABELS = {
     "per_paper_balance": "逐论文取证",
     "weak_query_rewrite": "弱结果补充查询",
     "sentence_window_rerank": "短句窗重排",
+    "multigranular_page_rerank": "页级多粒度重排",
+    "legacy_sentence_window_rerank": "旧短句窗重排",
+    "page_chunk_resolution": "页文本映射真实 Chunk",
+    "paper_subquery_merge_1_1_1_plus_2": "论文子问题独立取证与 1+1+1+2 合并",
     "other": "其他处理",
 }
 REWRITE_REASON_LABELS = {
@@ -261,6 +279,7 @@ def build_rag_trace(
             if (reason := getattr(item, "reranker_fallback_reason", None))
         }
     )
+    retrieval_config = dict(result.get("retrieval_config", {}) or {})
     grade = str(quality.get("grade") or result.get("evidence_grade") or "unknown")
     retrieval_outcome = (
         "empty" if not evidence else "sufficient" if grade == "sufficient" else "insufficient"
@@ -282,6 +301,10 @@ def build_rag_trace(
         "retrieval_processors": processors,
         "query_rewrite_reasons": rewrite_reasons,
         "reranker_fallback_reasons": reranker_fallback_reasons,
+        "retrieval_config_fingerprint": str(retrieval_config.get("fingerprint", ""))[:64]
+        or None,
+        "git_sha": str(retrieval_config.get("git_sha", "unknown"))[:40],
+        "git_sha_verified": bool(retrieval_config.get("git_sha_verified", False)),
     }
     trace["failure_category"] = failure_category(error_code, trace)
     return trace

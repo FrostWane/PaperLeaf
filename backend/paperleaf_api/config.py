@@ -49,10 +49,10 @@ class Settings:
     )
     multi_agent_token_budget: int = int(os.getenv("PAPERLEAF_MULTI_AGENT_TOKEN_BUDGET", "12000"))
     specialist_agent_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_SPECIALIST_AGENT_TIMEOUT_SECONDS", "45")
+        os.getenv("PAPERLEAF_SPECIALIST_AGENT_TIMEOUT_SECONDS", "60")
     )
     specialist_total_timeout_seconds: float = float(
-        os.getenv("PAPERLEAF_SPECIALIST_TOTAL_TIMEOUT_SECONDS", "150")
+        os.getenv("PAPERLEAF_SPECIALIST_TOTAL_TIMEOUT_SECONDS", "180")
     )
     academic_mcp_url: str = os.getenv(
         "PAPERLEAF_ACADEMIC_MCP_URL", "http://academic-search-mcp:8080/mcp"
@@ -167,6 +167,13 @@ class Settings:
     agent_evidence_support_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_AGENT_EVIDENCE_SUPPORT_TIMEOUT_SECONDS", "20")
     )
+    answerability_enabled: bool = _bool("PAPERLEAF_ANSWERABILITY_ENABLED", True)
+    answerability_min_confidence: float = float(
+        os.getenv("PAPERLEAF_ANSWERABILITY_MIN_CONFIDENCE", "0.72")
+    )
+    agent_answerability_timeout_seconds: float = float(
+        os.getenv("PAPERLEAF_AGENT_ANSWERABILITY_TIMEOUT_SECONDS", "20")
+    )
     translation_timeout_seconds: float = float(
         os.getenv("PAPERLEAF_TRANSLATION_TIMEOUT_SECONDS", "90")
     )
@@ -223,6 +230,7 @@ class Settings:
             self.answer_min_citation_coverage,
             self.answer_min_claim_lexical_support,
             self.answer_min_support_confidence,
+            self.answerability_min_confidence,
         )
         if any(value < 0 or value > 1 for value in quality_values):
             raise RuntimeError("证据质量阈值必须位于 0 到 1 之间")
@@ -231,6 +239,7 @@ class Settings:
             or self.agent_answer_timeout_seconds <= 0
             or self.agent_answer_retry_timeout_seconds <= 0
             or self.agent_evidence_support_timeout_seconds <= 0
+            or self.agent_answerability_timeout_seconds <= 0
             or self.translation_timeout_seconds <= 0
         ):
             raise RuntimeError("模型超时必须大于 0")
@@ -240,6 +249,7 @@ class Settings:
                 self.agent_answer_timeout_seconds,
                 self.agent_answer_retry_timeout_seconds,
                 self.agent_evidence_support_timeout_seconds,
+                self.agent_answerability_timeout_seconds,
                 self.translation_timeout_seconds,
             )
             > MAX_CONFIGURED_MODEL_TIMEOUT_SECONDS

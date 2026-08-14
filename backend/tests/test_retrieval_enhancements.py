@@ -4,6 +4,7 @@ from paperleaf_api.rag.retrieval_enhancements import (
     assess_rewrite_need,
     balance_evidence_by_paper,
     contextual_embedding_text,
+    merge_paper_subquery_evidence,
     rerank_evidence_by_sentence_windows,
     sentence_windows,
     technical_tokens,
@@ -62,6 +63,28 @@ def test_paper_balancing_prevents_one_paper_from_filling_top_k() -> None:
         per_paper_limit=2,
     )
     assert [item.paper_id for item in result] == ["p1", "p2", "p3"]
+
+
+def test_paper_subquery_merge_uses_one_one_one_plus_two_policy() -> None:
+    result = merge_paper_subquery_evidence(
+        [
+            _evidence("p1", 1, 0.99),
+            _evidence("p1", 2, 0.98),
+            _evidence("p1", 3, 0.97),
+            _evidence("p2", 1, 0.60),
+            _evidence("p2", 2, 0.50),
+            _evidence("p3", 1, 0.40),
+        ],
+        paper_ids=["p1", "p2", "p3"],
+        limit=5,
+    )
+
+    assert [item.paper_id for item in result[:3]] == ["p1", "p2", "p3"]
+    assert [(item.paper_id, item.physical_page) for item in result[3:]] == [
+        ("p1", 2),
+        ("p1", 3),
+    ]
+    assert len({(item.paper_id, item.physical_page) for item in result}) == 5
 
 
 def test_sentence_windows_keep_complete_sentences_and_are_deterministic() -> None:

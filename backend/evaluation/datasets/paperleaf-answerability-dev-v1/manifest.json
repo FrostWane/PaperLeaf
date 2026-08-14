@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "dataset_id": "paperleaf-answerability-dev-v1",
+  "version": "2026-08-14",
+  "created_at": "2026-08-14",
+  "annotation_license": "Apache-2.0",
+  "pdf_distribution": "external-links-only",
+  "paper_count": 20,
+  "case_count": 40,
+  "answerable_count": 20,
+  "unanswerable_count": 20,
+  "category_counts": {
+    "adversarial_query": 10,
+    "definition": 10,
+    "unanswerable": 20
+  },
+  "chunking": {
+    "target_tokens": 700,
+    "overlap_tokens": 100
+  },
+  "papers": [
+    {
+      "id": "arxiv:1512.03385v1",
+      "title": "Deep Residual Learning for Image Recognition",
+      "arxiv_id": "1512.03385v1",
+      "source_url": "https://arxiv.org/abs/1512.03385v1",
+      "pdf_url": "https://arxiv.org/pdf/1512.03385v1",
+      "filename": "1512.03385v1.pdf",
+      "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+      "page_count": 12,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1609.02907v4",
+      "title": "Semi-Supervised Classification with Graph Convolutional Networks",
+      "arxiv_id": "1609.02907v4",
+      "source_url": "https://arxiv.org/abs/1609.02907v4",
+      "pdf_url": "https://arxiv.org/pdf/1609.02907v4",
+      "filename": "1609.02907v4.pdf",
+      "sha256": "a654f884db04a317b0f2414a83f2ba32a9f8442d29bcf1cb5f73f7af78a98070",
+      "page_count": 14,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1706.03762v7",
+      "title": "Attention Is All You Need",
+      "arxiv_id": "1706.03762v7",
+      "source_url": "https://arxiv.org/abs/1706.03762v7",
+      "pdf_url": "https://arxiv.org/pdf/1706.03762v7",
+      "filename": "1706.03762v7.pdf",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "page_count": 15,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1710.10903v3",
+      "title": "Graph Attention Networks",
+      "arxiv_id": "1710.10903v3",
+      "source_url": "https://arxiv.org/abs/1710.10903v3",
+      "pdf_url": "https://arxiv.org/pdf/1710.10903v3",
+      "filename": "1710.10903v3.pdf",
+      "sha256": "a7d811a44e1c65bf27da3a01859f23a8edbe33b8f96114b4b5066aedb078f284",
+      "page_count": 12,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:1810.04805v2",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "arxiv_id": "1810.04805v2",
+      "source_url": "https://arxiv.org/abs/1810.04805v2",
+      "pdf_url": "https://arxiv.org/pdf/1810.04805v2",
+      "filename": "1810.04805v2.pdf",
+      "sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
+      "page_count": 16,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2005.11401v4",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "arxiv_id": "2005.11401v4",
+      "source_url": "https://arxiv.org/abs/2005.11401v4",
+      "pdf_url": "https://arxiv.org/pdf/2005.11401v4",
+      "filename": "2005.11401v4.pdf",
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+      "page_count": 19,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2005.14165v4",
+      "title": "Language Models are Few-Shot Learners",
+      "arxiv_id": "2005.14165v4",
+      "source_url": "https://arxiv.org/abs/2005.14165v4",
+      "pdf_url": "https://arxiv.org/pdf/2005.14165v4",
+      "filename": "2005.14165v4.pdf",
+      "sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83",
+      "page_count": 75,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2006.11239v2",
+      "title": "Denoising Diffusion Probabilistic Models",
+      "arxiv_id": "2006.11239v2",
+      "source_url": "https://arxiv.org/abs/2006.11239v2",
+      "pdf_url": "https://arxiv.org/pdf/2006.11239v2",
+      "filename": "2006.11239v2.pdf",
+      "sha256": "aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505",
+      "page_count": 25,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2010.02502v4",
+      "title": "Denoising Diffusion Implicit Models",
+      "arxiv_id": "2010.02502v4",
+      "source_url": "https://arxiv.org/abs/2010.02502v4",
+      "pdf_url": "https://arxiv.org/pdf/2010.02502v4",
+      "filename": "2010.02502v4.pdf",
+      "sha256": "07cb8796d7c100bf7c02bc575f16aab72c32630a8f85abd54ad45dc4f63e80fb",
+      "page_count": 22,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2010.11929v2",
+      "title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
+      "arxiv_id": "2010.11929v2",
+      "source_url": "https://arxiv.org/abs/2010.11929v2",
+      "pdf_url": "https://arxiv.org/pdf/2010.11929v2",
+      "filename": "2010.11929v2.pdf",
+      "sha256": "8ce7b83971a14508ca711a27c875c9b6914c4f6767cf3150fb1ca6c07aa056d6",
+      "page_count": 22,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2103.00020v1",
+      "title": "Learning Transferable Visual Models From Natural Language Supervision",
+      "arxiv_id": "2103.00020v1",
+      "source_url": "https://arxiv.org/abs/2103.00020v1",
+      "pdf_url": "https://arxiv.org/pdf/2103.00020v1",
+      "filename": "2103.00020v1.pdf",
+      "sha256": "6478b6e571a7d6fcd846d8ef77bfd60c285f1986abb8f475eedc43de403074f5",
+      "page_count": 48,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2106.09685v2",
+      "title": "LoRA: Low-Rank Adaptation of Large Language Models",
+      "arxiv_id": "2106.09685v2",
+      "source_url": "https://arxiv.org/abs/2106.09685v2",
+      "pdf_url": "https://arxiv.org/pdf/2106.09685v2",
+      "filename": "2106.09685v2.pdf",
+      "sha256": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+      "page_count": 26,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2201.11903v6",
+      "title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+      "arxiv_id": "2201.11903v6",
+      "source_url": "https://arxiv.org/abs/2201.11903v6",
+      "pdf_url": "https://arxiv.org/pdf/2201.11903v6",
+      "filename": "2201.11903v6.pdf",
+      "sha256": "7d9f878c23b460e4566aa4ec9201b1abfb3b8faefb2b1356e411cb90fef72a12",
+      "page_count": 43,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2205.14135v2",
+      "title": "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness",
+      "arxiv_id": "2205.14135v2",
+      "source_url": "https://arxiv.org/abs/2205.14135v2",
+      "pdf_url": "https://arxiv.org/pdf/2205.14135v2",
+      "filename": "2205.14135v2.pdf",
+      "sha256": "ca7f9fda10b90fc05dd291a3accc85e9c1a4a860b99b31928dab03ed3fcb14e4",
+      "page_count": 34,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2210.03629v3",
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+      "arxiv_id": "2210.03629v3",
+      "source_url": "https://arxiv.org/abs/2210.03629v3",
+      "pdf_url": "https://arxiv.org/pdf/2210.03629v3",
+      "filename": "2210.03629v3.pdf",
+      "sha256": "f285b0971ae4a790e402fb93966bed3adde2cf0a04977d08b2b40d6ab0cace69",
+      "page_count": 33,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2302.04761v1",
+      "title": "Toolformer: Language Models Can Teach Themselves to Use Tools",
+      "arxiv_id": "2302.04761v1",
+      "source_url": "https://arxiv.org/abs/2302.04761v1",
+      "pdf_url": "https://arxiv.org/pdf/2302.04761v1",
+      "filename": "2302.04761v1.pdf",
+      "sha256": "6d7483d94653008e40c2058a1c22441c92e3713dae278b6361e8efc447c99522",
+      "page_count": 17,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2302.13971v1",
+      "title": "LLaMA: Open and Efficient Foundation Language Models",
+      "arxiv_id": "2302.13971v1",
+      "source_url": "https://arxiv.org/abs/2302.13971v1",
+      "pdf_url": "https://arxiv.org/pdf/2302.13971v1",
+      "filename": "2302.13971v1.pdf",
+      "sha256": "2e663675ae36ad12adb2f5a05281bac2747ecf8d23d92bedd9f937a89fee7136",
+      "page_count": 27,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2304.02643v1",
+      "title": "Segment Anything",
+      "arxiv_id": "2304.02643v1",
+      "source_url": "https://arxiv.org/abs/2304.02643v1",
+      "pdf_url": "https://arxiv.org/pdf/2304.02643v1",
+      "filename": "2304.02643v1.pdf",
+      "sha256": "c6ca524e47200c3e542587ca76ac1dbc89cc67340f948c819250d16fdbd90cfb",
+      "page_count": 30,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2304.07193v2",
+      "title": "DINOv2: Learning Robust Visual Features without Supervision",
+      "arxiv_id": "2304.07193v2",
+      "source_url": "https://arxiv.org/abs/2304.07193v2",
+      "pdf_url": "https://arxiv.org/pdf/2304.07193v2",
+      "filename": "2304.07193v2.pdf",
+      "sha256": "3add205547f3ece5fb1ac7a91720aa9fabf02d9cde29a096643ff022449f3e91",
+      "page_count": 32,
+      "redistribution": "external-link-only"
+    },
+    {
+      "id": "arxiv:2307.09288v2",
+      "title": "Llama 2: Open Foundation and Fine-Tuned Chat Models",
+      "arxiv_id": "2307.09288v2",
+      "source_url": "https://arxiv.org/abs/2307.09288v2",
+      "pdf_url": "https://arxiv.org/pdf/2307.09288v2",
+      "filename": "2307.09288v2.pdf",
+      "sha256": "1df284ce95f783002074bfe8f21d47c646b396ceb1736ea3ec0ea212fc070d91",
+      "page_count": 77,
+      "redistribution": "external-link-only"
+    }
+  ],
+  "source_dataset_id": "paperleaf-rag-v1",
+  "source_usage": "revealed_development_cases_only",
+  "formal_hidden_overlap": 0
+}

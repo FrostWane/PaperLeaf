@@ -4,6 +4,7 @@ from paperleaf_api.evaluation_dataset import FrozenEvaluationCase
 from paperleaf_api.evaluation_production import (
     evaluate_production_cases,
     paired_bootstrap_interval,
+    paired_ratio_bootstrap_interval,
 )
 from paperleaf_api.rag.citations import Evidence
 
@@ -121,3 +122,14 @@ def test_paired_bootstrap_is_deterministic_and_uses_paired_delta() -> None:
     assert first == second
     assert first["sample_count"] == 4
     assert first["mean_delta"] == 0.5
+
+
+def test_paired_ratio_bootstrap_recomputes_micro_denominator() -> None:
+    result = paired_ratio_bootstrap_interval(
+        [(1, 1), (0, 3)], [(0, 1), (2, 3)], samples=1000
+    )
+
+    assert result["baseline"] == {"numerator": 1, "denominator": 4, "value": 0.25}
+    assert result["candidate"] == {"numerator": 2, "denominator": 4, "value": 0.5}
+    assert result["mean_delta"] == 0.25
+    assert result["estimand"] == "paired_case_resampled_micro_ratio_delta"

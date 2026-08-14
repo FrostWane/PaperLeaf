@@ -228,7 +228,7 @@ def test_sql_search_runs_independent_channels_and_balances_papers(monkeypatch) -
     assert "broad_or_comparison_intent" in search.rewrite_calls[0][1]
 
 
-def test_paper_specific_mode_keeps_global_baseline_then_queries_each_paper(
+def test_paper_specific_mode_queries_each_paper_without_global_scope(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -258,8 +258,8 @@ def test_paper_specific_mode_keeps_global_baseline_then_queries_each_paper(
         )
     )
 
-    assert search.paper_calls[0][1] is None
-    assert {paper_id for _query, paper_id, _limit in search.paper_calls[1:]} == {
+    assert all(paper_id is not None for _query, paper_id, _limit in search.paper_calls)
+    assert {paper_id for _query, paper_id, _limit in search.paper_calls} == {
         "p1",
         "p2",
         "p3",
@@ -292,7 +292,7 @@ def test_paper_specific_retrieval_does_not_depend_on_weak_rewrite(monkeypatch) -
         )
     )
 
-    assert {paper_id for _query, paper_id, _limit in search.paper_calls[1:]} == {
+    assert {paper_id for _query, paper_id, _limit in search.paper_calls} == {
         "p1",
         "p2",
         "p3",

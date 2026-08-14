@@ -9187,7 +9187,26 @@
       "baseline": "plain_embedding_control",
       "candidate": "contextual_embedding",
       "paired_bootstrap_95ci": {
-        "page_recall": {
+        "page_micro_recall": {
+          "sample_count": 90,
+          "bootstrap_samples": 10000,
+          "baseline": {
+            "numerator": 89,
+            "denominator": 158,
+            "value": 0.5632911392405063
+          },
+          "candidate": {
+            "numerator": 94,
+            "denominator": 159,
+            "value": 0.5911949685534591
+          },
+          "mean_delta": 0.027903829312952766,
+          "ci95_lower": -0.009111927104583195,
+          "ci95_upper": 0.06756756756756754,
+          "seed": 20260814,
+          "estimand": "paired_case_resampled_micro_ratio_delta"
+        },
+        "page_macro_recall": {
           "sample_count": 90,
           "bootstrap_samples": 10000,
           "mean_delta": 0.016666666666666666,
@@ -9226,7 +9245,26 @@
       "baseline": "contextual_embedding",
       "candidate": "per_paper_retrieval",
       "paired_bootstrap_95ci": {
-        "page_recall": {
+        "page_micro_recall": {
+          "sample_count": 90,
+          "bootstrap_samples": 10000,
+          "baseline": {
+            "numerator": 94,
+            "denominator": 159,
+            "value": 0.5911949685534591
+          },
+          "candidate": {
+            "numerator": 93,
+            "denominator": 159,
+            "value": 0.5849056603773585
+          },
+          "mean_delta": -0.0062893081761006275,
+          "ci95_lower": -0.07051282051282048,
+          "ci95_upper": 0.060810810810810745,
+          "seed": 20260814,
+          "estimand": "paired_case_resampled_micro_ratio_delta"
+        },
+        "page_macro_recall": {
           "sample_count": 90,
           "bootstrap_samples": 10000,
           "mean_delta": -0.0037037037037037004,
@@ -9265,7 +9303,26 @@
       "baseline": "contextual_embedding",
       "candidate": "weak_query_rewrite",
       "paired_bootstrap_95ci": {
-        "page_recall": {
+        "page_micro_recall": {
+          "sample_count": 90,
+          "bootstrap_samples": 10000,
+          "baseline": {
+            "numerator": 94,
+            "denominator": 159,
+            "value": 0.5911949685534591
+          },
+          "candidate": {
+            "numerator": 95,
+            "denominator": 159,
+            "value": 0.5974842767295597
+          },
+          "mean_delta": 0.0062893081761006275,
+          "ci95_lower": -0.02515723270440251,
+          "ci95_upper": 0.039735099337748436,
+          "seed": 20260814,
+          "estimand": "paired_case_resampled_micro_ratio_delta"
+        },
+        "page_macro_recall": {
           "sample_count": 90,
           "bootstrap_samples": 10000,
           "mean_delta": 0.02592592592592593,
@@ -9304,7 +9361,26 @@
       "baseline": "contextual_embedding",
       "candidate": "multigranular_page_reranker",
       "paired_bootstrap_95ci": {
-        "page_recall": {
+        "page_micro_recall": {
+          "sample_count": 90,
+          "bootstrap_samples": 10000,
+          "baseline": {
+            "numerator": 94,
+            "denominator": 159,
+            "value": 0.5911949685534591
+          },
+          "candidate": {
+            "numerator": 96,
+            "denominator": 159,
+            "value": 0.6037735849056604
+          },
+          "mean_delta": 0.012578616352201255,
+          "ci95_lower": -0.020000000000000018,
+          "ci95_upper": 0.04895104895104896,
+          "seed": 20260814,
+          "estimand": "paired_case_resampled_micro_ratio_delta"
+        },
+        "page_macro_recall": {
           "sample_count": 90,
           "bootstrap_samples": 10000,
           "mean_delta": 0.022222222222222223,
@@ -9343,7 +9419,26 @@
       "baseline": "production_baseline",
       "candidate": "final_combined",
       "paired_bootstrap_95ci": {
-        "page_recall": {
+        "page_micro_recall": {
+          "sample_count": 90,
+          "bootstrap_samples": 10000,
+          "baseline": {
+            "numerator": 102,
+            "denominator": 159,
+            "value": 0.6415094339622641
+          },
+          "candidate": {
+            "numerator": 98,
+            "denominator": 159,
+            "value": 0.6163522012578616
+          },
+          "mean_delta": -0.02515723270440251,
+          "ci95_lower": -0.08536585365853666,
+          "ci95_upper": 0.03870967741935483,
+          "seed": 20260814,
+          "estimand": "paired_case_resampled_micro_ratio_delta"
+        },
+        "page_macro_recall": {
           "sample_count": 90,
           "bootstrap_samples": 10000,
           "mean_delta": 6.167905692361981e-19,

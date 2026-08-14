@@ -1,8 +1,11 @@
 FROM registry-1.docker.io/library/python:3.11-slim
 
+ARG PAPERLEAF_GIT_SHA=unknown
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PAPERLEAF_GIT_SHA=${PAPERLEAF_GIT_SHA}
 
 WORKDIR /app
 RUN groupadd --system --gid 1001 paperleaf \

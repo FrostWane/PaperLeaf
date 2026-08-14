@@ -22,10 +22,12 @@ from ..embedding_contract import configured_embedding_contract
 from ..model_runtime import ModelRouter, ModelRuntimeError, build_model_router
 from ..models import Paper, PaperChunk, PaperPage
 from ..rag.citations import Evidence
+from ..rag.retrieval_config import retrieval_config_overlay
 from ..rag.retrieval_enhancements import (
     MultiGranularLexicalScorer,
     assess_rewrite_need,
     balance_evidence_by_paper,
+    merge_paper_subquery_evidence,
     rerank_evidence_by_sentence_windows,
     technical_tokens,
 )
@@ -133,6 +135,8 @@ class LibrarySearchInput(BaseModel):
     # 多论文比较由服务端显式开启。普通全库搜索不会对大量论文逐一查询。
     ensure_paper_coverage: bool = False
     per_paper_query_mode: Literal["same_query", "paper_specific"] = "same_query"
+    # 由 API 在创建 AgentRun 时冻结。普通评测或内部调用为空时使用进程配置。
+    retrieval_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ArxivSearchInput(BaseModel):
@@ -211,7 +215,10 @@ class SQLLibrarySearch:
         model_router: ModelRouter[Any] | None = None,
         reranker: Any | None = None,
     ) -> None:
-        self.config = config
+        self._base_config = config
+        self._config_context: ContextVar[Any | None] = ContextVar(
+            f"rag_config_{id(self)}", default=None
+        )
         self.model_router = model_router or build_model_router(config)
         self.reranker = reranker
         # SQLLibrarySearch 由 API/Worker 复用。检索诊断必须按 async Task 隔离，
@@ -232,6 +239,10 @@ class SQLLibrarySearch:
         self._last_rewrite_reasons_snapshot: tuple[str, ...] = ()
         self._last_reranker_fallback_snapshot: str | None = None
         self._last_candidate_snapshot: tuple[Evidence, ...] = ()
+
+    @property
+    def config(self) -> Any:
+        return self._config_context.get() or self._base_config
 
     def _diagnostic_context_var(self, attribute: str) -> ContextVar[object]:
         value = getattr(self, attribute, None)
@@ -841,7 +852,11 @@ class SQLLibrarySearch:
         if not rankings:
             return []
         fused: list[Evidence] = []
-        for hit in reciprocal_rank_fusion(rankings, limit=candidate_limit):
+        for hit in reciprocal_rank_fusion(
+            rankings,
+            rank_constant=int(getattr(self.config, "rag_rrf_rank_constant", 60) or 60),
+            limit=candidate_limit,
+        ):
             payload = payload_by_hit.get(hit.id)
             if payload is None:
                 continue
@@ -973,6 +988,18 @@ class SQLLibrarySearch:
         ]
 
     async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
+        if not hasattr(self, "_base_config") or not hasattr(self, "_config_context"):
+            if request.retrieval_config:
+                raise RuntimeError("自定义检索器未初始化，不能应用 AgentRun 冻结配置")
+            return await self._search(request)
+        override = retrieval_config_overlay(self._base_config, request.retrieval_config)
+        token = self._config_context.set(override)
+        try:
+            return await self._search(request)
+        finally:
+            self._config_context.reset(token)
+
+    async def _search(self, request: LibrarySearchInput) -> list[Evidence]:
         self.last_vector_fallback_reason = None
         self.last_rewrite_reasons = ()
         self.last_reranker_fallback_reason = None
@@ -995,13 +1022,12 @@ class SQLLibrarySearch:
             int(getattr(self.config, "rag_per_paper_candidate_limit", 5) or 5) * 3,
             10,
         )
-        independent_same_query = per_paper and request.per_paper_query_mode == "same_query"
-        row_limit = per_paper_row_limit if independent_same_query else candidate_limit
+        row_limit = per_paper_row_limit if per_paper else candidate_limit
         async with get_session_factory()() as session:
             channels: list[tuple[str, list[Any], str]] = []
-            # 逐论文专属查询先保留现有全局候选作为回退；只有消融模式
-            # per_paper_same 才会把原问题也对每篇论文独立执行。
-            scopes: list[str | None] = list(request.paper_ids) if independent_same_query else [None]
+            # 跨论文问题先在每篇论文自己的 scope 内独立检索，禁止一个全局高分
+            # 论文挤掉其他论文的候选。后续再执行论文内页排序和受控合并。
+            scopes: list[str | None] = list(request.paper_ids) if per_paper else [None]
             for paper_id in scopes:
                 rows = await self._keyword_rows(
                     session,
@@ -1160,7 +1186,27 @@ class SQLLibrarySearch:
             candidates,
             limit=rerank_limit,
         )
-        if per_paper:
+        if paper_specific:
+            ranked = self._annotate_retrieval(
+                merge_paper_subquery_evidence(
+                    candidates,
+                    paper_ids=request.paper_ids,
+                    limit=candidate_limit,
+                ),
+                per_paper=True,
+            )
+            ranked = [
+                replace(
+                    item,
+                    retrieval_processors=tuple(
+                        dict.fromkeys(
+                            (*item.retrieval_processors, "paper_subquery_merge_1_1_1_plus_2")
+                        )
+                    ),
+                )
+                for item in ranked
+            ]
+        elif per_paper:
             ranked = self._annotate_retrieval(
                 balance_evidence_by_paper(
                     candidates,

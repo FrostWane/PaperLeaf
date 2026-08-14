@@ -22,6 +22,16 @@ def test_mismatched_page_and_excerpt_are_rejected() -> None:
     assert len(errors) == 2
 
 
+def test_page_placeholder_cannot_be_used_as_citation() -> None:
+    evidence = [Evidence("page:paper-1:p7", "paper-1", "论文", 7, "第七页全文")]
+    claims = [CitationClaim("page:paper-1:p7", "paper-1", 7)]
+
+    valid, errors = validate_citations(claims, evidence)
+
+    assert valid is False
+    assert errors == ["页级占位 ID 不能作为引用，必须映射到真实 Chunk"]
+
+
 def test_citation_viewer_url_keeps_the_physical_page() -> None:
     evidence = [Evidence("paper-1:p7:c0", "paper-1", "论文", 7, "第七页证据")]
     claims = [CitationClaim("paper-1:p7:c0", "paper-1", 7)]

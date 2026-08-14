@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from prometheus_client import make_asgi_app
 
+from .agent.answerability import build_configured_answerability_grader
 from .agent.function_tools import FunctionToolHarness
 from .agent.graph import (
     build_agent_graph,
@@ -71,6 +72,7 @@ from .model_runtime import build_model_router
 from .models import PaperStatus, UserRole
 from .rag.answer_quality import AnswerQualityPolicy
 from .rag.citations import Evidence
+from .rag.retrieval_config import freeze_retrieval_config
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .rag_observability import aggregate_rag_runs, classify_intent
 from .repository import (
@@ -222,6 +224,10 @@ class AppServices:
                 min_model_support_confidence=self.config.answer_min_support_confidence,
             ),
             support_grader=build_configured_evidence_support_grader(self.config, self.model_router),
+            answerability_grader=build_configured_answerability_grader(
+                self.config, self.model_router
+            ),
+            answerability_min_confidence=self.config.answerability_min_confidence,
         )
 
     async def register_agent_task(self, run_id: str, task: asyncio.Task[Any]) -> None:
@@ -2064,6 +2070,7 @@ def create_app(
                 ).arxiv_search_enabled
             ),
             "client_context": client_context,
+            "retrieval_config": freeze_retrieval_config(config),
             "harness": {
                 "context_engine_enabled": config.context_engine_enabled,
                 "memory_enabled": config.memory_enabled,

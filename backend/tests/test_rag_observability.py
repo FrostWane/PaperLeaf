@@ -51,6 +51,11 @@ def test_trace_records_channels_latency_and_strategy_without_content() -> None:
             "citations": [CitationClaim(evidence.chunk_id, evidence.paper_id, 2)],
             "evidence_quality": {"grade": "sufficient", "reason_code": "hybrid_support"},
             "stage_timings_ms": {"retrieval": 125, "generation": 860},
+            "retrieval_config": {
+                "fingerprint": "a" * 64,
+                "git_sha": "b" * 40,
+                "git_sha_verified": True,
+            },
         },
         outcome="cited_answer",
     )
@@ -61,6 +66,9 @@ def test_trace_records_channels_latency_and_strategy_without_content() -> None:
     assert trace["query_rewrite_reasons"] == ["cross_language"]
     assert trace["stage_timings_ms"] == {"retrieval": 125, "generation": 860}
     assert trace["citation_count"] == 1
+    assert trace["retrieval_config_fingerprint"] == "a" * 64
+    assert trace["git_sha"] == "b" * 40
+    assert trace["git_sha_verified"] is True
     serialized = str(trace)
     assert "不会写入指标的标题" not in serialized
     assert "不会写入指标的证据正文" not in serialized

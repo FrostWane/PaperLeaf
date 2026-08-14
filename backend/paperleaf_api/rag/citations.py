@@ -42,6 +42,9 @@ def validate_citations(
     if require_citation and evidence and not claims:
         errors.append("回答缺少引用")
     for claim in claims:
+        if claim.chunk_id.startswith("page:"):
+            errors.append("页级占位 ID 不能作为引用，必须映射到真实 Chunk")
+            continue
         source = by_chunk.get(claim.chunk_id)
         if not source:
             errors.append(f"引用 {claim.chunk_id} 不在本次召回证据中")

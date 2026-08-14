@@ -5,6 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from paperleaf_api.agent.answerability import AnswerabilityDecision
 from paperleaf_api.agent.graph import (
     _build_citation_aliases,
     _ensure_external_recommendation_shape,
@@ -372,6 +373,32 @@ def test_graph_returns_cited_answer_when_evidence_exists() -> None:
     assert result["evidence_quality"]["answer_support_grade"] == "supported"
 
 
+def test_graph_passes_frozen_retrieval_config_to_worker_retriever() -> None:
+    captured = {}
+
+    class CapturingRetriever(EvidenceRetriever):
+        async def __call__(self, request: LibrarySearchInput) -> list[Evidence]:
+            captured.update(request.retrieval_config)
+            return await super().__call__(request)
+
+    frozen = {"schema_version": 1, "fingerprint": "frozen-config"}
+    graph = build_agent_graph(CapturingRetriever(), answerer)
+    result = asyncio.run(
+        graph.ainvoke(
+            {
+                "user_id": "u1",
+                "query": "结论是什么？",
+                "selected_paper_ids": [],
+                "retrieval_config": frozen,
+            },
+            {"recursion_limit": 8},
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert captured == frozen
+
+
 def test_selection_lock_discards_legacy_evidence_from_other_pages() -> None:
     selected = Evidence("selected", "p1", "测试论文", 2, "选中段落的可信内容。")
     graph = build_agent_graph(EvidenceRetriever(), answerer)
@@ -706,6 +733,79 @@ def test_graph_abstains_when_retrieval_is_nonempty_but_irrelevant() -> None:
     assert result["evidence_quality"]["retrieval_grade"] == "insufficient"
     assert result["evidence_quality"]["answer_support_grade"] == "supported"
     assert "附录列出了实验硬件" in result["answer"]
+
+
+def test_answerability_gate_stops_adjacent_evidence_before_answer_generation() -> None:
+    calls = 0
+
+    async def should_not_answer(query, evidence):
+        nonlocal calls
+        calls += 1
+        return await answerer(query, evidence)
+
+    async def unanswerable(query, evidence):
+        assert evidence
+        return AnswerabilityDecision(
+            answerable=False,
+            confidence=0.97,
+            reason_code="adjacent_topic",
+        )
+
+    result = _run(
+        build_agent_graph(
+            IrrelevantRetriever(),
+            should_not_answer,
+            answerability_grader=unanswerable,
+            answerability_min_confidence=0.72,
+        )
+    )
+
+    assert calls == 0
+    assert result["status"] == "completed"
+    assert result["answerability_status"] == "unanswerable"
+    assert result["citations"] == []
+    assert "没有直接提供所问信息" in result["answer"]
+
+
+def test_answerability_gate_allows_direct_evidence() -> None:
+    async def answerable(query, evidence):
+        return AnswerabilityDecision(
+            answerable=True,
+            confidence=0.93,
+            reason_code="direct_answer",
+        )
+
+    result = _run(
+        build_agent_graph(
+            EvidenceRetriever(),
+            answerer,
+            answerability_grader=answerable,
+            answerability_min_confidence=0.72,
+        )
+    )
+
+    assert result["answerability_status"] == "answerable"
+    assert result["citations"][0].chunk_id == "c1"
+
+
+def test_answerability_grader_failure_does_not_block_normal_answer() -> None:
+    async def unavailable(query, evidence):
+        return AnswerabilityDecision(
+            answerable=None,
+            confidence=None,
+            reason_code="grader_unavailable",
+        )
+
+    result = _run(
+        build_agent_graph(
+            EvidenceRetriever(),
+            answerer,
+            answerability_grader=unavailable,
+        )
+    )
+
+    assert result["answerability_status"] == "not_checked"
+    assert result["citations"][0].chunk_id == "c1"
 
 
 def test_graph_suppresses_answer_with_forged_citation() -> None:
