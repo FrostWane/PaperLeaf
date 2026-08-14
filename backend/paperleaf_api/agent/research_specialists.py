@@ -88,6 +88,7 @@ class SpecialistUsage(BaseModel):
     dropped_evidence_count: int
     schema_repair_count: int = Field(default=0, ge=0, le=1)
     schema_fallback_used: bool = False
+    timeout_fallback_used: bool = False
 
 
 class SpecialistAnalysis(BaseModel):

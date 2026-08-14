@@ -232,6 +232,43 @@ def test_graph_turns_one_branch_timeout_into_partial_result() -> None:
     asyncio.run(scenario())
 
 
+def test_graph_keeps_validated_evidence_when_only_specialist_model_times_out() -> None:
+    async def scenario() -> None:
+        async def retriever(task: ResearchTask):
+            return [_evidence(task)]
+
+        async def slow_model(
+            _messages: tuple[dict[str, str], ...], *, max_output_tokens: int
+        ):
+            assert max_output_tokens > 0
+            await asyncio.sleep(0.1)
+            return {"claims": []}
+
+        graph = build_research_specialist_graph()
+        state = await graph.ainvoke(
+            _input(),
+            context=ResearchGraphContext(
+                retriever=retriever,
+                specialist=EvidenceSpecialist(slow_model, timeout_seconds=1),
+                branch_timeout_seconds=0.02,
+            ),
+        )
+
+        assert state["status"] == "succeeded"
+        assert len(state["merged_evidence"]) == 3
+        assert all(
+            item["status"] == "succeeded"
+            and item["usage"]["timeout_fallback_used"] is True
+            and item["claims"] == []
+            for item in state["branch_results"].values()
+        )
+        assert all(
+            item["timeout_fallback_used"] is True for item in state["branch_metrics"]
+        )
+
+    asyncio.run(scenario())
+
+
 def test_graph_all_failures_request_fallback_and_scope_is_revalidated() -> None:
     async def scenario() -> None:
         async def invalid_retriever(task: ResearchTask):

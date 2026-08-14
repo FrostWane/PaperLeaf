@@ -22,6 +22,7 @@ from .research_specialists import (
     SpecialistAnalysis,
     SpecialistBudgetError,
     SpecialistOutputError,
+    build_specialist_prompt,
 )
 from .research_synthesis import (
     FindingPacket,
@@ -230,6 +231,28 @@ def _success_envelope(
     }
 
 
+def _timeout_fallback_analysis(
+    task: ResearchTask,
+    evidence: Sequence[Evidence],
+) -> SpecialistAnalysis:
+    """模型超时时只保留服务端已验证证据，不伪造 Specialist 主张。"""
+
+    prompt = build_specialist_prompt(task, evidence)
+    fallback_evidence = tuple(prompt.evidence_by_alias.values())
+    return SpecialistAnalysis(
+        finding=FindingPacket(
+            subtask_id=task.subtask_id,
+            status="succeeded",
+            chunk_ids=tuple(item.chunk_id for item in fallback_evidence),
+            stance="unclear",
+            confidence=0.0,
+        ),
+        claims=(),
+        evidence=fallback_evidence,
+        usage=prompt.usage.model_copy(update={"timeout_fallback_used": True}),
+    )
+
+
 def _claim_tokens(value: str) -> set[str]:
     raw = _CLAIM_TOKEN_RE.findall(value.casefold())
     latin = {item for item in raw if len(item) > 1 and item.isascii()}
@@ -425,14 +448,16 @@ async def _execute_scout(
     task = ResearchTask.model_validate(state["subtask"])
     generation = int(state.get("generation", 1))
     started_at = time.perf_counter()
+    retrieved_evidence: Sequence[Evidence] = ()
 
     async def execute() -> SpecialistAnalysis:
+        nonlocal retrieved_evidence
         await _ensure_lease(runtime.context.lease_guard)
-        evidence = await runtime.context.retriever(task)
+        retrieved_evidence = await runtime.context.retriever(task)
         await _ensure_lease(runtime.context.lease_guard)
         return await runtime.context.specialist.analyze(
             task,
-            evidence,
+            retrieved_evidence,
             lease_guard=runtime.context.lease_guard,
         )
 
@@ -441,7 +466,19 @@ async def _execute_scout(
     except asyncio.CancelledError:
         raise
     except TimeoutError:
-        envelope = _failure_envelope(task, generation, "timeout", "SPECIALIST_TIMEOUT")
+        # 检索阶段超时仍是分支失败；模型阶段超时则可安全保留已经通过
+        # paper scope 校验的证据，由最终回答的引用与语义支持门禁继续处理。
+        if retrieved_evidence:
+            try:
+                analysis = _timeout_fallback_analysis(task, retrieved_evidence)
+            except (SpecialistBudgetError, SpecialistOutputError):
+                envelope = _failure_envelope(
+                    task, generation, "timeout", "SPECIALIST_TIMEOUT"
+                )
+            else:
+                envelope = _success_envelope(task, generation, analysis)
+        else:
+            envelope = _failure_envelope(task, generation, "timeout", "SPECIALIST_TIMEOUT")
     except SpecialistBudgetError:
         envelope = _failure_envelope(task, generation, "failed", "SPECIALIST_BUDGET_EXCEEDED")
     except SpecialistOutputError as error:
@@ -494,6 +531,9 @@ async def _emit_scout_finished(
             ),
             "schema_fallback_used": bool(
                 envelope.get("usage", {}).get("schema_fallback_used", False)
+            ),
+            "timeout_fallback_used": bool(
+                envelope.get("usage", {}).get("timeout_fallback_used", False)
             ),
             "duration_ms": int(envelope.get("duration_ms", 0)),
             "recovered": recovered,
@@ -576,6 +616,7 @@ async def _merge_node(
                 "provider_output_tokens": usage.get("provider_output_tokens"),
                 "schema_repair_count": int(usage.get("schema_repair_count", 0)),
                 "schema_fallback_used": bool(usage.get("schema_fallback_used", False)),
+                "timeout_fallback_used": bool(usage.get("timeout_fallback_used", False)),
                 "error_code": task_result.get("finding", {}).get("error_code"),
             }
         )

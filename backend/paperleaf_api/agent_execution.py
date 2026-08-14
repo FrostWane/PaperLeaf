@@ -550,6 +550,7 @@ def _parallel_compare_trace(
                     0, int(item.get("schema_repair_count", 0) or 0)
                 ),
                 "schema_fallback_used": bool(item.get("schema_fallback_used", False)),
+                "timeout_fallback_used": bool(item.get("timeout_fallback_used", False)),
                 "error_category": (
                     "timeout"
                     if str(item.get("status")) == "timeout"
