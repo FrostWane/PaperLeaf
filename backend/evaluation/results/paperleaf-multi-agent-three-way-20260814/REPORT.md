@@ -60,7 +60,7 @@ Job、租约或 Checkpoint。30 分钟租约自然过期后，新 Worker 将同�
 | `dev-capture.json` | `9260ae82dfb6e8f02623e93556649fcdf5bde9d8a9d1bb0f8421f26715414f51` |
 | `test-blind-review.jsonl` | `bd470a5151452f7fefcea44b9390672313c616344d316b7418dce1df7ab1b81c` |
 | `dev-blind-review.jsonl` | `cd0ca1a1eaff58c354ba6965aedd51d2b56b0e48da9b43d7209643e04b3a9ea1` |
-| `metrics.json` | `ddc7f6981609ff2f9e8254d07de7cf88947fcc4ae9f78e215a25fd6929ef5adc` |
+| `metrics.json` | `18528490fb1b93b79425dd9e0214a45ece494bf88dfdd8a71bfcb5a2f0b4ec6a` |
 | `worker-recovery-capture.json` | `16d6032ac61e0c7fa29eadc9ce1fc3bda527993debe4e03a98af4fb13b305d6f` |
 | `worker-recovery.json` | `d8f21a01d2268b417a6369ef431a6a5ed0a4941bc2cdeea51a8db87827f8e0f6` |
 

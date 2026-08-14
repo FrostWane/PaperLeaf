@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .evaluation_formal_protocol import matches_locked_text_sha
+
 VARIANTS = (
     "production_baseline",
     "plain_embedding_control",
@@ -33,7 +35,10 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """返回仓库文本对象的规范 LF SHA，避免 checkout 换行改变证据地址。"""
+
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def audit_formal_evidence(root: Path) -> dict[str, Any]:
@@ -50,7 +55,7 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
 
     assert len(manifest["papers"]) == 70
     assert len(questions) == len(oracle) == 100
-    assert _sha(oracle_path) == lock["oracle_sha256"]
+    assert matches_locked_text_sha(oracle_path, lock["oracle_sha256"])
     assert Counter(item["category"] for item in oracle) == {
         "single_paper": 50,
         "cross_paper": 30,
@@ -152,7 +157,8 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
         "dataset": {
             "paper_count": 70,
             "case_count": 100,
-            "oracle_sha256": lock["oracle_sha256"],
+            "oracle_frozen_sha256": lock["oracle_sha256"],
+            "oracle_repository_sha256": _sha(oracle_path),
             "category_counts": dict(Counter(item["category"] for item in oracle)),
         },
         "retrieval_layers": layer_summary,

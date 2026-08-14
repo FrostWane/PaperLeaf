@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
 from pathlib import Path
 from typing import Any
 
-from .evaluation_formal_protocol import FORMAL_VARIANTS, sha256_file
+from .evaluation_formal_protocol import FORMAL_VARIANTS
 from .evaluation_production import paired_bootstrap_interval
 
 COMPARISONS = (
@@ -20,6 +21,13 @@ COMPARISONS = (
     ("production_baseline", "final_combined", "最终组合方案"),
 )
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
+
+
+def _artifact_sha(path: Path) -> str:
+    """使用与 Git 文本对象一致的 LF SHA，保证 Windows/Linux 可复核。"""
+
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -240,15 +248,17 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
         "dataset": output_metrics["dataset"],
         "variants": {
             name: {
-                "run_manifest_sha256": sha256_file(root / name / "run_manifest.json"),
-                "per_query_results_sha256": sha256_file(root / name / "per_query_results.jsonl"),
-                "metrics_sha256": sha256_file(root / name / "metrics.json"),
+                "run_manifest_sha256": _artifact_sha(root / name / "run_manifest.json"),
+                "per_query_results_sha256": _artifact_sha(
+                    root / name / "per_query_results.jsonl"
+                ),
+                "metrics_sha256": _artifact_sha(root / name / "metrics.json"),
             }
             for name in FORMAL_VARIANTS
         },
         "artifacts": {
-            "per_query_results.jsonl": sha256_file(root / "per_query_results.jsonl"),
-            "metrics.json": sha256_file(root / "metrics.json"),
+            "per_query_results.jsonl": _artifact_sha(root / "per_query_results.jsonl"),
+            "metrics.json": _artifact_sha(root / "metrics.json"),
         },
         "human_review": {
             "status": "pending",
@@ -260,7 +270,7 @@ def aggregate(root: Path, *, mode: str) -> dict[str, Any]:
         json.dumps(root_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     _write_report(root, variants, comparisons, mode=mode)
-    root_manifest["artifacts"]["REPORT.md"] = sha256_file(root / "REPORT.md")
+    root_manifest["artifacts"]["REPORT.md"] = _artifact_sha(root / "REPORT.md")
     (root / "run_manifest.json").write_text(
         json.dumps(root_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

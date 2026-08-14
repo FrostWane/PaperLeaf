@@ -12,6 +12,10 @@
 - `metrics.json`：带分子、分母的指标；
 - 聚合目录中的 `REPORT.md`：结果、置信区间、负结果和边界。
 
+仓库内文本制品的公开 SHA-256 统一先把换行规范为 LF，再计算哈希；Windows 首次冻结
+形成的历史锁允许等价 CRLF/LF 文本校验。这样 Git checkout 换行不会被误判为数据漂移，
+任意非换行内容变化仍会失败。
+
 正式隐藏集位于 `backend/evaluation/datasets/paperleaf-formal-hidden-v1`。首次正式运行
 前，oracle 必须私有保存，仅把 SHA-256 冻结在 `lock.json`；正式批次结束后可以公开
 oracle 供第三方复算，但该集合随即变为已揭盲数据，不能再次产生“首次隐藏集”结论。
