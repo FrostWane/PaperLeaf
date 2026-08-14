@@ -87,6 +87,7 @@ class SpecialistUsage(BaseModel):
     evidence_count: int
     dropped_evidence_count: int
     schema_repair_count: int = Field(default=0, ge=0, le=1)
+    schema_fallback_used: bool = False
 
 
 class SpecialistAnalysis(BaseModel):
@@ -466,7 +467,35 @@ class EvidenceSpecialist:
                 break
             except SpecialistOutputError:
                 if repair_count:
-                    raise
+                    # 两次模型输出都未通过完整 Schema/别名约束时，不让不可信
+                    # 主张进入下游，也不丢弃服务端已经验证的检索证据。该分支
+                    # 明确降级为 retrieval-only，由最终回答的引用和语义门禁处理。
+                    fallback_evidence = tuple(prompt.evidence_by_alias.values())
+                    previous = raw.content if hasattr(raw, "content") else raw
+                    if not isinstance(previous, str):
+                        previous = json.dumps(previous, ensure_ascii=False, default=str)
+                    provider_input_tokens, provider_output_tokens = _provider_usage(raw)
+                    usage = prompt.usage.model_copy(
+                        update={
+                            "output_tokens": estimate_tokens(previous),
+                            "provider_input_tokens": provider_input_tokens,
+                            "provider_output_tokens": provider_output_tokens,
+                            "schema_repair_count": 1,
+                            "schema_fallback_used": True,
+                        }
+                    )
+                    return SpecialistAnalysis(
+                        finding=FindingPacket(
+                            subtask_id=task.subtask_id,
+                            status="succeeded",
+                            chunk_ids=tuple(item.chunk_id for item in fallback_evidence),
+                            stance="unclear",
+                            confidence=0.0,
+                        ),
+                        claims=(),
+                        evidence=fallback_evidence,
+                        usage=usage,
+                    )
                 previous = raw.content if hasattr(raw, "content") else raw
                 if not isinstance(previous, str):
                     previous = json.dumps(previous, ensure_ascii=False, default=str)
@@ -517,6 +546,7 @@ class EvidenceSpecialist:
                 "provider_input_tokens": provider_input_tokens,
                 "provider_output_tokens": provider_output_tokens,
                 "schema_repair_count": repair_count,
+                "schema_fallback_used": False,
             }
         )
         return SpecialistAnalysis(

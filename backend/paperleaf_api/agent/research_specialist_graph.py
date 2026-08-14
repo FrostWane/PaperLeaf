@@ -492,6 +492,9 @@ async def _emit_scout_finished(
             "schema_repair_count": int(
                 envelope.get("usage", {}).get("schema_repair_count", 0)
             ),
+            "schema_fallback_used": bool(
+                envelope.get("usage", {}).get("schema_fallback_used", False)
+            ),
             "duration_ms": int(envelope.get("duration_ms", 0)),
             "recovered": recovered,
         },
@@ -572,6 +575,7 @@ async def _merge_node(
                 "provider_input_tokens": usage.get("provider_input_tokens"),
                 "provider_output_tokens": usage.get("provider_output_tokens"),
                 "schema_repair_count": int(usage.get("schema_repair_count", 0)),
+                "schema_fallback_used": bool(usage.get("schema_fallback_used", False)),
                 "error_code": task_result.get("finding", {}).get("error_code"),
             }
         )

@@ -142,14 +142,16 @@ def test_graph_preserves_success_when_one_specialist_is_invalid() -> None:
             ),
         )
 
-        assert state["status"] == "partial"
-        assert {item["status"] for item in state["branch_results"].values()} == {
-            "succeeded",
-            "failed",
-        }
-        failed = [item for item in state["branch_results"].values() if item["status"] == "failed"]
-        assert failed[0]["finding"]["error_code"] == "SPECIALIST_UNKNOWN_EVIDENCE_ALIAS"
-        assert {item["paper_id"] for item in state["merged_evidence"]} == {"p1", "p3"}
+        assert state["status"] == "succeeded"
+        assert {item["status"] for item in state["branch_results"].values()} == {"succeeded"}
+        fallback = [
+            item
+            for item in state["branch_results"].values()
+            if item["usage"]["schema_fallback_used"]
+        ]
+        assert len(fallback) == 1
+        assert fallback[0]["claims"] == []
+        assert {item["paper_id"] for item in state["merged_evidence"]} == {"p1", "p2", "p3"}
 
     asyncio.run(scenario())
 

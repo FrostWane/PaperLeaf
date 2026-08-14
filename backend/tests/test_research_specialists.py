@@ -138,10 +138,16 @@ def test_specialist_rejects_unknown_alias_dimension_and_unscoped_evidence() -> N
             return next(responses)
 
         specialist = EvidenceSpecialist(model, timeout_seconds=1)
-        with pytest.raises(SpecialistOutputError, match="SPECIALIST_UNKNOWN_EVIDENCE_ALIAS"):
-            await specialist.analyze(_task(), [_evidence()])
-        with pytest.raises(SpecialistOutputError, match="SPECIALIST_UNKNOWN_DIMENSION"):
-            await specialist.analyze(_task(), [_evidence()])
+        alias_fallback = await specialist.analyze(_task(), [_evidence()])
+        dimension_fallback = await specialist.analyze(_task(), [_evidence()])
+        assert alias_fallback.claims == ()
+        assert dimension_fallback.claims == ()
+        assert alias_fallback.evidence[0].chunk_id == "private-chunk-id"
+        assert dimension_fallback.evidence[0].chunk_id == "private-chunk-id"
+        assert alias_fallback.usage.schema_repair_count == 1
+        assert dimension_fallback.usage.schema_repair_count == 1
+        assert alias_fallback.usage.schema_fallback_used is True
+        assert dimension_fallback.usage.schema_fallback_used is True
         with pytest.raises(SpecialistOutputError, match="SPECIALIST_NO_SCOPED_EVIDENCE"):
             await specialist.analyze(
                 _task(),
