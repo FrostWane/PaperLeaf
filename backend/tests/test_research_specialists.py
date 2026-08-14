@@ -100,6 +100,28 @@ def test_specialist_rejects_unknown_alias_dimension_and_unscoped_evidence() -> N
                 {
                     "claims": [
                         {
+                            "dimension": "核心方法",
+                            "claim": "主张",
+                            "evidence_aliases": ["E999"],
+                            "stance": "support",
+                            "confidence": 0.8,
+                        }
+                    ]
+                },
+                {
+                    "claims": [
+                        {
+                            "dimension": "研究问题",
+                            "claim": "主张",
+                            "evidence_aliases": ["E1"],
+                            "stance": "support",
+                            "confidence": 0.8,
+                        }
+                    ]
+                },
+                {
+                    "claims": [
+                        {
                             "dimension": "研究问题",
                             "claim": "主张",
                             "evidence_aliases": ["E1"],
@@ -250,5 +272,46 @@ def test_specialist_normalizes_provider_synonyms_and_repairs_schema_once() -> No
         assert analysis.usage.schema_repair_count == 1
         assert analysis.claims[0].chunk_ids == ("private-chunk-id",)
 
+    async def semantic_repair_scenario() -> None:
+        calls = 0
+
+        async def model(messages: tuple[dict[str, str], ...], *, max_output_tokens: int):
+            nonlocal calls
+            calls += 1
+            assert max_output_tokens > 0
+            if calls == 1:
+                return {
+                    "claims": [
+                        {
+                            "dimension": "核心方法",
+                            "claim": "论文采用稀疏校准。",
+                            "evidence_aliases": ["E999"],
+                            "stance": "support",
+                            "confidence": 0.8,
+                        }
+                    ]
+                }
+            assert "E 编号：E1" in messages[-1]["content"]
+            return {
+                "claims": [
+                    {
+                        "dimension": "核心方法",
+                        "claim": "论文采用稀疏校准。",
+                        "evidence_aliases": ["E1"],
+                        "stance": "support",
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+        analysis = await EvidenceSpecialist(model, timeout_seconds=1).analyze(
+            _task(), [_evidence()]
+        )
+
+        assert calls == 2
+        assert analysis.usage.schema_repair_count == 1
+        assert analysis.claims[0].chunk_ids == ("private-chunk-id",)
+
     asyncio.run(normalized_scenario())
     asyncio.run(repair_scenario())
+    asyncio.run(semantic_repair_scenario())

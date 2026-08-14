@@ -423,67 +423,76 @@ class EvidenceSpecialist:
         )
         await _ensure_lease(lease_guard)
         repair_count = 0
-        try:
-            parsed = _parse_model_output(raw)
-        except SpecialistOutputError:
-            previous = raw.content if hasattr(raw, "content") else raw
-            if not isinstance(previous, str):
-                previous = json.dumps(previous, ensure_ascii=False, default=str)
-            repair_messages = prompt.messages + (
-                {"role": "assistant", "content": previous[:4000]},
-                {
-                    "role": "user",
-                    "content": (
-                        "上一次输出未通过结构校验。请仅修正格式，不增加事实：返回一个 JSON "
-                        "对象，顶层只有 claims；每条包含 dimension、claim、evidence_aliases、"
-                        "stance、confidence。dimension 只能使用允许的中文维度，证据只能使用"
-                        "上文真实存在的 E 编号。"
-                    ),
-                },
-            )
-            repair_count = 1
-            raw = await asyncio.wait_for(
-                self.model(repair_messages, max_output_tokens=prompt.usage.output_reserve),
-                timeout=self.timeout_seconds,
-            )
-            await _ensure_lease(lease_guard)
-            parsed = _parse_model_output(raw)
-        provider_input_tokens, provider_output_tokens = _provider_usage(raw)
         allowed_dimensions = set(task.dimensions)
-        validated: list[ValidatedSpecialistClaim] = []
-        cited_aliases: list[str] = []
-        for claim in parsed.claims:
-            if claim.dimension not in allowed_dimensions:
-                raise SpecialistOutputError("SPECIALIST_UNKNOWN_DIMENSION")
-            unknown = set(claim.evidence_aliases) - set(prompt.evidence_by_alias)
-            if unknown:
-                raise SpecialistOutputError("SPECIALIST_UNKNOWN_EVIDENCE_ALIAS")
-            chunk_ids = tuple(
-                dict.fromkeys(
-                    prompt.evidence_by_alias[alias].chunk_id for alias in claim.evidence_aliases
+        while True:
+            try:
+                parsed = _parse_model_output(raw)
+                validated: list[ValidatedSpecialistClaim] = []
+                cited_aliases: list[str] = []
+                for claim in parsed.claims:
+                    if claim.dimension not in allowed_dimensions:
+                        raise SpecialistOutputError("SPECIALIST_UNKNOWN_DIMENSION")
+                    unknown = set(claim.evidence_aliases) - set(prompt.evidence_by_alias)
+                    if unknown:
+                        raise SpecialistOutputError("SPECIALIST_UNKNOWN_EVIDENCE_ALIAS")
+                    chunk_ids = tuple(
+                        dict.fromkeys(
+                            prompt.evidence_by_alias[alias].chunk_id
+                            for alias in claim.evidence_aliases
+                        )
+                    )
+                    paper_ids = tuple(
+                        dict.fromkeys(
+                            prompt.evidence_by_alias[alias].paper_id
+                            for alias in claim.evidence_aliases
+                        )
+                    )
+                    validated.append(
+                        ValidatedSpecialistClaim(
+                            dimension=claim.dimension,
+                            claim_key=_claim_key(
+                                claim.claim_key,
+                                dimension=claim.dimension,
+                                claim=claim.claim,
+                            ),
+                            claim=" ".join(claim.claim.split()),
+                            chunk_ids=chunk_ids,
+                            paper_ids=paper_ids,
+                            stance=claim.stance,
+                            confidence=claim.confidence,
+                        )
+                    )
+                    cited_aliases.extend(claim.evidence_aliases)
+                break
+            except SpecialistOutputError:
+                if repair_count:
+                    raise
+                previous = raw.content if hasattr(raw, "content") else raw
+                if not isinstance(previous, str):
+                    previous = json.dumps(previous, ensure_ascii=False, default=str)
+                repair_messages = prompt.messages + (
+                    {"role": "assistant", "content": previous[:4000]},
+                    {
+                        "role": "user",
+                        "content": (
+                            "上一次输出未通过结构或证据约束校验。请仅修正格式和非法字段，"
+                            "不得增加事实：返回一个 JSON 对象，顶层只有 claims；每条包含 "
+                            "dimension、claim、evidence_aliases、stance、confidence。dimension "
+                            f"只能是：{'、'.join(task.dimensions)}；证据只能使用上文真实存在的 "
+                            f"E 编号：{'、'.join(prompt.evidence_by_alias)}。"
+                        ),
+                    },
                 )
-            )
-            paper_ids = tuple(
-                dict.fromkeys(
-                    prompt.evidence_by_alias[alias].paper_id for alias in claim.evidence_aliases
-                )
-            )
-            validated.append(
-                ValidatedSpecialistClaim(
-                    dimension=claim.dimension,
-                    claim_key=_claim_key(
-                        claim.claim_key,
-                        dimension=claim.dimension,
-                        claim=claim.claim,
+                repair_count = 1
+                raw = await asyncio.wait_for(
+                    self.model(
+                        repair_messages,
+                        max_output_tokens=prompt.usage.output_reserve,
                     ),
-                    claim=" ".join(claim.claim.split()),
-                    chunk_ids=chunk_ids,
-                    paper_ids=paper_ids,
-                    stance=claim.stance,
-                    confidence=claim.confidence,
+                    timeout=self.timeout_seconds,
                 )
-            )
-            cited_aliases.extend(claim.evidence_aliases)
+                await _ensure_lease(lease_guard)
+        provider_input_tokens, provider_output_tokens = _provider_usage(raw)
         cited_aliases = list(dict.fromkeys(cited_aliases))
         cited_evidence = tuple(prompt.evidence_by_alias[alias] for alias in cited_aliases)
         stances = {item.stance for item in validated}
