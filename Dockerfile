@@ -4,7 +4,8 @@ WORKDIR /app
 RUN corepack enable && corepack install --global pnpm@9.7.0
 COPY package.json pnpm-lock.yaml ./
 COPY patches ./patches
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=paperleaf-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile
 
 FROM dependencies AS build
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
@@ -21,7 +22,8 @@ WORKDIR /app
 RUN corepack enable && corepack install --global pnpm@9.7.0
 COPY package.json pnpm-lock.yaml ./
 COPY patches ./patches
-RUN pnpm install --prod --frozen-lockfile
+RUN --mount=type=cache,id=paperleaf-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --prod --frozen-lockfile
 
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \

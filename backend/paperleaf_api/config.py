@@ -76,6 +76,12 @@ class Settings:
     context_max_memories: int = int(os.getenv("PAPERLEAF_CONTEXT_MAX_MEMORIES", "5"))
     context_max_skills: int = int(os.getenv("PAPERLEAF_CONTEXT_MAX_SKILLS", "1"))
     worker_metrics_port: int = int(os.getenv("PAPERLEAF_WORKER_METRICS_PORT", "9101"))
+    worker_heartbeat_interval_seconds: float = float(
+        os.getenv("PAPERLEAF_WORKER_HEARTBEAT_INTERVAL_SECONDS", "5")
+    )
+    worker_heartbeat_ttl_seconds: int = int(
+        os.getenv("PAPERLEAF_WORKER_HEARTBEAT_TTL_SECONDS", "20")
+    )
     session_secret: str = os.getenv("PAPERLEAF_SESSION_SECRET", "local-demo-only-change-me")
     session_cookie: str = "paperleaf_session"
     csrf_cookie: str = "paperleaf_csrf"
@@ -339,6 +345,12 @@ class Settings:
             raise RuntimeError("Redis Key 前缀不能为空")
         if not 1024 <= self.worker_metrics_port <= 65535:
             raise RuntimeError("Worker 指标端口必须位于 1024 到 65535 之间")
+        if not 1 <= self.worker_heartbeat_interval_seconds <= 30:
+            raise RuntimeError("Worker 心跳间隔必须位于 1 到 30 秒之间")
+        if self.worker_heartbeat_ttl_seconds < self.worker_heartbeat_interval_seconds * 2:
+            raise RuntimeError("Worker 心跳 TTL 必须至少为心跳间隔的两倍")
+        if self.worker_heartbeat_ttl_seconds > 120:
+            raise RuntimeError("Worker 心跳 TTL 不能超过 120 秒")
         if self.model_context_tokens < 4096:
             raise RuntimeError("模型上下文窗口必须至少为 4096 Token")
         if (
@@ -386,10 +398,13 @@ class Settings:
             self.session_secret in weak
             or self.bootstrap_admin_password in weak
             or placeholders
-            or len(self.session_secret) < 32
+            or len(self.session_secret) < 64
             or len(self.bootstrap_admin_password) < 12
+            or len(self.minio_secret_key) < 16
         ):
             raise RuntimeError("生产模式必须设置强会话密钥和管理员密码")
+        if not self.secure_cookies:
+            raise RuntimeError("生产模式必须启用 Secure Cookie；本地 HTTP 请使用非 production 模式")
 
 
 settings = Settings()

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "evidence_level": "isolated_compose_deterministic_openai_stub",
+  "not_a_model_quality_evaluation": true,
+  "git_sha": "16e1ac60032aa6b1118455defd586ab3ab09c2cd",
+  "started_at": "2026-08-15T09:47:18.159242+00:00",
+  "finished_at": "2026-08-15T09:49:14.640625+00:00",
+  "compose_project_hash": "6724fd053010",
+  "isolated_volumes": true,
+  "random_secrets": true,
+  "specialist_v3_enabled": false,
+  "api": {
+    "paper_id_hash": "ed11a1e94993",
+    "run_id_hash": "360884401d40",
+    "run_status": "completed",
+    "answer_nonempty": true,
+    "citation_count": 1,
+    "range_ok": true
+  },
+  "sse": {
+    "initial_sequences": [
+      1,
+      2
+    ],
+    "resumed_sequences": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "last_event_id_no_duplicates": true
+  },
+  "database": {
+    "ownership_ok": true,
+    "paper_exists": true,
+    "page_count": 1,
+    "chunk_count": 1,
+    "citation_count": 1,
+    "valid_citation_count": 1,
+    "citation_pages": [
+      1
+    ],
+    "run_status": "completed"
+  },
+  "frontend": {
+    "physical_page_jump": "passed",
+    "browser": "chromium"
+  },
+  "worker_readiness": {
+    "after_stop": {
+      "status": "degraded",
+      "code": "worker_heartbeat_stale_or_missing",
+      "heartbeat_age_seconds": null
+    },
+    "after_restart": {
+      "status": "ready",
+      "code": "queue_poll_recent",
+      "heartbeat_age_seconds": 1.06
+    }
+  },
+  "images": [],
+  "cleanup": "completed"
+}

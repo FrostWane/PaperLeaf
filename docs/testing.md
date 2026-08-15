@@ -1,5 +1,32 @@
 # PaperLeaf 测试指南
 
+## 证据等级
+
+| 等级 | 能证明什么 | 不能证明什么 |
+|---|---|---|
+| 单元/Mock | 分支、权限、幂等和错误语义 | 真实基础设施或模型质量 |
+| Demo E2E | 固定前端交互与视口回归 | 真实 API、数据库或 Worker |
+| 隔离 Compose | 空库迁移、PostgreSQL、MinIO、Redis、Worker、SSE、Range 与浏览器闭环 | 真实模型回答质量 |
+| 真实模型 | 指定 Provider/模型下的实际 Run | 泛化质量或人工偏好 |
+| 人工盲评 | 冻结样本上的事实性、完整性、引用有用性和偏好 | 未覆盖任务与未来模型 |
+
+确定性 OpenAI-compatible stub 只用于 CI full-stack smoke，报告必须带
+`not_a_model_quality_evaluation=true`。人工评分未填写时保持 `human_review_pending`；模型
+grader 不得命名为人工准确率。
+
+## v0.9.0 发布门禁
+
+```bash
+python scripts/verify_env_contract.py
+python scripts/run_isolated_full_stack_smoke.py
+python scripts/run_backup_restore_drill.py
+```
+
+隔离 smoke 从空卷执行迁移、登录、上传合成 PDF、Worker 解析、Agent Run、SSE 断线补发、
+引用归属、PDF Range 与 Chromium 页码跳转；`failed/cancelled/interrupted` 均不能通过。
+脚本还会停止 Worker，验证 `/ready` 降级，再恢复 Worker 并等待自动转绿。环境使用随机强
+密钥、独立 Compose project 和独立 volumes，结束后必须 `down -v`。
+
 ## 质量目标
 
 测试按“确定性业务、检索质量、Agent 控制、用户界面、部署安全”分层。任何准确率或性能改进必须由相同数据、相同协议和可定位的提交支持。

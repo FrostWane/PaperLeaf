@@ -307,6 +307,46 @@ describe("ChatWorkspace", () => {
     expect(status).not.toHaveTextContent("specialist_subgraph_v3");
   });
 
+  it("重新打开已完成的跨文献会话时补放并行轨迹", async () => {
+    const session: ChatSession = {
+      ...activeSession(),
+      currentRunStatus: "completed",
+    };
+    const completedRun: AgentRunSnapshot = {
+      ...activeRun("比较结论。"),
+      status: "completed",
+      orchestrationVersion: "compare_map_reduce_v2",
+    };
+    const subscribe = vi.fn(async (_runId, handlers) => {
+      handlers.onActivity?.({
+        key: "comparison:merge",
+        node: "merge_comparison",
+        label: "合并并去重证据",
+        step: 14,
+        status: "completed",
+        kind: "comparison_merge",
+      });
+      handlers.onRunUpdate?.(completedRun);
+    });
+    const source = {
+      ...demoDataSource,
+      listChatSessions: vi.fn()
+        .mockResolvedValueOnce([session])
+        .mockResolvedValue([{ ...session, updatedAt: "2026-08-15T10:00:00.000Z" }]),
+      listChatMessages: vi.fn().mockResolvedValue([]),
+      getAgentRun: vi.fn().mockResolvedValue(completedRun),
+      subscribeAgentRun: subscribe,
+    };
+
+    render(<ChatWorkspace binding={{ type: "library" }} scopeLabel="全部文献" dataSource={source} />);
+
+    const status = await screen.findByRole("region", { name: "并行跨文献比较状态" });
+    expect(within(status).getByText("证据合并完成")).toBeInTheDocument();
+    await waitFor(() => expect(source.listChatSessions).toHaveBeenCalledTimes(2));
+    expect(within(status).getByText("证据合并完成")).toBeInTheDocument();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+  });
+
   it("普通单篇问答不展示并行比较状态", async () => {
     const session = activeSession();
     let streamHandlers: Parameters<typeof demoDataSource.subscribeAgentRun>[1] | undefined;

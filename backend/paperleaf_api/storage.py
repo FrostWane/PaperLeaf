@@ -15,6 +15,7 @@ class ObjectStorage(Protocol):
     async def read(self, key: str, start: int = 0, end: int | None = None) -> bytes: ...
     async def size(self, key: str) -> int: ...
     async def delete(self, key: str) -> None: ...
+    async def check_ready(self) -> dict[str, str]: ...
 
 
 class LocalObjectStorage:
@@ -46,6 +47,13 @@ class LocalObjectStorage:
 
     async def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
+
+    async def check_ready(self) -> dict[str, str]:
+        return {
+            "status": "ready" if self.root.is_dir() else "degraded",
+            "backend": "local",
+            "bucket": "not_applicable",
+        }
 
 
 class MinioObjectStorage:
@@ -102,6 +110,17 @@ class MinioObjectStorage:
 
     async def delete(self, key: str) -> None:
         await asyncio.to_thread(self.client.remove_object, self.bucket, key)
+
+    async def check_ready(self) -> dict[str, str]:
+        try:
+            exists = await asyncio.to_thread(self.client.bucket_exists, self.bucket)
+        except Exception:
+            return {"status": "degraded", "backend": "minio", "bucket": "unreachable"}
+        return {
+            "status": "ready" if exists else "degraded",
+            "backend": "minio",
+            "bucket": "available" if exists else "missing",
+        }
 
 
 def create_storage(config: object) -> ObjectStorage:

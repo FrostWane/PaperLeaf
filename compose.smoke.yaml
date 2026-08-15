@@ -1,0 +1,62 @@
+services:
+  model-stub:
+    build:
+      context: ./backend
+      args:
+        PAPERLEAF_GIT_SHA: ${PAPERLEAF_GIT_SHA:-unknown}
+    command:
+      ["uvicorn", "paperleaf_api.openai_compatible_stub:app", "--host", "0.0.0.0", "--port", "8010"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=2)",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    networks:
+      - paperleaf
+
+  api:
+    environment:
+      PAPERLEAF_MODE: smoke
+      PAPERLEAF_OPENAI_API_KEY: smoke-key-not-a-secret
+      PAPERLEAF_OPENAI_BASE_URL: http://model-stub:8010/v1
+      PAPERLEAF_CHAT_MODEL: paperleaf-smoke
+      PAPERLEAF_EMBEDDING_ENABLED: "false"
+      PAPERLEAF_FALLBACK_EMBEDDING_ENABLED: "false"
+      PAPERLEAF_RAG_WEAK_QUERY_REWRITE_ENABLED: "false"
+      PAPERLEAF_CONTEXT_ENGINE_ENABLED: "false"
+      PAPERLEAF_MEMORY_ENABLED: "false"
+      PAPERLEAF_SKILLS_ENABLED: "false"
+      PAPERLEAF_FUNCTION_TOOLS_ENABLED: "false"
+      PAPERLEAF_MCP_ENABLED: "false"
+      PAPERLEAF_MULTI_AGENT_ENABLED: "false"
+      PAPERLEAF_SPECIALIST_AGENTS_ENABLED: "false"
+    depends_on:
+      model-stub:
+        condition: service_healthy
+
+  worker:
+    environment:
+      PAPERLEAF_MODE: smoke
+      PAPERLEAF_OPENAI_API_KEY: smoke-key-not-a-secret
+      PAPERLEAF_OPENAI_BASE_URL: http://model-stub:8010/v1
+      PAPERLEAF_CHAT_MODEL: paperleaf-smoke
+      PAPERLEAF_EMBEDDING_ENABLED: "false"
+      PAPERLEAF_FALLBACK_EMBEDDING_ENABLED: "false"
+      PAPERLEAF_RAG_WEAK_QUERY_REWRITE_ENABLED: "false"
+      PAPERLEAF_CONTEXT_ENGINE_ENABLED: "false"
+      PAPERLEAF_MEMORY_ENABLED: "false"
+      PAPERLEAF_SKILLS_ENABLED: "false"
+      PAPERLEAF_FUNCTION_TOOLS_ENABLED: "false"
+      PAPERLEAF_MCP_ENABLED: "false"
+      PAPERLEAF_MULTI_AGENT_ENABLED: "false"
+      PAPERLEAF_SPECIALIST_AGENTS_ENABLED: "false"
+    depends_on:
+      model-stub:
+        condition: service_healthy

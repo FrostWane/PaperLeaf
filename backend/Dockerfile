@@ -9,9 +9,9 @@ RUN groupadd --system --gid 1001 paperleaf \
     && useradd --system --uid 1001 --gid paperleaf paperleaf
 
 # 先安装稳定依赖层；普通源码改动不会重新下载 Python 依赖。
-COPY pyproject.toml README.md ./
+COPY pyproject.toml requirements.lock README.md ./
 COPY paperleaf_api/__init__.py ./paperleaf_api/__init__.py
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --constraint requirements.lock .
 
 # Git SHA 只影响运行时代码层，不能击穿稳定的 Python 依赖缓存。
 ARG PAPERLEAF_GIT_SHA=unknown

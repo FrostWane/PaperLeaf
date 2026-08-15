@@ -2,8 +2,8 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { createColumnHelper, flexRender, getCoreRowModel, getSortedRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
-import { Archive, ArchiveRestore, ArrowUpDown, Check, ChevronRight, FileText, FolderCog, FolderPlus, RotateCcw, Search, SlidersHorizontal, X } from "lucide-react";
+import { createColumnHelper, flexRender, getCoreRowModel, getPaginationRowModel, getSortedRowModel, type PaginationState, type SortingState, useReactTable } from "@tanstack/react-table";
+import { Archive, ArchiveRestore, ArrowUpDown, Check, ChevronLeft, ChevronRight, FileText, FolderCog, FolderPlus, RotateCcw, Search, SlidersHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { demoDataSource, getDataSource } from "@/lib/data-source";
 import { collectionForest, findCollection, flattenCollections, formatIsoDate, recursivePaperIds } from "@/lib/collections";
@@ -17,6 +17,7 @@ type LibraryScope = "all" | "recent" | "unorganized" | "archived";
 type StatusFilter = "all" | "ready" | "processing" | "attention";
 const helper = createColumnHelper<Paper>();
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 15_000, retry: 1 } } });
+const LIBRARY_PAGE_SIZE = 20;
 
 function PaperState({ paper }: { paper: Paper }) {
   if (paper.archivedAt) return <span className="status-pill neutral"><Archive size={11} />已归档</span>;
@@ -38,6 +39,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
   const dataMode = demo ? "demo" : "real";
   const [query, setQuery] = useState("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "year", desc: true }]);
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: LIBRARY_PAGE_SIZE });
   const [scope, setScope] = useState<LibraryScope>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [yearFilter, setYearFilter] = useState("all");
@@ -124,6 +126,17 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
   const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id)) && !allVisibleSelected;
   const years = Array.from(new Set(papers.map((paper) => paper.year))).sort((a, b) => b - a);
 
+  useEffect(() => {
+    setPagination((current) => current.pageIndex === 0 ? current : { ...current, pageIndex: 0 });
+  }, [collectionFilter, query, scope, sorting, statusFilter, yearFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredPapers.length / LIBRARY_PAGE_SIZE));
+  useEffect(() => {
+    setPagination((current) => current.pageIndex < pageCount
+      ? current
+      : { ...current, pageIndex: pageCount - 1 });
+  }, [pageCount]);
+
   const toggleSelected = useCallback((id: string, checked: boolean) => {
     setSelectedIds((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; });
   }, []);
@@ -195,7 +208,16 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
     helper.accessor("status", { header: "状态", enableSorting: false, cell: ({ row }) => <PaperState paper={row.original} /> }),
     helper.display({ id: "open", header: "", cell: ({ row }) => <div className="row-actions"><button className="row-open" aria-label={`管理 ${row.original.title} 的集合`} title="管理集合" onClick={() => setOrganizingPaper(row.original)}><FolderCog size={15} /></button><a className="row-open" aria-label={`打开 ${row.original.title}`} href={`/library/${row.original.id}${demo ? "?demo=1" : ""}`}><ChevronRight size={17} /></a></div> }),
   ], [allVisibleSelected, collectionNamesByPaper, demo, selectedIds, someVisibleSelected, toggleAll, toggleSelected]);
-  const table = useReactTable({ data: filteredPapers, columns, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() });
+  const table = useReactTable({
+    data: filteredPapers,
+    columns,
+    state: { sorting, pagination },
+    onSortingChange: setSorting,
+    onPaginationChange: setPagination,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+  });
   const loading = papersQuery.isPending || collectionsQuery.isPending || (usesServerCollectionScope && scopedPapersQuery.isPending);
   const error = papersQuery.isError || collectionsQuery.isError || (usesServerCollectionScope && scopedPapersQuery.isError);
 
@@ -226,7 +248,7 @@ function LibraryTableContent({ demo }: { demo: boolean }) {
           {loading && <div className="table-message" role="status">正在整理文献…</div>}
           {error && <div className="table-message error" role="alert">文献与组织信息暂时无法读取，请稍后重试。</div>}
           {!loading && !error && table.getRowModel().rows.length === 0 && <div className="table-message"><strong>{papers.length ? "没有匹配的论文" : "文献库还是空的"}</strong><span>{papers.length ? "调整范围、组织或筛选条件后再试。" : "上传第一篇 PDF，解析完成后就可以按原文提问。"}</span></div>}
-          {!loading && !error && table.getRowModel().rows.length > 0 && <div className="table-scroll"><table className="data-table library-data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{header.column.getCanSort() ? <button className="sortable" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}<ArrowUpDown size={12} /></button> : flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr className={selectedIds.has(row.original.id) ? "selected" : ""} key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>}
+          {!loading && !error && table.getRowModel().rows.length > 0 && <><div className="table-scroll"><table className="data-table library-data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{header.column.getCanSort() ? <button className="sortable" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}<ArrowUpDown size={12} /></button> : flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr className={selectedIds.has(row.original.id) ? "selected" : ""} key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>{filteredPapers.length > LIBRARY_PAGE_SIZE && <nav className="library-pagination" aria-label="文献库分页"><button type="button" className="secondary-button" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}><ChevronLeft size={16} />上一页</button><span aria-live="polite">第 {pagination.pageIndex + 1} / {table.getPageCount()} 页 · 共 {filteredPapers.length} 篇</span><button type="button" className="secondary-button" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>下一页<ChevronRight size={16} /></button></nav>}</>}
         </div>
       </section>
       <LibraryOrganizerDialog open={organizerOpen} onOpenChange={setOrganizerOpen} collections={collections} onCreateCollection={(input: CollectionInput) => mutateOrganizer(() => dataSource.createCollection(input))} onUpdateCollection={(id: string, input: CollectionInput) => mutateOrganizer(() => dataSource.updateCollection(id, input))} onDeleteCollection={(id: string) => mutateOrganizer(() => dataSource.deleteCollection(id))} />

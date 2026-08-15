@@ -110,6 +110,7 @@ describe("AdminView 管理信息语义", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /RAG 质量/ }));
     expect(screen.getByRole("heading", { name: "RAG 运行质量" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "7 天" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("关键词检索")).toBeInTheDocument();
     expect(screen.getByText("回答引用未通过")).toBeInTheDocument();
     expect(screen.getByText("structure_aware_v2 · 12")).toBeInTheDocument();

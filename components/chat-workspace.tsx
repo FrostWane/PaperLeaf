@@ -135,6 +135,14 @@ function shouldSubscribeRun(run: AgentRunSnapshot | null | undefined): boolean {
   return Boolean(run && subscribedStatuses.has(run.status));
 }
 
+function shouldReplayComparisonEvents(run: AgentRunSnapshot | null | undefined): boolean {
+  return Boolean(
+    run
+      && ["completed", "failed", "cancelled"].includes(run.status)
+      && ["compare_map_reduce_v2", "specialist_subgraph_v3"].includes(run.orchestrationVersion ?? ""),
+  );
+}
+
 function isActiveSession(session: ChatSession | null | undefined): boolean {
   return Boolean(session?.currentRunStatus && activeStatuses.has(session.currentRunStatus));
 }
@@ -284,6 +292,7 @@ export function ChatWorkspace({
   const creatingSessionRef = useRef(false);
   const submissionAttemptRef = useRef<{ sessionId: string; content: string; key: string } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const selectedSessionRef = useRef<ChatSession | null>(null);
   const narrowViewport = useSyncExternalStore(subscribeChatNarrow, getChatNarrow, () => false);
   const historyOpen = historyOverride ?? (!compact && !narrowViewport);
 
@@ -316,6 +325,7 @@ export function ChatWorkspace({
     return candidate && matchesBinding(candidate, stableBinding) ? candidate : null;
   }, [selectedId, sessions, stableBinding]);
   const currentRun = selected && run?.sessionId === selected.id ? run : null;
+  const replayComparisonEvents = shouldReplayComparisonEvents(currentRun);
   const active = submitting || (currentRun ? isActiveRun(currentRun) : isActiveSession(selected));
   const progressiveAnswer = useProgressiveAnswer(liveAnswer, currentRun?.runId ?? selected?.id ?? "empty");
   const visibleMessages = useMemo(() => messages.filter((message) => message.sessionId === selected?.id && (message.content.trim() || (message.role === "assistant" && ["failed", "cancelled"].includes(message.status))) && !(Boolean(currentRun && liveAnswer) && message.role === "assistant" && message.runId === currentRun?.runId)), [currentRun, liveAnswer, messages, selected?.id]);
@@ -328,7 +338,8 @@ export function ChatWorkspace({
 
   useEffect(() => {
     selectedIdRef.current = selected?.id ?? null;
-  }, [selected?.id]);
+    selectedSessionRef.current = selected;
+  }, [selected]);
 
   const refreshSessions = useCallback(async (preferredId?: string) => {
     const next = await dataSource.listChatSessions();
@@ -374,10 +385,11 @@ export function ChatWorkspace({
       return;
     }
     window.localStorage.setItem(`paperleaf:chat:${workspaceKey}`, selectedId);
+    const selectedSession = selectedSessionRef.current;
     let stopped = false;
     void Promise.all([
       dataSource.listChatMessages(selectedId),
-      selected?.currentRunId ? dataSource.getAgentRun(selected.currentRunId).catch(() => fallbackRun(selected, "运行状态暂时无法恢复，可重新连接或取消运行")) : Promise.resolve(null),
+      selectedSession?.currentRunId ? dataSource.getAgentRun(selectedSession.currentRunId).catch(() => fallbackRun(selectedSession, "运行状态暂时无法恢复，可重新连接或取消运行")) : Promise.resolve(null),
     ]).then(([nextMessages, nextRun]) => {
       if (!stopped) {
         setMessages(nextMessages);
@@ -393,12 +405,12 @@ export function ChatWorkspace({
       if (!stopped) setLoading(false);
     });
     return () => { stopped = true; };
-  }, [dataSource, selected, selectedId, workspaceKey]);
+  }, [dataSource, selectedId, workspaceKey]);
 
   useEffect(() => {
     const runId = currentRun?.runId;
     const runStatus = currentRun?.status;
-    if (!runId || !runStatus || !subscribedStatuses.has(runStatus)) return;
+    if (!runId || !runStatus || (!subscribedStatuses.has(runStatus) && !replayComparisonEvents)) return;
     const controller = new AbortController();
     terminalReloadRef.current = null;
     void dataSource.subscribeAgentRun(runId, {
@@ -425,7 +437,7 @@ export function ChatWorkspace({
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "回答事件连接失败");
     });
     return () => controller.abort();
-  }, [currentRun?.runId, currentRun?.status, dataSource]);
+  }, [currentRun?.runId, currentRun?.status, dataSource, replayComparisonEvents]);
 
   useEffect(() => {
     if (!currentRun || activeStatuses.has(currentRun.status) || !liveAnswer || progressiveAnswer !== liveAnswer) return;

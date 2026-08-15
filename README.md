@@ -1,5 +1,9 @@
 # PaperLeaf
 
+[![CI](https://github.com/FrostWane/PaperLeaf/actions/workflows/ci.yml/badge.svg)](https://github.com/FrostWane/PaperLeaf/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/FrostWane/PaperLeaf?display_name=tag&include_prereleases)](https://github.com/FrostWane/PaperLeaf/releases)
+[![License](https://img.shields.io/github/license/FrostWane/PaperLeaf)](LICENSE)
+
 PaperLeaf 是一个可自托管的科研文献管理与阅读系统。它将 PDF 存储、层级文献库、页级检索、带原文引用的 AI 问答、全文翻译、论文概括和跨文献研究整合在同一个工作台中。
 
 ```text
@@ -7,7 +11,9 @@ PaperLeaf 是一个可自托管的科研文献管理与阅读系统。它将 PDF
 → 单篇/跨文献问答 → 引用跳页 → 总结、翻译与研究结构图
 ```
 
-![PaperLeaf 论文阅读与问答工作台](docs/images/paperleaf-workspace.png)
+| 文献库 | 带页码回答 | 跨论文协作轨迹 |
+|---|---|---|
+| ![PaperLeaf 文献库](docs/images/paperleaf-library.png) | ![PaperLeaf 带页码回答](docs/images/paperleaf-cited-answer.png) | ![PaperLeaf 跨论文协作轨迹](docs/images/paperleaf-agent-trace.png) |
 
 ## 核心能力
 
@@ -17,6 +23,7 @@ PaperLeaf 是一个可自托管的科研文献管理与阅读系统。它将 PDF
 - 使用父子集合组织文献，一篇论文可以归入多个集合。
 - 自动识别标题、作者、年份、DOI 和出版物，缺失出版物时可通过 Crossref 补全公开元数据。
 - 支持批量归类、批量归档以及重新识别和索引。
+- 文献列表每页展示 20 篇，筛选与集合切换后自动回到有效页码。
 - 使用 MinIO 保存 PDF 原件，PostgreSQL 保存元数据、页文本、任务和会话。
 
 ### 阅读工作台
@@ -43,7 +50,7 @@ PaperLeaf 是一个可自托管的科研文献管理与阅读系统。它将 PDF
 - Context Engine 管理当前论文、页码、选文、最近对话、摘要和 Token 预算。
 - Skill Registry 按需加载论文问答、原文定位、跨文献比较、主张核验、论文发现、总结和研究图等能力。
 - Function Calling 只能调用经过类型、权限、范围、超时和步骤预算校验的工具。
-- 可选的 Specialist 子图会把 3～10 篇论文的复杂比较拆成最多三个隔离分支，再确定性合并证据。
+- 实验性的 Specialist v3 默认关闭；显式启用后，它会把 3～10 篇论文的复杂比较拆成最多三个隔离分支，再确定性合并证据。
 - 跨论文冲突不会被覆盖；系统保留 `support / contradict / uncertain` 证据并按论文和实验条件组织回答。
 - PostgreSQL Checkpoint 与 Job 租约支持 Worker 故障接管；已经完成的 Specialist 分支不会重复执行。
 
@@ -130,6 +137,7 @@ GRAFANA_ADMIN_PASSWORD=Grafana管理员密码
 本地 HTTP 使用：
 
 ```dotenv
+PAPERLEAF_MODE=development
 PAPERLEAF_BIND_ADDRESS=127.0.0.1
 PAPERLEAF_SECURE_COOKIES=false
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
@@ -156,7 +164,8 @@ docker compose ps
 | 服务 | 地址 |
 |---|---|
 | PaperLeaf | <http://localhost:3000> |
-| API 健康检查 | <http://localhost:8000/health> |
+| API 存活检查 | <http://localhost:8000/health> |
+| 依赖与 Worker 就绪检查 | <http://localhost:8000/ready> |
 | MinIO 控制台 | <http://localhost:9001> |
 | Prometheus | <http://localhost:9090> |
 | Grafana | <http://localhost:3001> |
@@ -443,6 +452,7 @@ pytest
 - [架构说明](docs/architecture.md)
 - [部署指南](docs/deployment.md)
 - [测试指南](docs/testing.md)
+- [已知边界](docs/known-limitations.md)
 - [容量与扩展](docs/scaling.md)
 - [RAG 可观测性](docs/observability.md)
 - [RAG 离线评测](backend/evaluation/README.md)

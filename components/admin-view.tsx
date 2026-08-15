@@ -245,9 +245,9 @@ export function AdminView() {
   const [harnessMetricsError, setHarnessMetricsError] = useState("");
   const [mcpServersError, setMcpServersError] = useState("");
   const [harnessLoading, setHarnessLoading] = useState(false);
-  const [ragWindow, setRagWindow] = useState<"24h" | "7d" | "30d">("24h");
+  const [ragWindow, setRagWindow] = useState<"24h" | "7d" | "30d">("7d");
   const [discoveryWindow, setDiscoveryWindow] = useState<"24h" | "7d" | "30d">("30d");
-  const [harnessWindow, setHarnessWindow] = useState<"24h" | "7d" | "30d">("24h");
+  const [harnessWindow, setHarnessWindow] = useState<"24h" | "7d" | "30d">("7d");
   const [observabilityLoading, setObservabilityLoading] = useState(real);
   const [discoveryLoading, setDiscoveryLoading] = useState(real);
   const [observabilityError, setObservabilityError] = useState("");
@@ -435,7 +435,7 @@ export function AdminView() {
       <div className="metric-row"><article><span>活跃用户</span><strong>{usersLoaded ? activeUsers : "—"}</strong><small>{usersLoaded ? `共 ${users.length} 个账号` : "正在读取"}</small></article><article><span>处理中任务</span><strong>{jobsLoaded ? runningJobs : "—"}</strong><small>等待中与运行中</small></article><article><span>失败任务</span><strong>{jobsLoaded ? failedJobs : "—"}</strong><small>{failedJobs > 0 ? "需要检查或重试" : "当前无需处理"}</small></article><article><span>AI 服务</span><strong>{modelHealthLoaded ? modelState : "读取中"}</strong><small>回答、核验、总结与检索</small></article></div>
       <section className="admin-section admin-priority"><div className="section-bar"><div><span className="eyebrow">优先级</span><h2>现在需要关注什么</h2></div></div>
         <div className="admin-priority-row" data-state={failedJobs > 0 ? "warning" : "ready"}><span><strong>{failedJobs > 0 ? `${failedJobs} 个后台任务失败` : "后台任务运行正常"}</strong><small>{failedJobs > 0 ? "查看失败原因，确认后可从任务页重试。" : `${runningJobs} 个任务正在等待或执行。`}</small></span><button type="button" className="secondary-button" onClick={() => setActiveTab("jobs")}>查看任务</button></div>
-        <div className="admin-priority-row" data-state={observability.totals.ragIssueRuns > 0 ? "warning" : "ready"}><span><strong>{telemetrySamples === 0 ? "RAG 质量尚无样本" : observability.totals.ragIssueRuns > 0 ? `${observability.totals.ragIssueRuns} 次问答出现异常或受限` : "RAG 链路没有异常记录"}</strong><small>{telemetrySamples === 0 ? "完成真实问答后开始统计召回、意图、耗时和失败原因。" : `当前统计窗口为 ${ragWindow === "24h" ? "24 小时" : ragWindow === "7d" ? "7 天" : "30 天"}。`}</small></span><button type="button" className="secondary-button" onClick={() => setActiveTab("rag")}>查看质量</button></div>
+        <div className="admin-priority-row" data-state={observability.totals.ragIssueRuns > 0 ? "warning" : "ready"}><span><strong>{telemetrySamples === 0 ? "当前时间范围内暂无 RAG 样本" : observability.totals.ragIssueRuns > 0 ? `${observability.totals.ragIssueRuns} 次问答出现异常或受限` : "RAG 链路没有异常记录"}</strong><small>{telemetrySamples === 0 ? "完成一次问答，或切换到更长的统计时间范围。" : `当前统计窗口为 ${ragWindow === "24h" ? "24 小时" : ragWindow === "7d" ? "7 天" : "30 天"}。`}</small></span><button type="button" className="secondary-button" onClick={() => setActiveTab("rag")}>查看质量</button></div>
         <div className="admin-priority-row" data-state={modelState === "正常" ? "ready" : "warning"}><span><strong>{modelState === "正常" ? "AI 能力可用" : `AI 服务${modelState}`}</strong><small>{modelState === "正常" ? "回答、核验和检索服务运行正常。" : "部分能力可能回退到关键词检索或等待服务恢复。"}</small></span><button type="button" className="secondary-button" onClick={() => { setCapabilitiesOpen(true); globalThis.setTimeout(() => document.getElementById("ai-capability-status")?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 0); }}>查看能力</button></div>
       </section>
       <details id="ai-capability-status" className="admin-section model-runtime" open={capabilitiesOpen} onToggle={(event) => setCapabilitiesOpen(event.currentTarget.open)}><summary className="section-bar"><div><span className="eyebrow">AI 服务可用性</span><h2>AI 能力状态</h2></div><span className="capability-summary-state">{modelState} · {capabilitiesOpen ? "收起详情" : "展开详情"}</span></summary>

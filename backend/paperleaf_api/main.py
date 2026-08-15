@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from prometheus_client import make_asgi_app
 
+from . import __version__
 from .agent.answerability import build_configured_answerability_grader
 from .agent.function_tools import FunctionToolHarness
 from .agent.graph import (
@@ -75,6 +76,7 @@ from .rag.citations import Evidence
 from .rag.retrieval_config import freeze_retrieval_config
 from .rag.retrieval_quality import EvidenceQualityPolicy
 from .rag_observability import aggregate_rag_runs, classify_intent
+from .readiness import readiness_report
 from .repository import (
     ChatActiveRunError,
     ChatIdempotencyConflictError,
@@ -528,7 +530,7 @@ def create_app(
 
     app = FastAPI(
         title="PaperLeaf API",
-        version="0.8.0",
+        version=__version__,
         description="个人科研文献库、页级 RAG 与受控研究 Agent",
         lifespan=lifespan,
     )
@@ -590,15 +592,12 @@ def create_app(
         return {"status": "ok", "mode": config.mode}
 
     @app.get("/ready")
-    async def ready() -> dict[str, Any]:
-        runtime_available = await services.runtime_store.ping()
-        return {
-            "status": "ready",
-            "runtime_store": {
-                "backend": services.runtime_store.backend,
-                "status": "available" if runtime_available else "degraded",
-            },
-        }
+    async def ready(response: Response) -> dict[str, Any]:
+        status_code, payload = await readiness_report(
+            config, services.storage, services.runtime_store
+        )
+        response.status_code = status_code
+        return payload
 
     @app.post("/api/v1/auth/login", response_model=UserRead)
     async def login(payload: LoginRequest, response: Response) -> UserRead:

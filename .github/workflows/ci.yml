@@ -71,9 +71,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/requirements.lock
       - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
+      - run: pip install --constraint requirements.lock -e ".[dev]"
+      - name: 校验环境变量和版本契约
+        working-directory: .
+        run: |
+          python scripts/verify_env_contract.py
+          python -m pytest backend/tests/test_env_contract.py backend/tests/test_version_contract.py -q
       - run: python -m compileall paperleaf_api tests alembic/versions ../academic_mcp ../scripts/smoke_compose.py
       - run: ruff check paperleaf_api tests alembic/versions ../academic_mcp ../scripts/smoke_compose.py
       - name: 校验自建冻结 RAG 数据集
@@ -112,6 +119,28 @@ jobs:
           alembic upgrade head
           alembic check
 
+  full-stack-smoke:
+    name: 隔离全栈 smoke
+    needs: [frontend, backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable && corepack install --global pnpm@9.7.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: 从空卷验证 API、Worker、SSE、引用、Range 与页码跳转
+        run: python scripts/run_isolated_full_stack_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-stack-smoke
+          path: docs/release-evidence/v0.9.0/full-stack-smoke.json
+          if-no-files-found: error
+
   containers:
     name: 容器配置
     runs-on: ubuntu-latest
@@ -130,3 +159,37 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  supply-chain:
+    name: SBOM 与漏洞扫描
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: paperleaf-v0.9.0.spdx.json
+      - uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: supply-chain-evidence
+          path: |
+            paperleaf-v0.9.0.spdx.json
+            trivy-results.sarif

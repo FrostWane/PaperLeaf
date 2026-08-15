@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "evidence_level": "isolated_compose_deterministic_stub",
+  "git_sha": "16e1ac60032aa6b1118455defd586ab3ab09c2cd",
+  "started_at": "2026-08-15T12:32:59.411381+00:00",
+  "finished_at": "2026-08-15T12:34:29.787913+00:00",
+  "source_project_hash": "9b71dc64ee6d",
+  "restore_project_hash": "accb39cf29fe",
+  "backup": {
+    "strategy": "quiesced_postgresql_custom_dump_plus_minio_volume_snapshot",
+    "duration_seconds": 12.745,
+    "manifest_sha256": "05e5bfd8fa51409648eef80208f41013a988454c15f056c1f0feb656edaf4a61",
+    "file_count": 10
+  },
+  "rpo": {
+    "seconds": 0,
+    "scope": "计划停写窗口内已确认写入",
+    "requires_quiesce": true
+  },
+  "rto": {
+    "seconds": 23.129,
+    "endpoint": "/ready",
+    "agent_ready": true,
+    "restore_data_seconds": 10.228
+  },
+  "verification": {
+    "database": {
+      "ownership_ok": true,
+      "paper_exists": true,
+      "page_count": 1,
+      "chunk_count": 1,
+      "citation_count": 1,
+      "valid_citation_count": 1,
+      "citation_pages": [
+        1
+      ],
+      "run_status": "completed"
+    },
+    "minio_pdf_range": true,
+    "run_status": "completed",
+    "citation_count": 1
+  },
+  "specialist_v3_enabled": false,
+  "limitations": [
+    "采用计划停写的一致备份，不是在线连续备份或 PITR。",
+    "RTO 来自本机单次隔离演练，不是生产 SLA。",
+    "模型为确定性 stub，本演练不评价回答质量。"
+  ],
+  "cleanup": "completed"
+}

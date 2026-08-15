@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-08-15T19:36:17+08:00",
+  "evidence_level": "local_postgresql_read_only_aggregate",
+  "content_collected": false,
+  "identifiers_collected": false,
+  "before_fix": {
+    "default_window": "24h",
+    "runs": 0,
+    "rag_trace_runs": 0
+  },
+  "available_history": {
+    "7d": {
+      "runs": 716,
+      "rag_trace_runs": 706,
+      "completed_runs": 667
+    },
+    "30d": {
+      "runs": 752,
+      "rag_trace_runs": 708
+    }
+  },
+  "root_cause": "管理页每次进入都把统计窗口重置为24小时，而本机最近一次Run早于24小时；数据已经持久化，并非采集失败。",
+  "fix": "RAG质量与Harness默认窗口改为7天，并在隔离full-stack smoke中断言新Run可被管理员观测接口读取。"
+}

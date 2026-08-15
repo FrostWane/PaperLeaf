@@ -64,6 +64,17 @@ flowchart TB
 - 按物理页解析 PDF，低文本页按配置进入 OCR。
 - 按当前阅读页优先级翻译已解析文本；每页独立提交，已完成页不会因其他页失败而回滚。
 - 建立全文与向量索引，清理删除中的文献及其派生数据。
+- 独立心跳会同时验证作业表查询能力并写入带 TTL 的 Redis 状态；API readiness 不用“容器仍在”冒充 Worker 可消费队列。
+
+### 存活、就绪与故障边界
+
+- `/health` 是无依赖的进程存活探针，供容器重启策略使用。
+- `/ready` 分项检查 PostgreSQL、迁移 head、MinIO Bucket、Redis 和 Worker 心跳；普通 HTTP
+  存活不再掩盖后台队列不可消费。
+- Job 领取使用租约和 claim token。Worker 崩溃后新 Worker 只能在租约到期后接管；旧 token
+  的页面、事件、产物和终态写入会被拒绝。
+- PostgreSQL 保存结构化真相，MinIO 保存原件。发布备份采用计划停写的双存储快照并以
+  SHA-256 manifest 绑定，恢复必须先落入独立 project 验证。
 
 ### PostgreSQL 与 MinIO
 

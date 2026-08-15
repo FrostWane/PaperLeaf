@@ -43,9 +43,27 @@
     "human_review_status": "pending",
     "worker_recovery_status": "passed"
   },
+  "provenance": {
+    "historical_run_git_shas": {
+      "diagnostic_retrieval": [
+        "f3e6c72ad396e26f6972ac31c74b28640bab8d9a"
+      ],
+      "hidden_retrieval": [
+        "e332f2228d7a308fdf36e5caed07e0ead87e0c1e"
+      ],
+      "hidden_answers": [
+        "c811efada1a797f7bef50f212b8e76762e2720cb"
+      ],
+      "multi_agent": [
+        "9e4ff3faf192a2f3e78737cd7ef9404f5e8eb5af"
+      ]
+    },
+    "current_head_reproduction_status": "not_reproduced",
+    "note": "这些 SHA 属于历史冻结运行；完整性审计只验证证据未被篡改，不表示当前 HEAD 重新运行得到相同指标。"
+  },
   "artifacts": {
-    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/run_manifest.json": "7d493b14a456b7a23728e0a1173ea783cb2b4a86a702d7f94ecc09dcf562b11e",
-    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/metrics.json": "cc87e6c148020be4efcfde837a6c0a89736678d9a3ff13182e7ca3dec3aa6baa",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/run_manifest.json": "2d20b56c28cd648a5c83908d9d8956eeb8ba2668e68760edb75974dfcd6f5996",
+    "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/metrics.json": "82869eaaa4b53d04ac5895dabe1cd3f5c8c96ea9848227d0d086efbcac9ddce1",
     "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/per_query_results.jsonl": "e434464b887a0d57594c9dc6aca22d3e8628e0e7d549a36734079ddc011d1b03",
     "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/ground_truth_oracle.jsonl": "f65be8473144a8657979825d33697bfed6818cf4765dad01c938aad07eb06b64",
     "backend/evaluation/results/paperleaf-formal-hidden-v1-first-run/end_to_end_answers/run_manifest.json": "ea279988236726426d78c42aad39a295cbe286e67ac0ae839fa53d39d4a898ff",

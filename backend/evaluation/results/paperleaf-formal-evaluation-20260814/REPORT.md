@@ -154,6 +154,12 @@ claim-token fencing；它不是所有故障位置的统计稳定性证明。
 每个目录均保存逐题 JSONL、metrics、run manifest 或真实 capture。SHA-256 由
 `evidence_index.json` 和各层 run manifest 双重记录。
 
+这些结果来自多个历史冻结提交：诊断检索 `f3e6c72a`、隐藏检索 `e332f222`、端到端回答
+`c811efad`、多 Agent 对照 `9e4ff3fa`。`evidence_index.json` 已重新计算当前仓库中所有证据
+文件的规范 LF SHA-256，并把 `current_head_reproduction_status` 固定为 `not_reproduced`。
+这表示当前 release HEAD 只重新验证证据完整性，没有重新运行这些历史指标；不得把它们写成
+当前 HEAD 的新复现结果。
+
 ## 8. 简历口径
 
 在人工盲评完成前，严格可写的一条为：

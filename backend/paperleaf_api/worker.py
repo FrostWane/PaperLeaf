@@ -9,6 +9,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -74,6 +75,7 @@ from .rag.chunking import (
 )
 from .rag.retrieval_enhancements import contextual_embedding_text
 from .rag.retrieval_quality import EvidenceQualityPolicy
+from .readiness import WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_NAMESPACE
 from .repository import SQLAlchemyRepository
 from .runtime_store import create_runtime_store
 from .storage import create_storage
@@ -1690,6 +1692,34 @@ async def run_worker() -> None:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
     checkpoint_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    stop_heartbeat = asyncio.Event()
+
+    async def publish_heartbeat() -> None:
+        while not stop_heartbeat.is_set():
+            queue_poll_ok = False
+            try:
+                async with get_session_factory()() as session:
+                    await session.scalar(select(Job.id).limit(1))
+                queue_poll_ok = True
+            except Exception:
+                logger.exception("Worker 作业队列就绪探测失败")
+            try:
+                await agent_runtime_store.set_cached_json(
+                    WORKER_HEARTBEAT_NAMESPACE,
+                    WORKER_HEARTBEAT_KEY,
+                    {"observed_at": time.time(), "queue_poll_ok": queue_poll_ok},
+                    ttl_seconds=settings.worker_heartbeat_ttl_seconds,
+                )
+            except Exception:
+                logger.exception("Worker 心跳写入失败")
+            try:
+                await asyncio.wait_for(
+                    stop_heartbeat.wait(), timeout=settings.worker_heartbeat_interval_seconds
+                )
+            except TimeoutError:
+                pass
+
+    heartbeat_task = asyncio.create_task(publish_heartbeat())
     try:
         async with AsyncPostgresSaver.from_conn_string(checkpoint_url) as checkpointer:
             await checkpointer.setup()
@@ -1706,6 +1736,8 @@ async def run_worker() -> None:
                     logger.exception("作业 %s 执行失败", claimed_job.id)
                     await fail_job(claimed_job, exc)
     finally:
+        stop_heartbeat.set()
+        await heartbeat_task
         await agent_mcp_gateway.close()
         await agent_runtime_store.close()
 

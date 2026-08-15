@@ -41,6 +41,15 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _assert_artifact_hashes(directory: Path, manifest: dict[str, Any]) -> None:
+    """验证 manifest 中每个相对路径的哈希，禁止索引悄悄过期。"""
+
+    for name, expected in manifest.get("artifacts", {}).items():
+        path = directory / name
+        assert path.is_file(), f"证据文件不存在：{path}"
+        assert _sha(path) == expected, f"证据哈希过期：{path}"
+
+
 def audit_formal_evidence(root: Path) -> dict[str, Any]:
     evaluation = root / "backend" / "evaluation"
     dataset = evaluation / "datasets" / "paperleaf-formal-hidden-v1"
@@ -65,12 +74,14 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
     assert lock["protocol"]["legacy_minilm_reranker"] == "disabled"
 
     layer_summary: dict[str, Any] = {}
+    layer_git_shas: dict[str, list[str]] = {}
     for name, directory, expected_cases, mode in (
         ("diagnostic", diagnostic, 90, "diagnostic_not_blind"),
         ("hidden", hidden, 100, "hidden_first_formal_batch"),
     ):
         snapshots: set[str] = set()
         fingerprints: set[str] = set()
+        git_shas: set[str] = set()
         for variant in VARIANTS:
             variant_dir = directory / variant
             run_manifest = _load(variant_dir / "run_manifest.json")
@@ -80,8 +91,10 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
             assert run_manifest["corpus"]["chunking_strategies"] == ["structure_aware_v2"]
             assert run_manifest["configuration"]["legacy_minilm_enabled"] is False
             assert len(_jsonl(variant_dir / "per_query_results.jsonl")) == expected_cases
+            _assert_artifact_hashes(variant_dir, run_manifest)
             snapshots.add(run_manifest["corpus"]["chunk_snapshot_sha256"])
             fingerprints.update(run_manifest["corpus"]["embedding_fingerprints"])
+            git_shas.add(str(run_manifest["git_sha"]))
         assert len(snapshots) == 1
         assert fingerprints
         aggregate_metrics = _load(directory / "metrics.json")
@@ -91,12 +104,22 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
                 "case_count"
             ] == expected_cases
         assert len(_jsonl(directory / "per_query_results.jsonl")) == expected_cases * 7
+        root_manifest = _load(directory / "run_manifest.json")
+        _assert_artifact_hashes(directory, root_manifest)
+        for variant, hashes in root_manifest["variants"].items():
+            for field, filename in (
+                ("run_manifest_sha256", "run_manifest.json"),
+                ("per_query_results_sha256", "per_query_results.jsonl"),
+                ("metrics_sha256", "metrics.json"),
+            ):
+                assert hashes[field] == _sha(directory / variant / filename)
         layer_summary[name] = {
             "variant_count": 7,
             "case_count_per_variant": expected_cases,
             "chunk_snapshot_sha256": snapshots.pop(),
             "embedding_fingerprints": sorted(fingerprints),
         }
+        layer_git_shas[name] = sorted(git_shas)
 
     answers = hidden / "end_to_end_answers"
     answer_rows = _jsonl(answers / "per_query_answers.jsonl")
@@ -109,6 +132,8 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
     }
     assert answer_metrics["human_review_status"] == "human_review_pending"
     assert len(_jsonl(answers / "human_blind_review.jsonl")) == 30
+    answer_manifest = _load(answers / "run_manifest.json")
+    _assert_artifact_hashes(answers, answer_manifest)
 
     test_capture = _load(multi / "test-capture.json")
     dev_capture = _load(multi / "dev-capture.json")
@@ -129,6 +154,7 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
     assert worker_recovery["job"]["attempts"] == 2
     assert all(worker_recovery["checks"].values())
     assert worker_recovery["claim_token_policy"]["tokens_exported"] is False
+    _assert_artifact_hashes(multi, multi_manifest)
 
     evidence_files = [
         hidden / "run_manifest.json",
@@ -171,6 +197,19 @@ def audit_formal_evidence(root: Path) -> dict[str, Any]:
             "run_count": 90,
             "human_review_status": "pending",
             "worker_recovery_status": "passed",
+        },
+        "provenance": {
+            "historical_run_git_shas": {
+                "diagnostic_retrieval": layer_git_shas["diagnostic"],
+                "hidden_retrieval": layer_git_shas["hidden"],
+                "hidden_answers": [str(answer_manifest["git_sha"])],
+                "multi_agent": [str(multi_manifest["git_sha"])],
+            },
+            "current_head_reproduction_status": "not_reproduced",
+            "note": (
+                "这些 SHA 属于历史冻结运行；完整性审计只验证证据未被篡改，"
+                "不表示当前 HEAD 重新运行得到相同指标。"
+            ),
         },
         "artifacts": {
             str(path.relative_to(root)).replace("\\", "/"): _sha(path)

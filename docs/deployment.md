@@ -1,5 +1,8 @@
 # PaperLeaf 部署指南
 
+> `v0.9.0` 是 portfolio release，不是 production GA。对公网部署前仍需自行完成 TLS、
+> 容量、备份保留、密钥轮换和真实模型门禁。
+
 ## 推荐方式：Docker Compose
 
 ### 准备
@@ -26,6 +29,47 @@ docker compose logs --tail=100 migrate redis minio-init api worker prometheus gr
 ```
 
 正常情况下，`migrate` 和 `minio-init` 以退出码 0 完成，`postgres`、`redis`、`minio`、`api` 和 `web` 变为健康状态，`worker`、`prometheus` 与 `grafana` 持续运行。
+
+`GET /health` 只证明 API 进程存活。`GET /ready` 会分别检查 PostgreSQL、Alembic head、
+MinIO Bucket、Redis 和 Worker 心跳；只有 `agent_ready=true` 才能接收需要 Worker 的新任务。
+停止 Worker 后 readiness 会在心跳 TTL 内降级，恢复 Worker 后自动转绿。
+
+## 生产预检
+
+正式部署前运行：
+
+```bash
+python scripts/verify_env_contract.py
+python scripts/production_preflight.py --env-file .env
+```
+
+预检会拒绝弱会话密钥、示例口令、非 Secure Cookie、非 HTTPS 公网 API/CORS、危险的
+非环回 Compose 端口以及首个公开版本中仍应关闭的 Specialist v3。脚本只输出变量名和
+原因，不输出密钥值。
+
+## PostgreSQL 与 MinIO 一致备份
+
+备份脚本采用计划停写：先停止 API/Worker 和 MinIO，再生成 PostgreSQL custom dump 与
+MinIO volume 快照，写入逐文件 SHA-256 后恢复服务。它的 RPO=0 只适用于停写窗口内已确认
+写入，不等同于在线 PITR。
+
+```bash
+python scripts/backup_restore.py backup \
+  --project paperleaf --env-file .env --path backups/2026-08-15
+
+python scripts/backup_restore.py verify --path backups/2026-08-15
+```
+
+恢复必须使用隔离 Compose project 先验证，不能直接覆盖唯一生产环境：
+
+```bash
+python scripts/backup_restore.py restore \
+  --project paperleaf-restore-check --env-file .env --path backups/2026-08-15
+```
+
+随后启动恢复项目的 API/Worker，检查 `/ready`、PDF Range、论文/Chunk/物理页归属与引用。
+仓库中的 `scripts/run_backup_restore_drill.py` 会用随机密钥和独立 volumes 自动完成这套演练
+并清理环境。
 
 可使用仓库内的安全冒烟脚本验证临时 PDF 上传、解析、Range 下载和删除。脚本只从环境变量读取管理员凭证，不打印密码，并在完成后清理临时论文：
 

@@ -47,6 +47,8 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/backups/
+/release-artifacts/
 /.pnpm-store/
 
 # Python
