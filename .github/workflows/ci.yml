@@ -173,7 +173,8 @@ jobs:
           path: .
           format: spdx-json
           output-file: paperleaf-v0.9.0.spdx.json
-      - uses: aquasecurity/trivy-action@0.30.0
+      # v0.35.0 是 Trivy 2026-03 供应链事件后声明的安全不可变版本；固定完整 SHA，避免标签漂移。
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           scan-type: fs
           scan-ref: .
